@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 
 // Vite proxy bufferiza SSE — conectar directo al backend en dev
+const BACKEND = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const STREAM_URL = import.meta.env.DEV
-  ? 'http://localhost:3001/api/scanner/stream'
+  ? `${BACKEND}/api/scanner/stream`
   : '/api/scanner/stream'
 
 const fmt = {

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 
-const API = 'http://localhost:3001'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 const CUR_MONTH = new Date().getMonth() + 1
 const CUR_YEAR  = new Date().getFullYear()
 

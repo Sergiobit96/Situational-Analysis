@@ -35,7 +35,7 @@ const YF_TO_DUKASCOPY = {
   'USOIL':  'usoususd',
 }
 
-// Yahoo Finance bloquea IPs de datacenter → usar Dukascopy H1 para todos los instrumentos
+// Yahoo Finance bloquea IPs de datacenter → usar Dukascopy M30 para todos los instrumentos
 const DUKASCOPY_DAILY = {
   '^FTSE':  'gbridxgbp',
   '^GDAXI': 'deuidxeur',
@@ -45,6 +45,19 @@ const DUKASCOPY_DAILY = {
   'XAUUSD': 'xauusd',
   'XAGUSD': 'xagusd',
   'USOIL':  'usoususd',
+}
+
+// Horas de sesión regular en minutos Londres por instrumento Dukascopy
+// Con M30: open = primer bar en sessionOpen, close = bar que termina en sessionClose
+const DUKA_SESSION_LONDON = {
+  'gbridxgbp':     [8*60,      16*60+30],  // FTSE   08:00–16:30 Londres
+  'deuidxeur':     [8*60,      16*60+30],  // DAX    08:00–16:30 Londres
+  'usa500idxusd':  [14*60+30,  21*60],     // S&P    14:30–21:00 Londres
+  'usatechidxusd': [14*60+30,  21*60],     // Nasdaq 14:30–21:00 Londres
+  'usa30idxusd':   [14*60+30,  21*60],     // DJ     14:30–21:00 Londres
+  'xauusd':        [0,         23*60+30],  // Oro    día completo
+  'xagusd':        [0,         23*60+30],  // Plata  día completo
+  'usoususd':      [0,         23*60+30],  // Petróleo día completo
 }
 
 const app  = express()
@@ -95,24 +108,24 @@ function getLondonDateStr(tsMs) {
   return new Date(tsMs).toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
 }
 
-// ── Dukascopy H1 → barras diarias con open/close real de sesión ──────────
-// FTSE: sesión 08:00-16:30 Londres (09:00-17:30 Madrid)
-// Con H1: open = barra 08:00 Londres | close = barra 16:00-17:00 Londres
-// (el cierre oficial 16:30 cae dentro de esa barra → precio representativo)
-// H1 descarga en ~30s frente a >3 min de 30m (distintas estructuras de ficheros en CDN)
-async function obtenerVelasDiariasDesde30m(instrument, sessionOpenMin = 8*60, sessionCloseMin = 17*60) {
-  const cacheKey = `h1daily_${instrument}`
+// ── Dukascopy M30 → barras diarias con open/close preciso de sesión ──────────
+// Con M30 cada barra es exactamente de 30 min → el open/close de sesión cae
+// en el límite exacto de barra (ej. FTSE cierra 16:30 → último bar 16:00–16:30)
+// Primera descarga ~3 min para 5 años; queda en caché 4 h
+async function obtenerVelasDiariasDesde30m(instrument) {
+  const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
+  const cacheKey = `m30daily_${instrument}`
   const cached   = fromCache(cacheKey)
   if (cached) return cached
 
   const from = new Date()
   from.setFullYear(from.getFullYear() - 5)
 
-  console.log(`[Dukascopy H1→Diario] Descargando ${instrument} (primera vez ~30s)…`)
+  console.log(`[Dukascopy M30→Diario] Descargando ${instrument} (primera vez ~3 min)…`)
   const bars = await getHistoricalRates({
     instrument,
     dates:     { from, to: new Date() },
-    timeframe: 'h1',
+    timeframe: 'm30',
   })
 
   const dayMap = new Map()
@@ -125,8 +138,8 @@ async function obtenerVelasDiariasDesde30m(instrument, sessionOpenMin = 8*60, se
   }
 
   const velas = [...dayMap.values()].filter(v => v.open && v.close)
-  toCache(cacheKey, velas, 60 * 60_000)
-  console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días`)
+  toCache(cacheKey, velas, 4 * 60 * 60_000)
+  console.log(`[Dukascopy M30→Diario] ${instrument}: ${velas.length} días`)
   return velas
 }
 
@@ -277,7 +290,8 @@ app.get('/api/gap-filter', async (req, res) => {
     }
 
     const fechaInicio = periodo[0] ? getMadridDate(periodo[0].time) : null
-    const fuenteDiaria = DUKASCOPY_DAILY[ticker] ? `Dukascopy H1 (${meses}m)` : `Yahoo 1d (${meses}m)`
+    const periodoLabel = meses >= 12 ? `${meses / 12}a` : `${meses}m`
+    const fuenteDiaria = DUKASCOPY_DAILY[ticker] ? `Dukascopy · ${periodoLabel}` : `Yahoo 1d · ${periodoLabel}`
     res.json({ ticker, sesiones, total: sesiones.length, fuente: fuenteDiaria, fechaInicio })
   } catch (err) {
     console.error('[gap-filter]', err.message)

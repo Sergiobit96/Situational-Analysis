@@ -118,7 +118,6 @@ export default function FiltroGap() {
   // Carga velas intraday cuando cambia la sesión seleccionada o el timeframe
   useEffect(() => {
     if (!seleccion) return
-    abortVelasRef.current?.abort()
     const controller = new AbortController()
     abortVelasRef.current = controller
     const tkr = resultado?.ticker ?? ticker
@@ -128,11 +127,13 @@ export default function FiltroGap() {
     fetch(`/api/velas15m?${p}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
+        if (controller.signal.aborted) return
         if (d.velas?.length) setVelas(d.velas)
         setFuenteVelas(d.fuente ?? null)
       })
       .catch(e => { if (e.name !== 'AbortError') console.error(e) })
-      .finally(() => setCargandoVelas(false))
+      .finally(() => { if (!controller.signal.aborted) setCargandoVelas(false) })
+    return () => controller.abort()
   }, [seleccion, timeframe])
 
   return (

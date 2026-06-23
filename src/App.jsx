@@ -18,8 +18,8 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="header-top">
-          <h1>📊 Gap Filter</h1>
-          <p className="subtitulo">Velas 15 min · Filtro de gaps · SP500 · Nasdaq · DAX</p>
+          <h1>Situational Analysis</h1>
+          <p className="subtitulo">Gap Filter · DAX · FTSE · S&amp;P · Nasdaq · DJ · Oro · Plata · Petróleo</p>
         </div>
         <nav className="tab-nav">
           {TABS.map(t => (

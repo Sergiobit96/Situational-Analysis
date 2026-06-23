@@ -7,9 +7,11 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
 
-// Cache persistente en disco para datos Dukascopy 15m (sobrevive reinicios)
-const DISK_CACHE_DIR = join(import.meta.dirname, '.duka-cache')
-mkdirSync(DISK_CACHE_DIR, { recursive: true })
+// Cache en disco para datos Dukascopy (usa /tmp en producción, local en dev)
+const DISK_CACHE_DIR = process.env.NODE_ENV === 'production'
+  ? '/tmp/.duka-cache'
+  : join(import.meta.dirname, '.duka-cache')
+try { mkdirSync(DISK_CACHE_DIR, { recursive: true }) } catch { /* non-critical */ }
 
 function diskCacheGet(key) {
   const file = join(DISK_CACHE_DIR, key.replace(/[^a-z0-9_-]/gi, '_') + '.json')

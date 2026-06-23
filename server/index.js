@@ -331,8 +331,8 @@ app.get('/api/velas15m', async (req, res) => {
   }
 })
 
-// ── Pipeline trading ──────────────────────────────────────────────────────
-const TRADING_DIR = 'G:\\Mi unidad\\codigos'
+// ── Pipeline trading (solo local — en producción lo gestionan GitHub Actions) ──
+const TRADING_DIR = process.env.TRADING_DIR || 'G:\\Mi unidad\\codigos'
 const PIPELINE = [
   { id: 'sync',      label: 'TradeNation Sync',  file: 'TradeNation_sync.py' },
   { id: 'historial', label: 'Historial Total',    file: 'actualizar_historial_total.py' },
@@ -354,6 +354,9 @@ function buildArgs(scriptId, params) {
 }
 
 app.get('/api/pipeline/run', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ error: 'Pipeline no disponible en producción. Los scripts se ejecutan automáticamente vía GitHub Actions.' })
+  }
   const scriptId = req.query.script ?? 'all'
   const params   = {
     month: req.query.month !== undefined ? Number(req.query.month) : undefined,

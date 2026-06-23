@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import GraficoVelas from './GraficoVelas'
 
 const DIAS = [
@@ -59,6 +59,7 @@ export default function FiltroGap() {
   const [cargandoVelas, setCargandoVelas] = useState(false)
   const [timeframe,     setTimeframe]     = useState('m15')
   const [fechaManual,   setFechaManual]   = useState('')
+  const abortVelasRef = useRef(null)
 
   const toggleDia = n => setDias(prev => {
     const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s
@@ -109,20 +110,28 @@ export default function FiltroGap() {
     setVelas([])
   }
 
+  const cancelarVelas = () => {
+    abortVelasRef.current?.abort()
+    setCargandoVelas(false)
+  }
+
   // Carga velas intraday cuando cambia la sesión seleccionada o el timeframe
   useEffect(() => {
     if (!seleccion) return
+    abortVelasRef.current?.abort()
+    const controller = new AbortController()
+    abortVelasRef.current = controller
     const tkr = resultado?.ticker ?? ticker
     setCargandoVelas(true)
     setVelas([])
     const p = new URLSearchParams({ ticker: tkr, date: seleccion.date, timeframe })
-    fetch(`/api/velas15m?${p}`)
+    fetch(`/api/velas15m?${p}`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (d.velas?.length) setVelas(d.velas)
         setFuenteVelas(d.fuente ?? null)
       })
-      .catch(console.error)
+      .catch(e => { if (e.name !== 'AbortError') console.error(e) })
       .finally(() => setCargandoVelas(false))
   }, [seleccion, timeframe])
 
@@ -371,6 +380,7 @@ export default function FiltroGap() {
               {cargandoVelas && (
                 <div className="velas-cargando">
                   <span className="spinner" /> Cargando velas…
+                  <button className="btn-cancelar-velas" onClick={cancelarVelas}>✕ Cancelar</button>
                 </div>
               )}
 

@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import GraficoVelas from './GraficoVelas'
 
+// Tickers que Railway maneja via Dukascopy — el resto va a /api/yf-intraday (Vercel)
+const DUKA_TICKERS = new Set(['^GSPC', '^NDX', '^DJI', '^GDAXI', '^FTSE', 'XAUUSD', 'XAGUSD', 'USOIL'])
+
+function intradayUrl(tkr, date, timeframe) {
+  if (DUKA_TICKERS.has(tkr)) {
+    return `/api/velas15m?${new URLSearchParams({ ticker: tkr, date, timeframe })}`
+  }
+  return `/api/yf-intraday?${new URLSearchParams({ ticker: tkr, date })}`
+}
+
 const DIAS = [
   { n: 1, label: 'L', nombre: 'Lunes' },
   { n: 2, label: 'M', nombre: 'Martes' },
@@ -242,8 +252,7 @@ export default function FiltroGap() {
       tickers.forEach(tkr => {
         const ctrl = new AbortController()
         abortMultiRef.current[tkr] = ctrl
-        const p = new URLSearchParams({ ticker: tkr, date: fechaManual, timeframe })
-        fetch(`/api/velas15m?${p}`, { signal: ctrl.signal })
+        fetch(intradayUrl(tkr, fechaManual, timeframe), { signal: ctrl.signal })
           .then(r => r.json())
           .then(d => {
             if (!ctrl.signal.aborted)
@@ -270,8 +279,7 @@ export default function FiltroGap() {
     const tkr = resultado?.ticker ?? ticker
     setCargandoVelas(true)
     setVelas([])
-    const p = new URLSearchParams({ ticker: tkr, date: seleccion.date, timeframe })
-    fetch(`/api/velas15m?${p}`, { signal: controller.signal })
+    fetch(intradayUrl(tkr, seleccion.date, timeframe), { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (controller.signal.aborted) return

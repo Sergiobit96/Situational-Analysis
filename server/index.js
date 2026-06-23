@@ -475,6 +475,21 @@ app.get('/api/ff-calendar', async (req, res) => {
   }
 })
 
+// ── Yahoo Finance intraday proxy (espejo del Vercel serverless function) ──
+// En producción: manejado por Vercel (api/yf-intraday.js) antes del rewrite a Railway.
+// En local: manejado aquí directamente (Yahoo Finance no bloquea IPs domésticas).
+app.get('/api/yf-intraday', async (req, res) => {
+  try {
+    const { ticker, date } = req.query
+    if (!ticker || !date) return res.status(400).json({ error: 'ticker y date requeridos' })
+    const velas  = await obtenerVelas15mDia(ticker, date)
+    res.json({ ticker, date, velas, fuente: 'Yahoo 15m' })
+  } catch (err) {
+    console.error('[yf-intraday]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Velas intraday para una sesión concreta (carga bajo demanda) ──────────
 // Usa Dukascopy siempre (fuente única, sin límite de 60 días de Yahoo Finance)
 app.get('/api/velas15m', async (req, res) => {

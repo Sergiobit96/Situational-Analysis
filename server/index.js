@@ -32,14 +32,19 @@ const YF_TO_DUKASCOPY = {
   'QQQ':    'usatechidxusd',
 }
 
-// Tickers donde Yahoo Finance devuelve open ≈ prevClose (sin gap real)
-// → para estos usamos Dukascopy H1 para calcular los gaps diarios
+// Yahoo Finance bloquea IPs de datacenter → usar Dukascopy H1 para todos los índices
 const DUKASCOPY_DAILY = {
-  '^FTSE': 'gbridxgbp',
+  '^FTSE':  'gbridxgbp',
+  '^GDAXI': 'deuidxeur',
+  '^GSPC':  'usa500idxusd',
+  '^NDX':   'usatechidxusd',
+  '^DJI':   'usa30idxusd',
+  'SPY':    'usa500idxusd',
+  'QQQ':    'usatechidxusd',
 }
 
 const app  = express()
-const PORT = 3001
+const PORT = process.env.PORT || 3001
 app.use(cors())
 app.use(express.json())
 
@@ -401,7 +406,7 @@ app.get('/api/pipeline/run', (req, res) => {
   runNext()
 })
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor en http://localhost:${PORT}`)
   // Pre-cargar en background los índices con datos diarios de Dukascopy
   for (const instrument of Object.values(DUKASCOPY_DAILY)) {

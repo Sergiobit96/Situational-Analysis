@@ -36,6 +36,19 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       ? velas
       : velas.map(v => ({ ...v, time: v.time + madridOffsetAt(v.time) }))
 
+    // Determinar ventana de sesión antes de pintar para poder sombrear fuera de rango
+    const session = SESSION_MADRID[ticker]
+    const [sOpen, sClose] = session ?? [null, null]
+
+    // Barras fuera de sesión → gris claro; dentro → esquema negro/blanco normal
+    const velasRender = session
+      ? velasAjustadas.map(v => {
+          const m = madridMinOfDay(v.time)
+          if (m >= sOpen && m < sClose) return v
+          return { ...v, color: '#e2e2e2', borderColor: '#c8c8c8', wickColor: '#c8c8c8' }
+        })
+      : velasAjustadas
+
     const chart = createChart(contenedorRef.current, {
       layout: { background: { color: '#ffffff' }, textColor: '#1a1a1a' },
       grid:   { vertLines: { color: '#e5e7eb' }, horzLines: { color: '#e5e7eb' } },
@@ -55,15 +68,12 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       wickUpColor:     '#000000',
       wickDownColor:   '#000000',
     })
-    serie.setData(velasAjustadas)
+    serie.setData(velasRender)
 
     // Marcadores de apertura y cierre de sesión regular
     // El precio de apertura se toma del primer bar intraday de sesión (exactamente 09:00 / 15:30)
-    // en lugar del open diario H1 (que puede caer 30–60 min después)
-    const session = SESSION_MADRID[ticker]
     let intradayOpen = null
     if (session) {
-      const [sOpen, sClose] = session
       const sessionVelas = velasAjustadas.filter(v => {
         const m = madridMinOfDay(v.time)
         return m >= sOpen && m < sClose

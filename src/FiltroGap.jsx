@@ -33,7 +33,7 @@ const PRESETS = [
   { label: 'DAX',    value: '^GDAXI' },
   { label: 'FTSE',   value: '^FTSE'  },
   { label: 'Nasdaq', value: '^NDX'   },
-  { label: 'DJ',     value: '^DJI'   },
+  { label: 'Dow Jones', value: '^DJI'   },
   { label: 'S&P',    value: '^GSPC'  },
   { label: 'Oro',    value: 'XAUUSD' },
   { label: 'Plata',  value: 'XAGUSD' },
@@ -61,12 +61,22 @@ export default function FiltroGap() {
   const [fechaManual,   setFechaManual]   = useState('')
   const abortVelasRef = useRef(null)
 
+  // ── Modo multi-instrumento (fecha concreta) ──
+  const [instrManual, setInstrManual] = useState(new Set())
+  const [velasMulti,  setVelasMulti]  = useState({})   // { ticker: {velas,fuente,loading} }
+  const [fechaMulti,  setFechaMulti]  = useState(null)
+  const abortMultiRef = useRef({})
+
   const toggleDia = n => setDias(prev => {
     const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s
   })
 
   const toggleEvento = id => setEventosActivos(prev => {
     const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s
+  })
+
+  const toggleInstrManual = val => setInstrManual(prev => {
+    const s = new Set(prev); s.has(val) ? s.delete(val) : s.add(val); return s
   })
 
   // Filtrado secundario por evento (client-side, instantáneo)
@@ -84,6 +94,8 @@ export default function FiltroGap() {
     setSeleccion(null)
     setVelas([])
     setFuenteVelas(null)
+    setVelasMulti({})
+    setFechaMulti(null)
     try {
       const p = new URLSearchParams({
         ticker: ticker.trim(),
@@ -106,8 +118,39 @@ export default function FiltroGap() {
 
   const irAFecha = () => {
     if (!fechaManual) return
-    setSeleccion({ date: fechaManual })
-    setVelas([])
+    if (instrManual.size === 0) {
+      // Sin chips seleccionados → comportamiento anterior (un solo ticker)
+      setVelasMulti({})
+      setFechaMulti(null)
+      setSeleccion({ date: fechaManual })
+      setVelas([])
+    } else {
+      // Multi-instrumento
+      setSeleccion(null)
+      setVelas([])
+      Object.values(abortMultiRef.current).forEach(c => c.abort())
+      abortMultiRef.current = {}
+      const tickers = [...instrManual]
+      const init = {}
+      tickers.forEach(t => { init[t] = { velas: [], fuente: null, loading: true } })
+      setVelasMulti(init)
+      setFechaMulti(fechaManual)
+      tickers.forEach(tkr => {
+        const ctrl = new AbortController()
+        abortMultiRef.current[tkr] = ctrl
+        const p = new URLSearchParams({ ticker: tkr, date: fechaManual, timeframe })
+        fetch(`/api/velas15m?${p}`, { signal: ctrl.signal })
+          .then(r => r.json())
+          .then(d => {
+            if (!ctrl.signal.aborted)
+              setVelasMulti(prev => ({ ...prev, [tkr]: { velas: d.velas ?? [], fuente: d.fuente ?? null, loading: false } }))
+          })
+          .catch(e => {
+            if (e.name !== 'AbortError')
+              setVelasMulti(prev => ({ ...prev, [tkr]: { velas: [], fuente: null, loading: false } }))
+          })
+      })
+    }
   }
 
   const cancelarVelas = () => {
@@ -248,7 +291,12 @@ export default function FiltroGap() {
         </div>
 
         <div className="filtro-group">
-          <label className="filtro-label">Ir a fecha concreta</label>
+          <label className="filtro-label">
+            Ir a fecha concreta
+            {instrManual.size > 0 && (
+              <button className="clear-eventos" onClick={() => setInstrManual(new Set())}>× limpiar</button>
+            )}
+          </label>
           <div className="fecha-manual-row">
             <input
               type="date"
@@ -263,6 +311,20 @@ export default function FiltroGap() {
               disabled={!fechaManual}
             >Ver</button>
           </div>
+          <div className="filtro-presets" style={{ marginTop: '0.4rem' }}>
+            {PRESETS.map(p => (
+              <button
+                key={p.value}
+                className={`chip ${instrManual.has(p.value) ? 'activo' : ''}`}
+                onClick={() => toggleInstrManual(p.value)}
+              >{p.label}</button>
+            ))}
+          </div>
+          {instrManual.size > 0 && (
+            <p className="instr-manual-hint">
+              {instrManual.size === 1 ? '1 instrumento' : `${instrManual.size} instrumentos`} seleccionados
+            </p>
+          )}
         </div>
 
         <button
@@ -309,7 +371,7 @@ export default function FiltroGap() {
                   key={s.date}
                   sesion={s}
                   activo={seleccion?.date === s.date}
-                  onClick={() => setSeleccion(s)}
+                  onClick={() => { setSeleccion(s); setVelasMulti({}); setFechaMulti(null) }}
                 />
               ))}
             </div>
@@ -406,6 +468,52 @@ export default function FiltroGap() {
             </div>
           )}
         </div>
+
+        {/* ── Multi-chart (fecha concreta con varios instrumentos) ── */}
+        {Object.keys(velasMulti).length > 0 && (
+          <div className="multi-charts-section">
+            <div className="multi-charts-header">
+              <span className="multi-charts-fecha">{fechaMulti}</span>
+              <div className="tf-selector">
+                {[
+                  { label: '1m',  duka: 'm1'  },
+                  { label: '5m',  duka: 'm5'  },
+                  { label: '15m', duka: 'm15' },
+                  { label: '30m', duka: 'm30' },
+                  { label: '1h',  duka: 'h1'  },
+                ].map(tf => (
+                  <button
+                    key={tf.duka}
+                    className={`tf-chip ${timeframe === tf.duka ? 'activo' : ''}`}
+                    onClick={() => setTimeframe(tf.duka)}
+                  >{tf.label}</button>
+                ))}
+              </div>
+              <button className="btn-ir-fecha" onClick={irAFecha} disabled={!fechaManual}>↺ Recargar</button>
+            </div>
+            <div className="multi-charts-grid">
+              {Object.entries(velasMulti).map(([tkr, { velas: v, fuente, loading }]) => (
+                <div key={tkr} className="multi-chart-item">
+                  <div className="multi-chart-nombre">
+                    {PRESETS.find(p => p.value === tkr)?.label ?? tkr}
+                    {fuente && (
+                      <span className={`fuente-tag ${fuente.startsWith('Duka') ? 'dukascopy' : 'yahoo'}`}>
+                        {fuente}
+                      </span>
+                    )}
+                  </div>
+                  {loading ? (
+                    <div className="velas-cargando"><span className="spinner" /> Cargando…</div>
+                  ) : v.length > 0 ? (
+                    <GraficoVelas velas={v} patrones={[]} ticker={tkr} />
+                  ) : (
+                    <div className="filtro-vacio">Sin datos para {fechaMulti}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

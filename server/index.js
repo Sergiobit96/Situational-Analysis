@@ -50,6 +50,8 @@ const PORT = process.env.PORT || 3001
 app.use(cors())
 app.use(express.json())
 
+app.get('/healthz', (_req, res) => res.json({ status: 'ok' }))
+
 const YF_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
   'Accept': 'application/json, text/plain, */*',

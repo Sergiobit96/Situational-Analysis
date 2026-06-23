@@ -32,7 +32,7 @@ const YF_TO_DUKASCOPY = {
   '^FTSE':  'gbridxgbp',
   'XAUUSD': 'xauusd',
   'XAGUSD': 'xagusd',
-  'USOIL':  'usousd',
+  'USOIL':  'usoususd',
 }
 
 // Yahoo Finance bloquea IPs de datacenter → usar Dukascopy H1 para todos los instrumentos
@@ -44,7 +44,7 @@ const DUKASCOPY_DAILY = {
   '^DJI':   'usa30idxusd',
   'XAUUSD': 'xauusd',
   'XAGUSD': 'xagusd',
-  'USOIL':  'usousd',
+  'USOIL':  'usoususd',
 }
 
 const app  = express()

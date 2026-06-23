@@ -57,18 +57,11 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
     })
     serie.setData(velasAjustadas)
 
-    // Líneas horizontales de referencia: cierre anterior y apertura del día
-    if (prevClose != null) serie.createPriceLine({
-      price: prevClose, color: '#f97316', lineWidth: 1,
-      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Cierre ant.',
-    })
-    if (openPrice != null) serie.createPriceLine({
-      price: openPrice, color: '#60a5fa', lineWidth: 1,
-      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Apertura',
-    })
-
     // Marcadores de apertura y cierre de sesión regular
+    // El precio de apertura se toma del primer bar intraday de sesión (exactamente 09:00 / 15:30)
+    // en lugar del open diario H1 (que puede caer 30–60 min después)
     const session = SESSION_MADRID[ticker]
+    let intradayOpen = null
     if (session) {
       const [sOpen, sClose] = session
       const sessionVelas = velasAjustadas.filter(v => {
@@ -77,6 +70,7 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       })
       const apertura = sessionVelas[0]
       const cierre   = sessionVelas[sessionVelas.length - 1]
+      intradayOpen   = apertura?.open ?? null
       const markers  = []
       if (apertura) markers.push({
         time: apertura.time, position: 'belowBar', color: '#60a5fa',
@@ -88,6 +82,17 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       })
       if (markers.length) createSeriesMarkers(serie, markers)
     }
+
+    // Líneas horizontales de referencia
+    if (prevClose != null) serie.createPriceLine({
+      price: prevClose, color: '#f97316', lineWidth: 1,
+      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Cierre ant.',
+    })
+    const refOpen = intradayOpen ?? openPrice
+    if (refOpen != null) serie.createPriceLine({
+      price: refOpen, color: '#60a5fa', lineWidth: 1,
+      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'Apertura',
+    })
 
     patrones?.forEach((p, idx) => {
       const color = p.tipo === 'bullish' ? '#3b82f6' : '#f97316'

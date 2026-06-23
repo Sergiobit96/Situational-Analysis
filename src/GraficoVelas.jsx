@@ -43,7 +43,7 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       rightPriceScale: { borderColor: '#d1d5db' },
       timeScale: { borderColor: '#d1d5db', timeVisible: true, secondsVisible: false },
       width:  contenedorRef.current.clientWidth,
-      height: 420,
+      height: window.innerWidth < 600 ? 220 : 420,
     })
     chartRef.current = chart
 

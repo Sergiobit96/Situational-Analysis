@@ -75,6 +75,88 @@ const YF_HEADERS = {
   'Referer':         'https://finance.yahoo.com/',
 }
 
+// ── Stooq: fuente principal para acciones individuales (no bloquea Railway) ──
+
+// Convierte ticker Yahoo → ticker Stooq
+function toStooqTicker(yahooTicker) {
+  if (yahooTicker.endsWith('.DE')) return yahooTicker
+  if (yahooTicker.endsWith('.L'))  return yahooTicker.slice(0, -2) + '.UK'
+  if (yahooTicker.startsWith('^')) return yahooTicker
+  if (!yahooTicker.includes('.'))  return yahooTicker + '.US'
+  return yahooTicker
+}
+
+// Datos diarios para gap filter (CSV Stooq: Date,Open,High,Low,Close,Volume)
+async function obtenerVelasDiariasStooq(ticker) {
+  const cached = fromCache(`stooq1d_${ticker}`)
+  if (cached) return cached
+
+  const stooqTicker = toStooqTicker(ticker)
+  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqTicker)}&i=d`
+  console.log(`[Stooq] Descargando diarios ${stooqTicker}…`)
+  const resp = await fetch(url, { headers: { 'User-Agent': YF_UA } })
+  if (!resp.ok) throw new Error(`Stooq HTTP ${resp.status} para ${stooqTicker}`)
+  const text = await resp.text()
+
+  const lines = text.trim().split('\n').slice(1)  // omitir cabecera
+  const velas = []
+  for (const line of lines) {
+    const [date, open, high, low, close] = line.split(',')
+    if (!date || !open || isNaN(parseFloat(open))) continue
+    velas.push({
+      time:  Math.floor(new Date(date + 'T12:00:00Z').getTime() / 1000),
+      open:  parseFloat(open),
+      high:  parseFloat(high),
+      low:   parseFloat(low),
+      close: parseFloat(close),
+    })
+  }
+  // Stooq devuelve descendente → ordenar ascendente
+  velas.sort((a, b) => a.time - b.time)
+
+  if (velas.length === 0) throw new Error(`Sin datos en Stooq para ${stooqTicker}`)
+  toCache(`stooq1d_${ticker}`, velas, 4 * 60 * 60_000)
+  console.log(`[Stooq] ${stooqTicker}: ${velas.length} días`)
+  return velas
+}
+
+// Barras 5-min de un día concreto (CSV Stooq: Date,Time,Open,High,Low,Close,Volume)
+async function obtenerVelas5mStooq(ticker, date) {
+  const cached = fromCache(`stooq5m_${ticker}_${date}`)
+  if (cached) return cached
+
+  const stooqTicker = toStooqTicker(ticker)
+  const d   = date.replace(/-/g, '')
+  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqTicker)}&d1=${d}&d2=${d}&i=5`
+  console.log(`[Stooq] Descargando intraday ${stooqTicker} ${date}…`)
+  const resp = await fetch(url, { headers: { 'User-Agent': YF_UA } })
+  if (!resp.ok) throw new Error(`Stooq HTTP ${resp.status} para ${stooqTicker}`)
+  const text = await resp.text()
+
+  const lines = text.trim().split('\n').slice(1)
+  const velas = []
+  for (const line of lines) {
+    const parts = line.split(',')
+    if (parts.length < 6) continue
+    const [csvDate, time, open, high, low, close, volume = '0'] = parts
+    if (!csvDate || !time || isNaN(parseFloat(open))) continue
+    const ts = Math.floor(new Date(`${csvDate}T${time}Z`).getTime() / 1000)
+    velas.push({
+      time:   ts,
+      open:   parseFloat(open),
+      high:   parseFloat(high),
+      low:    parseFloat(low),
+      close:  parseFloat(close),
+      volume: parseInt(volume) || 0,
+    })
+  }
+  velas.sort((a, b) => a.time - b.time)
+
+  toCache(`stooq5m_${ticker}_${date}`, velas, 6 * 60 * 60_000)
+  console.log(`[Stooq] ${stooqTicker} intraday: ${velas.length} barras`)
+  return velas
+}
+
 // ── Yahoo Finance: crumb auth (necesario desde 2024 para evitar bloqueo) ────
 let _yfAuth = null, _yfAuthTs = 0
 async function getYFAuth() {
@@ -175,12 +257,20 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   return velas
 }
 
-// ── Yahoo Finance: datos diarios para gap detection (hasta 5 años) ─────────
+// ── Datos diarios para gap detection (hasta 5 años) ──────────────────────
 async function obtenerVelasDiarias(ticker) {
-  // Para tickers con open incorrecto en Yahoo, usar Dukascopy H1
+  // Índices y materias primas: Dukascopy (datos más precisos)
   const dukaInstrument = DUKASCOPY_DAILY[ticker]
   if (dukaInstrument) return obtenerVelasDiariasDesde30m(dukaInstrument)
 
+  // Acciones individuales: Stooq primero (funciona en Railway)
+  try {
+    return await obtenerVelasDiariasStooq(ticker)
+  } catch (stooqErr) {
+    console.warn(`[Stooq daily] falló para ${ticker}:`, stooqErr.message)
+  }
+
+  // Fallback: Yahoo Finance con crumb auth
   const cached = fromCache(`1d_${ticker}`)
   if (cached) return cached
 
@@ -192,7 +282,7 @@ async function obtenerVelasDiarias(ticker) {
   const resp   = await fetch(url, { headers: hdrs })
   const json   = await resp.json()
   const r      = json.chart?.result?.[0]
-  if (!r) throw new Error(json.chart?.error?.description ?? `Sin datos para ${ticker} (Yahoo Finance puede estar bloqueado en producción)`)
+  if (!r) throw new Error(json.chart?.error?.description ?? `Sin datos para ${ticker}`)
 
   const ts    = r.timestamp ?? []
   const q     = r.indicators.quote[0]
@@ -375,9 +465,15 @@ app.get('/api/velas15m', async (req, res) => {
       velas  = await obtenerVelasDukascopy(instrument, date, timeframe)
       fuente = `Dukascopy ${timeframe}`
     } else {
-      // Fallback Yahoo para tickers sin mapping en Dukascopy (siempre 15m)
-      velas  = await obtenerVelas15mDia(ticker, date)
-      fuente = 'Yahoo Finance 15m'
+      // Acciones individuales: Stooq primero, Yahoo como fallback
+      try {
+        velas  = await obtenerVelas5mStooq(ticker, date)
+        fuente = 'Stooq 5m'
+      } catch (stooqErr) {
+        console.warn(`[Stooq intraday] falló para ${ticker}:`, stooqErr.message)
+        velas  = await obtenerVelas15mDia(ticker, date)
+        fuente = 'Yahoo Finance 15m'
+      }
     }
 
     res.json({ ticker, date, velas, fuente })

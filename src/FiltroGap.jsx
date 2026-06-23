@@ -596,9 +596,7 @@ export default function FiltroGap() {
                 return (
                   <div className="filtro-vacio">
                     {esAccion
-                      ? <>Sin datos intraday para <strong>{tkr}</strong>.<br />
-                          Las acciones individuales usan Yahoo Finance, que puede estar bloqueado en producción.
-                          Funciona en local.</>
+                      ? <>Sin datos intraday para <strong>{tkr}</strong> en esta fecha.</>
                       : 'No hay datos intraday disponibles para esta fecha.'}
                   </div>
                 )

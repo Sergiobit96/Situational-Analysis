@@ -79,7 +79,7 @@ export default function Pipeline() {
       if (e instanceof MessageEvent) {
         try { addLine(`✗ ${JSON.parse(e.data).msg}\n`, 'err') } catch {}
       } else {
-        addLine('✗ No se pudo conectar con el servidor en localhost:3001\n', 'err')
+        addLine('✗ No se pudo conectar con el servidor\n', 'err')
       }
       setStatus('Error')
       setRunning(false)

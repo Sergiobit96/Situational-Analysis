@@ -357,7 +357,13 @@ function buildArgs(scriptId, params) {
 
 app.get('/api/pipeline/run', (req, res) => {
   if (process.env.NODE_ENV === 'production') {
-    return res.status(503).json({ error: 'Pipeline no disponible en producción. Los scripts se ejecutan automáticamente vía GitHub Actions.' })
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.flushHeaders()
+    res.write(`event: error\ndata: ${JSON.stringify({ msg: 'Pipeline no disponible en producción — los scripts se ejecutan automáticamente vía GitHub Actions' })}\n\n`)
+    res.end()
+    return
   }
   const scriptId = req.query.script ?? 'all'
   const params   = {

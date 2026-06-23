@@ -408,9 +408,12 @@ app.get('/api/pipeline/run', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor en http://localhost:${PORT}`)
-  // Pre-cargar en background los índices con datos diarios de Dukascopy
-  for (const instrument of Object.values(DUKASCOPY_DAILY)) {
-    obtenerVelasDiariasDesde30m(instrument)
-      .catch(err => console.error(`[Pre-carga ${instrument}]`, err.message))
-  }
+  // Pre-cargar secuencialmente para evitar rate-limiting de Dukascopy
+  const instruments = [...new Set(Object.values(DUKASCOPY_DAILY))]
+  ;(async () => {
+    for (const instrument of instruments) {
+      await obtenerVelasDiariasDesde30m(instrument)
+        .catch(err => console.error(`[Pre-carga ${instrument}]`, err.message))
+    }
+  })()
 })

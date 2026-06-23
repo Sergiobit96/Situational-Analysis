@@ -334,7 +334,7 @@ app.get('/api/velas15m', async (req, res) => {
 })
 
 // ── Pipeline trading (solo local — en producción lo gestionan GitHub Actions) ──
-const TRADING_DIR = process.env.TRADING_DIR || 'G:\\Mi unidad\\codigos'
+const TRADING_DIR = process.env.TRADING_DIR || 'G:\\Mi unidad\\codigos\\Server'
 const PIPELINE = [
   { id: 'sync',      label: 'TradeNation Sync',  file: 'TradeNation_sync.py' },
   { id: 'historial', label: 'Historial Total',    file: 'actualizar_historial_total.py' },

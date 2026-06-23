@@ -9,7 +9,7 @@ const TABS = [
   { id: 'gap',      label: 'Gap Filter' },
   { id: 'datos',    label: 'Subir datos' },
   { id: 'cal',      label: 'Calendario' },
-  { id: 'pipeline', label: '▶ Pipeline' },
+  ...( import.meta.env.DEV ? [{ id: 'pipeline', label: '▶ Pipeline' }] : []),
 ]
 
 export default function App() {

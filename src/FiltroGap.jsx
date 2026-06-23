@@ -590,11 +590,19 @@ export default function FiltroGap() {
                 </>
               )}
 
-              {!cargandoVelas && velas.length === 0 && (
-                <div className="filtro-vacio">
-                  No hay datos intraday disponibles para esta fecha.
-                </div>
-              )}
+              {!cargandoVelas && velas.length === 0 && (() => {
+                const tkr = resultado?.ticker ?? ticker
+                const esAccion = !['XAUUSD','XAGUSD','USOIL','^GDAXI','^FTSE','^GSPC','^NDX','^DJI'].includes(tkr)
+                return (
+                  <div className="filtro-vacio">
+                    {esAccion
+                      ? <>Sin datos intraday para <strong>{tkr}</strong>.<br />
+                          Las acciones individuales usan Yahoo Finance, que puede estar bloqueado en producción.
+                          Funciona en local.</>
+                      : 'No hay datos intraday disponibles para esta fecha.'}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </div>

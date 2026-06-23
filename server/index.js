@@ -67,9 +67,39 @@ app.use(express.json())
 
 app.get('/healthz', (_req, res) => res.json({ status: 'ok' }))
 
+const YF_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 const YF_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  'Accept': 'application/json, text/plain, */*',
+  'User-Agent':      YF_UA,
+  'Accept':          'application/json, text/plain, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer':         'https://finance.yahoo.com/',
+}
+
+// ── Yahoo Finance: crumb auth (necesario desde 2024 para evitar bloqueo) ────
+let _yfAuth = null, _yfAuthTs = 0
+async function getYFAuth() {
+  if (_yfAuth && Date.now() - _yfAuthTs < 3_600_000) return _yfAuth
+  try {
+    const r1 = await fetch('https://fc.yahoo.com', {
+      headers: { 'User-Agent': YF_UA },
+      redirect: 'follow',
+    })
+    const raw    = r1.headers.get('set-cookie') ?? ''
+    const cookie = raw.split(',').map(c => c.split(';')[0].trim()).filter(Boolean).join('; ')
+
+    const r2    = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': YF_UA, 'Cookie': cookie },
+    })
+    const crumb = (await r2.text()).trim()
+    if (crumb && crumb.length < 60 && !crumb.startsWith('<')) {
+      _yfAuth  = { cookie, crumb }
+      _yfAuthTs = Date.now()
+      console.log('[YF] crumb ok:', crumb.slice(0, 8) + '…')
+    }
+  } catch (e) {
+    console.error('[YF crumb]', e.message)
+  }
+  return _yfAuth
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────
@@ -154,12 +184,15 @@ async function obtenerVelasDiarias(ticker) {
   const cached = fromCache(`1d_${ticker}`)
   if (cached) return cached
 
-  const sym  = encodeURIComponent(ticker)
-  const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5y`
-  const resp = await fetch(url, { headers: YF_HEADERS })
-  const json = await resp.json()
-  const r    = json.chart?.result?.[0]
-  if (!r) throw new Error(json.chart?.error?.description ?? `Sin datos para ${ticker}`)
+  const auth   = await getYFAuth()
+  const sym    = encodeURIComponent(ticker)
+  const crumb  = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
+  const hdrs   = auth ? { ...YF_HEADERS, 'Cookie': auth.cookie } : YF_HEADERS
+  const url    = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=5y${crumb}`
+  const resp   = await fetch(url, { headers: hdrs })
+  const json   = await resp.json()
+  const r      = json.chart?.result?.[0]
+  if (!r) throw new Error(json.chart?.error?.description ?? `Sin datos para ${ticker} (Yahoo Finance puede estar bloqueado en producción)`)
 
   const ts    = r.timestamp ?? []
   const q     = r.indicators.quote[0]
@@ -178,14 +211,17 @@ async function obtenerVelas15mDia(ticker, date) {
   const cached = fromCache(`15m_${ticker}_${date}`)
   if (cached) return cached
 
-  const p1   = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
-  const p2   = p1 + 2 * 86400
-  const sym  = encodeURIComponent(ticker)
-  const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=15m&period1=${p1}&period2=${p2}`
-  const resp = await fetch(url, { headers: YF_HEADERS })
-  const json = await resp.json()
+  const auth  = await getYFAuth()
+  const p1    = Math.floor(new Date(date + 'T00:00:00Z').getTime() / 1000)
+  const p2    = p1 + 2 * 86400
+  const sym   = encodeURIComponent(ticker)
+  const crumb = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
+  const hdrs  = auth ? { ...YF_HEADERS, 'Cookie': auth.cookie } : YF_HEADERS
+  const url   = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=15m&period1=${p1}&period2=${p2}${crumb}`
+  const resp  = await fetch(url, { headers: hdrs })
+  const json  = await resp.json()
   const r = json.chart?.result?.[0]
-  if (!r) return []   // fecha antigua o sin datos → fallback a Dukascopy
+  if (!r) return []
 
   const ts    = r.timestamp ?? []
   const q     = r.indicators.quote[0]

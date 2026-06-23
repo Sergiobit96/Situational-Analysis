@@ -111,21 +111,23 @@ function getLondonDateStr(tsMs) {
 // ── Dukascopy M30 → barras diarias con open/close preciso de sesión ──────────
 // Con M30 cada barra es exactamente de 30 min → el open/close de sesión cae
 // en el límite exacto de barra (ej. FTSE cierra 16:30 → último bar 16:00–16:30)
-// Primera descarga ~3 min para 5 años; queda en caché 4 h
+// Primera descarga ~30 s para 5 años; queda en caché 4 h
+// H1 ofrece open exacto de sesión; el close es el cierre de la última barra H1
+// (para FTSE/DAX el cierre oficial 16:30 cae dentro de la barra 16:00–17:00 → diferencia mínima)
 async function obtenerVelasDiariasDesde30m(instrument) {
   const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
-  const cacheKey = `m30daily_${instrument}`
+  const cacheKey = `h1daily_${instrument}`
   const cached   = fromCache(cacheKey)
   if (cached) return cached
 
   const from = new Date()
   from.setFullYear(from.getFullYear() - 5)
 
-  console.log(`[Dukascopy M30→Diario] Descargando ${instrument} (primera vez ~3 min)…`)
+  console.log(`[Dukascopy H1→Diario] Descargando ${instrument} (primera vez ~30s)…`)
   const bars = await getHistoricalRates({
     instrument,
     dates:     { from, to: new Date() },
-    timeframe: 'm30',
+    timeframe: 'h1',
   })
 
   const dayMap = new Map()
@@ -139,7 +141,7 @@ async function obtenerVelasDiariasDesde30m(instrument) {
 
   const velas = [...dayMap.values()].filter(v => v.open && v.close)
   toCache(cacheKey, velas, 4 * 60 * 60_000)
-  console.log(`[Dukascopy M30→Diario] ${instrument}: ${velas.length} días`)
+  console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días`)
   return velas
 }
 

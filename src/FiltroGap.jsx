@@ -204,10 +204,7 @@ export default function FiltroGap() {
         </div>
 
         <div className="filtro-group">
-          <label className="filtro-label">
-            Histórico&nbsp;
-            <span className="fuente-tag yahoo">Yahoo 1d</span>
-          </label>
+          <label className="filtro-label">Histórico</label>
           <div className="filtro-periodos">
             {PERIODOS.map(p => (
               <button

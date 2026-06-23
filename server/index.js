@@ -23,26 +23,28 @@ function diskCacheSet(key, data) {
   try { writeFileSync(file, JSON.stringify(data)) } catch { /* no crítico */ }
 }
 
-// Tickers para velas 15m (fallback cuando Yahoo no tiene datos)
+// Tickers para velas 15m
 const YF_TO_DUKASCOPY = {
   '^GSPC':  'usa500idxusd',
   '^NDX':   'usatechidxusd',
   '^DJI':   'usa30idxusd',
   '^GDAXI': 'deuidxeur',
   '^FTSE':  'gbridxgbp',
-  'SPY':    'usa500idxusd',
-  'QQQ':    'usatechidxusd',
+  'XAUUSD': 'xauusd',
+  'XAGUSD': 'xagusd',
+  'USOIL':  'usousd',
 }
 
-// Yahoo Finance bloquea IPs de datacenter → usar Dukascopy H1 para todos los índices
+// Yahoo Finance bloquea IPs de datacenter → usar Dukascopy H1 para todos los instrumentos
 const DUKASCOPY_DAILY = {
   '^FTSE':  'gbridxgbp',
   '^GDAXI': 'deuidxeur',
   '^GSPC':  'usa500idxusd',
   '^NDX':   'usatechidxusd',
   '^DJI':   'usa30idxusd',
-  'SPY':    'usa500idxusd',
-  'QQQ':    'usatechidxusd',
+  'XAUUSD': 'xauusd',
+  'XAGUSD': 'xagusd',
+  'USOIL':  'usousd',
 }
 
 const app  = express()

@@ -35,8 +35,9 @@ const PRESETS = [
   { label: 'Nasdaq', value: '^NDX'   },
   { label: 'DJ',     value: '^DJI'   },
   { label: 'S&P',    value: '^GSPC'  },
-  { label: 'SPY',    value: 'SPY'    },
-  { label: 'QQQ',    value: 'QQQ'    },
+  { label: 'Oro',    value: 'XAUUSD' },
+  { label: 'Plata',  value: 'XAGUSD' },
+  { label: 'Petróleo', value: 'USOIL' },
 ]
 
 const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes' }

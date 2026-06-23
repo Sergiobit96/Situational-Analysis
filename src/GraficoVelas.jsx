@@ -14,13 +14,13 @@ const madridMinOfDay = adjTs => (adjTs % 86400) / 60
 
 // Ventanas horarias de sesión regular en minutos Madrid por ticker
 const SESSION_MADRID = {
-  '^GDAXI': [9*60,  17*60+30],  // 09:00–17:30
-  '^FTSE':  [9*60,  17*60+30],  // 09:00–17:30
-  '^GSPC':  [14*60, 22*60+30],  // cubre 14:30 CET (invierno) y 15:30 CEST (verano)
-  '^NDX':   [14*60, 22*60+30],
-  '^DJI':   [14*60, 22*60+30],
-  'SPY':    [14*60, 22*60+30],
-  'QQQ':    [14*60, 22*60+30],
+  '^GDAXI': [9*60,      17*60+30],  // 09:00–17:30 (Frankfurt = Madrid siempre)
+  '^FTSE':  [9*60,      17*60+30],  // 09:00–17:30 (London+1h = Madrid siempre)
+  '^GSPC':  [15*60+30,  22*60],     // 15:30–22:00 (NYSE 09:30 ET = 15:30 Madrid siempre)
+  '^NDX':   [15*60+30,  22*60],
+  '^DJI':   [15*60+30,  22*60],
+  'SPY':    [15*60+30,  22*60],
+  'QQQ':    [15*60+30,  22*60],
 }
 
 export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false }) {

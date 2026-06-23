@@ -120,41 +120,63 @@ async function obtenerVelasDiariasStooq(ticker) {
   return velas
 }
 
-// Barras 5-min de un día concreto (CSV Stooq: Date,Time,Open,High,Low,Close,Volume)
-async function obtenerVelas5mStooq(ticker, date) {
-  const cached = fromCache(`stooq5m_${ticker}_${date}`)
-  if (cached) return cached
-
+// Barras intraday de un día (intenta varios intervalos: 5m → 60m → barra diaria)
+// Stooq tiene cobertura intraday excelente para US, buena para DE, limitada para UK
+async function obtenerVelasIntradayStooq(ticker, date) {
   const stooqTicker = toStooqTicker(ticker)
-  const d   = date.replace(/-/g, '')
-  const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqTicker)}&d1=${d}&d2=${d}&i=5`
-  console.log(`[Stooq] Descargando intraday ${stooqTicker} ${date}…`)
-  const resp = await fetch(url, { headers: { 'User-Agent': YF_UA } })
-  if (!resp.ok) throw new Error(`Stooq HTTP ${resp.status} para ${stooqTicker}`)
-  const text = await resp.text()
+  const d           = date.replace(/-/g, '')
 
-  const lines = text.trim().split('\n').slice(1)
-  const velas = []
-  for (const line of lines) {
-    const parts = line.split(',')
-    if (parts.length < 6) continue
-    const [csvDate, time, open, high, low, close, volume = '0'] = parts
-    if (!csvDate || !time || isNaN(parseFloat(open))) continue
-    const ts = Math.floor(new Date(`${csvDate}T${time}Z`).getTime() / 1000)
-    velas.push({
-      time:   ts,
-      open:   parseFloat(open),
-      high:   parseFloat(high),
-      low:    parseFloat(low),
-      close:  parseFloat(close),
-      volume: parseInt(volume) || 0,
-    })
+  // Parsea CSV intraday (Date,Time,Open,High,Low,Close,Volume)
+  async function fetchIntraday(interval) {
+    const cacheKey = `stooq${interval}_${ticker}_${date}`
+    const cached = fromCache(cacheKey)
+    if (cached) return cached
+
+    const url  = `https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqTicker)}&d1=${d}&d2=${d}&i=${interval}`
+    const resp = await fetch(url, { headers: { 'User-Agent': YF_UA } })
+    if (!resp.ok) throw new Error(`Stooq HTTP ${resp.status}`)
+    const text = await resp.text()
+
+    const velas = []
+    for (const line of text.trim().split('\n').slice(1)) {
+      const parts = line.split(',')
+      if (parts.length < 6) continue
+      const [csvDate, time, open, high, low, close, volume = '0'] = parts
+      if (!csvDate || !time || isNaN(parseFloat(open))) continue
+      velas.push({
+        time:   Math.floor(new Date(`${csvDate}T${time}Z`).getTime() / 1000),
+        open:   parseFloat(open),
+        high:   parseFloat(high),
+        low:    parseFloat(low),
+        close:  parseFloat(close),
+        volume: parseInt(volume) || 0,
+      })
+    }
+    velas.sort((a, b) => a.time - b.time)
+    if (velas.length > 0) toCache(cacheKey, velas, 6 * 60 * 60_000)
+    return velas
   }
-  velas.sort((a, b) => a.time - b.time)
 
-  toCache(`stooq5m_${ticker}_${date}`, velas, 6 * 60 * 60_000)
-  console.log(`[Stooq] ${stooqTicker} intraday: ${velas.length} barras`)
-  return velas
+  // 1. Intenta 5-min
+  console.log(`[Stooq] Descargando intraday 5m ${stooqTicker} ${date}…`)
+  const v5 = await fetchIntraday(5)
+  if (v5.length > 0) return { velas: v5, fuente: 'Stooq 5m' }
+
+  // 2. Intenta 60-min (algunos mercados no publican 5m pero sí H1)
+  console.log(`[Stooq] 5m vacío, intentando 60m para ${stooqTicker}…`)
+  const v60 = await fetchIntraday(60)
+  if (v60.length > 0) return { velas: v60, fuente: 'Stooq 1h' }
+
+  // 3. Fallback: barra diaria como único candlestick del día
+  console.log(`[Stooq] Sin intraday para ${stooqTicker}, usando barra diaria…`)
+  const diarias = await obtenerVelasDiariasStooq(ticker)
+  const barra   = diarias.find(v => {
+    const d = new Date(v.time * 1000).toISOString().slice(0, 10)
+    return d === date
+  })
+  if (barra) return { velas: [barra], fuente: 'Stooq 1d' }
+
+  throw new Error(`Sin datos en Stooq para ${stooqTicker} en ${date}`)
 }
 
 // ── Yahoo Finance: crumb auth (necesario desde 2024 para evitar bloqueo) ────
@@ -419,7 +441,9 @@ app.get('/api/gap-filter', async (req, res) => {
 
     const fechaInicio = periodo[0] ? getMadridDate(periodo[0].time) : null
     const periodoLabel = meses >= 12 ? `${meses / 12}a` : `${meses}m`
-    const fuenteDiaria = DUKASCOPY_DAILY[ticker] ? `Dukascopy · ${periodoLabel}` : `Yahoo 1d · ${periodoLabel}`
+    const fuenteDiaria = DUKASCOPY_DAILY[ticker]
+      ? `Dukascopy · ${periodoLabel}`
+      : `Stooq 1d · ${periodoLabel}`
     res.json({ ticker, sesiones, total: sesiones.length, fuente: fuenteDiaria, fechaInicio })
   } catch (err) {
     console.error('[gap-filter]', err.message)
@@ -465,10 +489,11 @@ app.get('/api/velas15m', async (req, res) => {
       velas  = await obtenerVelasDukascopy(instrument, date, timeframe)
       fuente = `Dukascopy ${timeframe}`
     } else {
-      // Acciones individuales: Stooq primero, Yahoo como fallback
+      // Acciones individuales: Stooq (5m → 60m → 1d), Yahoo como último recurso
       try {
-        velas  = await obtenerVelas5mStooq(ticker, date)
-        fuente = 'Stooq 5m'
+        const result = await obtenerVelasIntradayStooq(ticker, date)
+        velas  = result.velas
+        fuente = result.fuente
       } catch (stooqErr) {
         console.warn(`[Stooq intraday] falló para ${ticker}:`, stooqErr.message)
         velas  = await obtenerVelas15mDia(ticker, date)

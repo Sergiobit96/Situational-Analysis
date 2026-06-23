@@ -535,7 +535,7 @@ export default function FiltroGap() {
                     {velas.length > 0 && (
                       <>&nbsp;·&nbsp;{velas.length} velas
                         {fuenteVelas && (
-                          <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : 'yahoo'}`}>
+                          <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : fuenteVelas.startsWith('Stooq') ? 'stooq' : 'yahoo'}`}>
                             {fuenteVelas}
                           </span>
                         )}
@@ -547,7 +547,7 @@ export default function FiltroGap() {
                   <div className="sesion-detalle-meta">
                     {velas.length} velas
                     {fuenteVelas && (
-                      <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : 'yahoo'}`}>
+                      <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : fuenteVelas.startsWith('Stooq') ? 'stooq' : 'yahoo'}`}>
                         {fuenteVelas}
                       </span>
                     )}
@@ -579,6 +579,11 @@ export default function FiltroGap() {
 
               {!cargandoVelas && velas.length > 0 && (
                 <>
+                  {fuenteVelas === 'Stooq 1d' && (
+                    <div className="filtro-vacio" style={{ marginBottom: '0.5rem', fontSize: '0.78rem' }}>
+                      Sin datos intraday disponibles · mostrando barra diaria
+                    </div>
+                  )}
                   <GraficoVelas
                     velas={velas}
                     patrones={[]}

@@ -40,6 +40,109 @@ const PRESETS = [
   { label: 'Petróleo', value: 'USOIL' },
 ]
 
+const STOCKS = {
+  '^GDAXI': [
+    { name: 'SAP',            ticker: 'SAP.DE'   },
+    { name: 'Siemens',        ticker: 'SIE.DE'   },
+    { name: 'Allianz',        ticker: 'ALV.DE'   },
+    { name: 'Mercedes-Benz',  ticker: 'MBG.DE'   },
+    { name: 'BMW',            ticker: 'BMW.DE'   },
+    { name: 'Deutsche Telekom', ticker: 'DTE.DE' },
+    { name: 'Volkswagen',     ticker: 'VOW3.DE'  },
+    { name: 'Bayer',          ticker: 'BAYN.DE'  },
+    { name: 'BASF',           ticker: 'BAS.DE'   },
+    { name: 'Munich Re',      ticker: 'MUV2.DE'  },
+    { name: 'Rheinmetall',    ticker: 'RHM.DE'   },
+    { name: 'Airbus',         ticker: 'AIR.PA'   },
+    { name: 'Infineon',       ticker: 'IFX.DE'   },
+    { name: 'Adidas',         ticker: 'ADS.DE'   },
+    { name: 'Deutsche Bank',  ticker: 'DBK.DE'   },
+  ],
+  '^FTSE': [
+    { name: 'AstraZeneca',    ticker: 'AZN.L'    },
+    { name: 'Shell',          ticker: 'SHEL.L'   },
+    { name: 'HSBC',           ticker: 'HSBA.L'   },
+    { name: 'Unilever',       ticker: 'ULVR.L'   },
+    { name: 'Rio Tinto',      ticker: 'RIO.L'    },
+    { name: 'BP',             ticker: 'BP.L'     },
+    { name: 'GSK',            ticker: 'GSK.L'    },
+    { name: 'Diageo',         ticker: 'DGE.L'    },
+    { name: 'Rolls-Royce',    ticker: 'RR.L'     },
+    { name: 'BAE Systems',    ticker: 'BA.L'     },
+    { name: 'Barclays',       ticker: 'BARC.L'   },
+    { name: 'Lloyds',         ticker: 'LLOY.L'   },
+    { name: 'National Grid',  ticker: 'NG.L'     },
+    { name: 'Vodafone',       ticker: 'VOD.L'    },
+    { name: 'BT Group',       ticker: 'BT-A.L'   },
+  ],
+  '^GSPC': [
+    { name: 'Apple',          ticker: 'AAPL'     },
+    { name: 'Microsoft',      ticker: 'MSFT'     },
+    { name: 'NVIDIA',         ticker: 'NVDA'     },
+    { name: 'Amazon',         ticker: 'AMZN'     },
+    { name: 'Alphabet',       ticker: 'GOOGL'    },
+    { name: 'Meta',           ticker: 'META'     },
+    { name: 'Berkshire B',    ticker: 'BRK-B'    },
+    { name: 'Tesla',          ticker: 'TSLA'     },
+    { name: 'Broadcom',       ticker: 'AVGO'     },
+    { name: 'JPMorgan',       ticker: 'JPM'      },
+    { name: 'Eli Lilly',      ticker: 'LLY'      },
+    { name: 'Visa',           ticker: 'V'        },
+    { name: 'UnitedHealth',   ticker: 'UNH'      },
+    { name: 'Exxon',          ticker: 'XOM'      },
+    { name: 'Johnson & J.',   ticker: 'JNJ'      },
+  ],
+  '^NDX': [
+    { name: 'Apple',          ticker: 'AAPL'     },
+    { name: 'Microsoft',      ticker: 'MSFT'     },
+    { name: 'NVIDIA',         ticker: 'NVDA'     },
+    { name: 'Amazon',         ticker: 'AMZN'     },
+    { name: 'Meta',           ticker: 'META'     },
+    { name: 'Alphabet',       ticker: 'GOOGL'    },
+    { name: 'Tesla',          ticker: 'TSLA'     },
+    { name: 'Broadcom',       ticker: 'AVGO'     },
+    { name: 'Netflix',        ticker: 'NFLX'     },
+    { name: 'Adobe',          ticker: 'ADBE'     },
+    { name: 'AMD',            ticker: 'AMD'      },
+    { name: 'Qualcomm',       ticker: 'QCOM'     },
+    { name: 'Intel',          ticker: 'INTC'     },
+    { name: 'Applied Mat.',   ticker: 'AMAT'     },
+    { name: 'Micron',         ticker: 'MU'       },
+  ],
+  '^DJI': [
+    { name: 'UnitedHealth',   ticker: 'UNH'      },
+    { name: 'Goldman Sachs',  ticker: 'GS'       },
+    { name: 'Microsoft',      ticker: 'MSFT'     },
+    { name: 'Home Depot',     ticker: 'HD'       },
+    { name: 'McDonald\'s',    ticker: 'MCD'      },
+    { name: 'Visa',           ticker: 'V'        },
+    { name: 'Caterpillar',    ticker: 'CAT'      },
+    { name: 'Amazon',         ticker: 'AMZN'     },
+    { name: 'Salesforce',     ticker: 'CRM'      },
+    { name: 'Apple',          ticker: 'AAPL'     },
+    { name: 'JPMorgan',       ticker: 'JPM'      },
+    { name: 'Amgen',          ticker: 'AMGN'     },
+    { name: 'Boeing',         ticker: 'BA'       },
+    { name: 'Procter & G.',   ticker: 'PG'       },
+    { name: 'Honeywell',      ticker: 'HON'      },
+    { name: 'Chevron',        ticker: 'CVX'      },
+    { name: 'Johnson & J.',   ticker: 'JNJ'      },
+    { name: 'American Exp.',  ticker: 'AXP'      },
+    { name: 'Nike',           ticker: 'NKE'      },
+    { name: 'IBM',            ticker: 'IBM'      },
+    { name: 'Walmart',        ticker: 'WMT'      },
+    { name: 'Disney',         ticker: 'DIS'      },
+    { name: 'Merck',          ticker: 'MRK'      },
+    { name: 'Cisco',          ticker: 'CSCO'     },
+    { name: 'Coca-Cola',      ticker: 'KO'       },
+    { name: 'Travelers',      ticker: 'TRV'      },
+    { name: 'Verizon',        ticker: 'VZ'       },
+    { name: '3M',             ticker: 'MMM'      },
+    { name: 'Walgreens',      ticker: 'WBA'      },
+    { name: 'Intel',          ticker: 'INTC'     },
+  ],
+}
+
 const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes' }
 const DIA_CORTO  = { 1: 'Lu', 2: 'Ma', 3: 'Mi', 4: 'Ju', 5: 'Vi' }
 
@@ -62,6 +165,7 @@ export default function FiltroGap() {
   const abortVelasRef = useRef(null)
 
   // ── Modo multi-instrumento (fecha concreta) ──
+  const [indiceAcciones, setIndiceAcciones] = useState(null)
   const [instrManual, setInstrManual] = useState(new Set())
   const [velasMulti,  setVelasMulti]  = useState({})   // { ticker: {velas,fuente,loading} }
   const [fechaMulti,  setFechaMulti]  = useState(null)
@@ -201,10 +305,36 @@ export default function FiltroGap() {
               <button
                 key={p.value}
                 className={`chip ${ticker === p.value ? 'activo' : ''}`}
-                onClick={() => setTicker(p.value)}
+                onClick={() => {
+                  setTicker(p.value)
+                  setIndiceAcciones(STOCKS[p.value] ? p.value : null)
+                }}
               >{p.label}</button>
             ))}
           </div>
+
+          {/* ── Acciones del índice seleccionado ── */}
+          {indiceAcciones && STOCKS[indiceAcciones] && (
+            <div className="acciones-panel">
+              <div className="acciones-header">
+                <span>Acciones · {PRESETS.find(p => p.value === indiceAcciones)?.label}</span>
+                <button className="clear-eventos" onClick={() => setIndiceAcciones(null)}>× cerrar</button>
+              </div>
+              <div className="acciones-lista">
+                {STOCKS[indiceAcciones].map(s => (
+                  <button
+                    key={s.ticker}
+                    className={`stock-chip ${ticker === s.ticker ? 'activo' : ''}`}
+                    title={s.ticker}
+                    onClick={() => setTicker(s.ticker)}
+                  >
+                    <span className="stock-nombre">{s.name}</span>
+                    <span className="stock-ticker">{s.ticker}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="filtro-group">

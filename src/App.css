@@ -1650,25 +1650,30 @@ body {
 }
 .quote-chip {
   display: flex;
-  align-items: baseline;
-  gap: 0.35rem;
+  flex-direction: column;
+  gap: 0.06rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.28rem 0.6rem;
-  font-size: 0.78rem;
+  padding: 0.3rem 0.65rem;
   white-space: nowrap;
 }
 .quote-label {
   color: var(--muted);
   font-weight: 600;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
+}
+.quote-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
 }
 .quote-price {
   color: var(--text);
-  font-weight: 600;
+  font-weight: 700;
+  font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
 }
 .quote-change {
@@ -1677,3 +1682,17 @@ body {
 }
 .quote-change.up   { color: var(--green); }
 .quote-change.down { color: var(--red);   }
+.quote-prev {
+  display: flex;
+  align-items: baseline;
+  gap: 0.28rem;
+}
+.quote-prev-val {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.quote-prev-time {
+  color: var(--border);
+  font-size: 0.62rem;
+}

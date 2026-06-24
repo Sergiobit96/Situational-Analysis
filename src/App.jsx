@@ -3,6 +3,7 @@ import FiltroGap from './FiltroGap'
 import SubirDatos from './SubirDatos'
 import Calendario from './Calendario'
 import Pipeline from './Pipeline'
+import QuoteBar from './QuoteBar'
 import './App.css'
 
 const TABS = [
@@ -21,6 +22,7 @@ export default function App() {
           <h1>Situational Analysis</h1>
           <p className="subtitulo">Gap Filter · DAX · FTSE · S&amp;P · Nasdaq · DJ · Oro · Plata · Petróleo</p>
         </div>
+        <QuoteBar />
         <nav className="tab-nav">
           {TABS.map(t => (
             <button

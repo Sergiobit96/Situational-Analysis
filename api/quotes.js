@@ -1,51 +1,54 @@
-// Vercel serverless function — batch quotes from Yahoo Finance.
-// Runs on Vercel IPs (not Railway), so it's not blocked by Yahoo Finance.
+// Vercel serverless function — batch quotes from CNBC quote service.
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 
-const SYMBOLS = ['^GDAXI', '^FTSE', '^GSPC', '^NDX', '^DJI', 'GC=F', 'SI=F', 'CL=F']
-
-let _auth = null, _authTs = 0
-
-async function getAuth() {
-  if (_auth && Date.now() - _authTs < 3_600_000) return _auth
-  try {
-    const r1 = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': UA }, redirect: 'follow' })
-    const raw    = r1.headers.get('set-cookie') ?? ''
-    const cookie = raw.split(',').map(c => c.split(';')[0].trim()).filter(Boolean).join('; ')
-    const r2     = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
-      headers: { 'User-Agent': UA, 'Cookie': cookie },
-    })
-    const crumb = (await r2.text()).trim()
-    if (crumb && crumb.length < 60 && !crumb.startsWith('<')) {
-      _auth = { cookie, crumb }; _authTs = Date.now()
-    }
-  } catch {}
-  return _auth
-}
+// Mapa: símbolo interno → símbolo CNBC
+const INSTRUMENTS = [
+  { id: '^GDAXI', cnbc: '.GDAXI' },
+  { id: '^FTSE',  cnbc: '.FTSE'  },
+  { id: '^GSPC',  cnbc: '.SPX'   },
+  { id: '^NDX',   cnbc: '.NDX'   },
+  { id: '^DJI',   cnbc: '.DJI'   },
+  { id: 'GC=F',   cnbc: '@GC.1'  },
+  { id: 'SI=F',   cnbc: '@SI.1'  },
+  { id: 'CL=F',   cnbc: '@CL.1'  },
+]
 
 export default async function handler(req, res) {
   try {
-    const auth   = await getAuth()
-    const syms   = encodeURIComponent(SYMBOLS.join(','))
-    const crumb  = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
-    const hdrs   = auth ? { 'User-Agent': UA, 'Cookie': auth.cookie } : { 'User-Agent': UA }
-    const url    = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}${crumb}`
+    const cnbcSymbols = INSTRUMENTS.map(i => i.cnbc).join('|')
+    const fields = 'symbol,last,change,changePct,previous_day_closing,open,name'
+    const url = `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol` +
+      `?symbols=${encodeURIComponent(cnbcSymbols)}` +
+      `&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1` +
+      `&outputFields=${fields}`
 
-    const resp   = await fetch(url, { headers: hdrs })
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': UA,
+        'Referer':    'https://www.cnbc.com/',
+        'Accept':     'application/json, text/javascript, */*',
+      },
+    })
     const json   = await resp.json()
-    const result = (json.quoteResponse?.result ?? []).map(q => ({
-      symbol:     q.symbol,
-      price:      q.regularMarketPrice,
-      change:     q.regularMarketChange,
-      changePct:  q.regularMarketChangePercent,
-      prevClose:  q.regularMarketPreviousClose,
-    }))
+    const quotes = json.FormattedQuoteResult?.FormattedQuote ?? []
+
+    // Índice inverso: símbolo CNBC → id interno
+    const byId = {}
+    INSTRUMENTS.forEach(i => { byId[i.cnbc] = i.id })
+
+    const result = quotes.map(q => ({
+      symbol:    byId[q.symbol] ?? q.symbol,
+      price:     parseFloat(q.last),
+      change:    parseFloat(q.change),
+      changePct: parseFloat(q.changePct),
+      prevClose: parseFloat(q.previous_day_closing ?? q.open),
+    })).filter(q => !isNaN(q.price))
 
     res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=10')
     res.json(result)
   } catch (err) {
-    console.error('[quotes]', err.message)
+    console.error('[quotes/cnbc]', err.message)
     res.status(500).json({ error: err.message })
   }
 }

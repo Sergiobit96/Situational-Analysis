@@ -27,11 +27,15 @@ export default async function handler(req, res) {
       headers: {
         'User-Agent': UA,
         'Referer':    'https://www.cnbc.com/',
+        'Origin':     'https://www.cnbc.com',
         'Accept':     'application/json, text/javascript, */*',
       },
     })
     const json   = await resp.json()
     const quotes = json.FormattedQuoteResult?.FormattedQuote ?? []
+
+    // CNBC devuelve números formateados: "7,365.46", "-1.44%"
+    const num = s => parseFloat(String(s ?? '').replace(/,/g, '').replace('%', ''))
 
     // Índice inverso: símbolo CNBC → id interno
     const byId = {}
@@ -39,10 +43,10 @@ export default async function handler(req, res) {
 
     const result = quotes.map(q => ({
       symbol:    byId[q.symbol] ?? q.symbol,
-      price:     parseFloat(q.last),
-      change:    parseFloat(q.change),
-      changePct: parseFloat(q.changePct),
-      prevClose: parseFloat(q.previous_day_closing ?? q.open),
+      price:     num(q.last),
+      change:    num(q.change),
+      changePct: num(q.change_pct),
+      prevClose: num(q.previous_day_closing ?? q.open),
     })).filter(q => !isNaN(q.price))
 
     res.setHeader('Cache-Control', 's-maxage=20, stale-while-revalidate=10')

@@ -1693,6 +1693,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .quote-prev-time {
-  color: var(--border);
+  color: var(--muted);
   font-size: 0.62rem;
 }

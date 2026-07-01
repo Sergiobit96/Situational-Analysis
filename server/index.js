@@ -4,13 +4,16 @@ import cors from 'cors'
 import { getHistoricalRates } from 'dukascopy-node'
 import { getEventIndex, getEventosEnFecha } from './eventos.js'
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Cache en disco para datos Dukascopy (usa /tmp en producción, local en dev)
 const DISK_CACHE_DIR = process.env.NODE_ENV === 'production'
   ? '/tmp/.duka-cache'
-  : join(import.meta.dirname, '.duka-cache')
+  : join(__dirname, '.duka-cache')
 try { mkdirSync(DISK_CACHE_DIR, { recursive: true }) } catch { /* non-critical */ }
 
 function diskCacheGet(key) {
@@ -254,6 +257,14 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   const cached   = fromCache(cacheKey)
   if (cached) return cached
 
+  // Disk cache: persiste entre reinicios del contenedor
+  const disk = diskCacheGet(cacheKey)
+  if (disk) {
+    toCache(cacheKey, disk, 4 * 60 * 60_000)
+    console.log(`[Dukascopy H1→Diario] ${instrument}: ${disk.length} días (disco)`)
+    return disk
+  }
+
   const from = new Date()
   from.setFullYear(from.getFullYear() - 5)
 
@@ -275,6 +286,12 @@ async function obtenerVelasDiariasDesde30m(instrument) {
 
   const velas = [...dayMap.values()].filter(v => v.open && v.close)
   toCache(cacheKey, velas, 4 * 60 * 60_000)
+
+  // Al disco solo van sesiones cerradas: excluir hoy (candle incompleto si mercado abierto)
+  const hoy        = getLondonDateStr(Date.now())
+  const velasDisco = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
+  if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
+
   console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días`)
   return velas
 }
@@ -364,9 +381,9 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
   const cached = fromCache(cacheKey)
   if (cached) return cached
 
-  // 2. Cache en disco (solo para fechas pasadas)
+  // 2. Cache en disco: ayer y antes (sesión cerrada → datos inmutables)
   const ayer    = new Date(Date.now() - 86400_000).toISOString().slice(0, 10)
-  const useDisk = date < ayer
+  const useDisk = date <= ayer
 
   if (useDisk) {
     const disk = diskCacheGet(cacheKey)
@@ -392,19 +409,22 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
     volume: volume ?? 0,
   }))
 
-  toCache(cacheKey, velas, 6 * 60 * 60_000)
-  if (useDisk && velas.length > 0) diskCacheSet(cacheKey, velas)
+  if (velas.length > 0) {
+    toCache(cacheKey, velas, 6 * 60 * 60_000)
+    if (useDisk) diskCacheSet(cacheKey, velas)
+  }
   return velas
 }
 
 // ── Gap Filter ─────────────────────────────────────────────────────────────
 app.get('/api/gap-filter', async (req, res) => {
   try {
-    const ticker = req.query.ticker ?? '^GDAXI'
-    const dias   = req.query.dias ? req.query.dias.split(',').map(Number) : [1,2,3,4,5]
-    const dir    = req.query.dir  ?? 'both'
-    const gapMin = parseFloat(req.query.gapMin ?? 0)
-    const meses  = Math.min(60, Math.max(1, parseInt(req.query.meses ?? 12, 10)))
+    const ticker  = req.query.ticker ?? '^GDAXI'
+    const dias    = req.query.dias ? req.query.dias.split(',').map(Number) : [1,2,3,4,5]
+    const dir     = req.query.dir  ?? 'both'
+    const gapMin  = parseFloat(req.query.gapMin ?? 0)
+    const meses   = Math.min(60, Math.max(1, parseInt(req.query.meses ?? 12, 10)))
+    const diasEsp = req.query.diasEsp ? new Set(req.query.diasEsp.split(',')) : null
 
     const diarias = await obtenerVelasDiarias(ticker)
 
@@ -439,12 +459,45 @@ app.get('/api/gap-filter', async (req, res) => {
       })
     }
 
-    const fechaInicio = periodo[0] ? getMadridDate(periodo[0].time) : null
+    // Filtro días especiales (primer/último día de negociación del mes o trimestre)
+    let sesionesFiltradas = sesiones
+    if (diasEsp && diasEsp.size > 0) {
+      // Construir conjuntos de fechas especiales a partir del periodo completo
+      const byMes = {}
+      for (const v of periodo) {
+        const date = getMadridDate(v.time)
+        const key  = date.slice(0, 7)
+        if (!byMes[key]) byMes[key] = []
+        byMes[key].push(date)
+      }
+      const primerMes  = new Set()
+      const ultimoMes  = new Set()
+      const primerTrim = new Set()
+      const ultimoTrim = new Set()
+      const inicioTrim = new Set(['01','04','07','10'])
+      const finTrim    = new Set(['03','06','09','12'])
+      for (const [key, fechas] of Object.entries(byMes)) {
+        const ord = [...fechas].sort()
+        const mes = key.slice(5, 7)
+        primerMes.add(ord[0])
+        ultimoMes.add(ord[ord.length - 1])
+        if (inicioTrim.has(mes)) primerTrim.add(ord[0])
+        if (finTrim.has(mes))    ultimoTrim.add(ord[ord.length - 1])
+      }
+      sesionesFiltradas = sesiones.filter(s =>
+        (diasEsp.has('primerMes')  && primerMes.has(s.date))  ||
+        (diasEsp.has('ultimoMes')  && ultimoMes.has(s.date))  ||
+        (diasEsp.has('primerTrim') && primerTrim.has(s.date)) ||
+        (diasEsp.has('ultimoTrim') && ultimoTrim.has(s.date))
+      )
+    }
+
+    const fechaInicio  = periodo[0] ? getMadridDate(periodo[0].time) : null
     const periodoLabel = meses >= 12 ? `${meses / 12}a` : `${meses}m`
     const fuenteDiaria = DUKASCOPY_DAILY[ticker]
       ? `Dukascopy · ${periodoLabel}`
       : `Stooq 1d · ${periodoLabel}`
-    res.json({ ticker, sesiones, total: sesiones.length, fuente: fuenteDiaria, fechaInicio })
+    res.json({ ticker, sesiones: sesionesFiltradas, total: sesionesFiltradas.length, fuente: fuenteDiaria, fechaInicio })
   } catch (err) {
     console.error('[gap-filter]', err.message)
     res.status(500).json({ error: err.message })
@@ -503,6 +556,21 @@ app.get('/api/velas15m', async (req, res) => {
     if (instrument) {
       velas  = await obtenerVelasDukascopy(instrument, date, timeframe)
       fuente = `Dukascopy ${timeframe}`
+
+      // Fallback si el timeframe pedido no tiene datos para esa fecha antigua
+      if (velas.length === 0 && timeframe !== 'h1') {
+        console.log(`[velas15m] ${instrument} ${date} vacío en ${timeframe}, intentando h1…`)
+        velas  = await obtenerVelasDukascopy(instrument, date, 'h1')
+        if (velas.length > 0) fuente = 'Dukascopy h1'
+      }
+
+      // Último recurso: barra diaria del caché H1 ya calculado
+      if (velas.length === 0) {
+        console.log(`[velas15m] ${instrument} ${date} sin intraday, usando barra diaria…`)
+        const diarias = await obtenerVelasDiariasDesde30m(instrument)
+        const barra   = diarias.find(v => getLondonDateStr(v.time * 1000) === date)
+        if (barra) { velas = [barra]; fuente = 'Dukascopy 1d' }
+      }
     } else {
       // Acciones individuales: Stooq (5m → 60m → 1d), Yahoo como último recurso
       try {
@@ -611,4 +679,12 @@ app.get('/api/pipeline/run', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor en http://localhost:${PORT}`)
+  // Pre-calentar caché Dukascopy H1 en segundo plano para evitar timeouts en primera petición
+  ;(async () => {
+    for (const instrument of Object.values(DUKASCOPY_DAILY)) {
+      try { await obtenerVelasDiariasDesde30m(instrument) }
+      catch (e) { console.warn(`[warmup] ${instrument}:`, e.message) }
+    }
+    console.log('[warmup] Caché Dukascopy H1 lista')
+  })().catch(() => {})
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import GraficoVelas from './GraficoVelas'
 
 // Tickers que Railway maneja via Dukascopy — el resto va a /api/yf-intraday (Vercel)
@@ -155,6 +155,7 @@ const STOCKS = {
 
 const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes' }
 const DIA_CORTO  = { 1: 'Lu', 2: 'Ma', 3: 'Mi', 4: 'Ju', 5: 'Vi' }
+const PAGE_SIZE  = 50
 
 export default function FiltroGap() {
   const [ticker,        setTicker]        = useState('^GDAXI')
@@ -180,6 +181,8 @@ export default function FiltroGap() {
   const [velasMulti,  setVelasMulti]  = useState({})   // { ticker: {velas,fuente,loading} }
   const [fechaMulti,  setFechaMulti]  = useState(null)
   const abortMultiRef = useRef({})
+  const [pagina,         setPagina]         = useState(0)
+  const [diasEspeciales, setDiasEspeciales] = useState(new Set())
 
   const toggleDia = n => setDias(prev => {
     const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s
@@ -193,12 +196,59 @@ export default function FiltroGap() {
     const s = new Set(prev); s.has(val) ? s.delete(val) : s.add(val); return s
   })
 
-  // Filtrado secundario por evento (client-side, instantáneo)
-  const sesionesVisibles = (() => {
+  const toggleDiaEspecial = id => setDiasEspeciales(prev => {
+    const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s
+  })
+
+  // Calcula qué fechas son primer/último día de negociación del mes y del trimestre
+  const fechasEspeciales = useMemo(() => {
     const all = resultado?.sesiones ?? []
-    if (eventosActivos.size === 0) return all
-    return all.filter(s => s.eventos?.some(e => eventosActivos.has(e)))
+    if (all.length === 0) return null
+    const byMes = {}
+    for (const s of all) {
+      const key = s.date.slice(0, 7) // 'YYYY-MM'
+      if (!byMes[key]) byMes[key] = []
+      byMes[key].push(s.date)
+    }
+    const primerMes    = new Set()
+    const ultimoMes    = new Set()
+    const primerTrim   = new Set()
+    const ultimoTrim   = new Set()
+    const inicioTrim   = new Set(['01','04','07','10'])
+    const finTrim      = new Set(['03','06','09','12'])
+    for (const [key, fechas] of Object.entries(byMes)) {
+      const ord = [...fechas].sort()
+      const mes = key.slice(5, 7)
+      primerMes.add(ord[0])
+      ultimoMes.add(ord[ord.length - 1])
+      if (inicioTrim.has(mes)) primerTrim.add(ord[0])
+      if (finTrim.has(mes))    ultimoTrim.add(ord[ord.length - 1])
+    }
+    return { primerMes, ultimoMes, primerTrim, ultimoTrim }
+  }, [resultado])
+
+  // Filtrado secundario por evento y día especial (client-side, instantáneo)
+  const sesionesVisibles = (() => {
+    let all = resultado?.sesiones ?? []
+    if (eventosActivos.size > 0)
+      all = all.filter(s => s.eventos?.some(e => eventosActivos.has(e)))
+    if (diasEspeciales.size > 0 && fechasEspeciales)
+      all = all.filter(s =>
+        (diasEspeciales.has('primerMes')  && fechasEspeciales.primerMes.has(s.date))  ||
+        (diasEspeciales.has('ultimoMes')  && fechasEspeciales.ultimoMes.has(s.date))  ||
+        (diasEspeciales.has('primerTrim') && fechasEspeciales.primerTrim.has(s.date)) ||
+        (diasEspeciales.has('ultimoTrim') && fechasEspeciales.ultimoTrim.has(s.date))
+      )
+    return all
   })()
+
+  // Paginación: orden descendente (más reciente primero) para ver datos actuales sin scroll
+  const sesionesOrdenadas = [...sesionesVisibles].reverse()
+  const totalPaginas      = Math.max(1, Math.ceil(sesionesOrdenadas.length / PAGE_SIZE))
+  const sesionsPagina     = sesionesOrdenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
+
+  // Resetear página al cambiar resultados o filtros secundarios
+  useEffect(() => { setPagina(0) }, [resultado, eventosActivos, diasEspeciales])
 
   const buscar = async () => {
     if (!ticker.trim() || dias.size === 0) return
@@ -217,6 +267,7 @@ export default function FiltroGap() {
         dir,
         gapMin,
         meses,
+        ...(diasEspeciales.size > 0 ? { diasEsp: [...diasEspeciales].join(',') } : {}),
       })
       const res  = await fetch(`/api/gap-filter?${p}`)
       const data = await res.json()
@@ -430,6 +481,31 @@ export default function FiltroGap() {
 
         <div className="filtro-group">
           <label className="filtro-label">
+            Día especial
+            {diasEspeciales.size > 0 && (
+              <button className="clear-eventos" onClick={() => setDiasEspeciales(new Set())}>× limpiar</button>
+            )}
+          </label>
+          <div className="filtro-dias-esp">
+            {[
+              { id: 'primerMes',  label: '1º mes',       title: 'Primer día de negociación del mes' },
+              { id: 'ultimoMes',  label: 'Último mes',   title: 'Último día de negociación del mes' },
+              { id: 'primerTrim', label: '1º trim.',      title: 'Primer día de negociación del trimestre (ene/abr/jul/oct)' },
+              { id: 'ultimoTrim', label: 'Último trim.', title: 'Último día de negociación del trimestre (mar/jun/sep/dic)' },
+            ].map(d => (
+              <button
+                key={d.id}
+                className={`dia-esp-chip ${diasEspeciales.has(d.id) ? 'activo' : ''}`}
+                onClick={() => toggleDiaEspecial(d.id)}
+                title={d.title}
+                disabled={!resultado}
+              >{d.label}</button>
+            ))}
+          </div>
+        </div>
+
+        <div className="filtro-group">
+          <label className="filtro-label">
             Ir a fecha concreta
             {instrManual.size > 0 && (
               <button className="clear-eventos" onClick={() => setInstrManual(new Set())}>× limpiar</button>
@@ -504,7 +580,7 @@ export default function FiltroGap() {
           {/* Lista de sesiones (solo cuando hay resultados del filtro) */}
           {resultado && sesionesVisibles.length > 0 && (
             <div className="sesiones-lista">
-              {sesionesVisibles.map(s => (
+              {sesionsPagina.map(s => (
                 <SesionCard
                   key={s.date}
                   sesion={s}
@@ -512,6 +588,21 @@ export default function FiltroGap() {
                   onClick={() => { setSeleccion(s); setVelasMulti({}); setFechaMulti(null) }}
                 />
               ))}
+              {totalPaginas > 1 && (
+                <div className="paginacion">
+                  <button
+                    className="pag-btn"
+                    onClick={() => setPagina(p => Math.max(0, p - 1))}
+                    disabled={pagina === 0}
+                  >← Anterior</button>
+                  <span className="pag-info">{pagina + 1} / {totalPaginas}</span>
+                  <button
+                    className="pag-btn"
+                    onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))}
+                    disabled={pagina >= totalPaginas - 1}
+                  >Siguiente →</button>
+                </div>
+              )}
             </div>
           )}
 
@@ -587,7 +678,7 @@ export default function FiltroGap() {
 
               {!cargandoVelas && velas.length > 0 && (
                 <>
-                  {fuenteVelas === 'Stooq 1d' && (
+                  {(fuenteVelas === 'Stooq 1d' || fuenteVelas === 'Dukascopy 1d') && (
                     <div className="filtro-vacio" style={{ marginBottom: '0.5rem', fontSize: '0.78rem' }}>
                       Sin datos intraday disponibles · mostrando barra diaria
                     </div>

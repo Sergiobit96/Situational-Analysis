@@ -746,6 +746,28 @@ body {
 .fuente-tag.yahoo      { background: rgba(139,148,158,0.15); color: var(--muted); }
 .fuente-tag.dukascopy  { background: rgba(168,85,247,0.15);  color: #c084fc; }
 
+/* ── Filtro de días especiales ── */
+.filtro-dias-esp { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.dia-esp-chip {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.dia-esp-chip:hover:not(:disabled) { border-color: #a78bfa; color: #a78bfa; }
+.dia-esp-chip.activo {
+  background: rgba(124,58,237,0.18);
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  font-weight: 600;
+}
+.dia-esp-chip:disabled { opacity: 0.35; cursor: default; }
+
 /* ── Filtro de eventos económicos ── */
 .filtro-eventos { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 
@@ -917,6 +939,28 @@ body {
 }
 .sesiones-lista::-webkit-scrollbar { width: 4px; }
 .sesiones-lista::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.paginacion {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0 0.2rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.35rem;
+}
+.pag-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.pag-btn:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
+.pag-btn:disabled { opacity: 0.35; cursor: default; }
+.pag-info { font-size: 0.78rem; color: var(--muted); min-width: 4rem; text-align: center; }
 
 .sesion-card {
   background: var(--surface);
@@ -1303,6 +1347,13 @@ body {
   line-height: 1.3;
 }
 .cal-fest-flag   { flex-shrink: 0; }
+.cal-fest-hora {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  margin-right: 0.1rem;
+}
 .cal-fest-nombre {
   font-weight: 500;
   overflow: hidden;
@@ -1355,7 +1406,7 @@ body {
 
 @media (max-width: 700px) {
   .cal-cell     { min-height: 52px; padding: 0.25rem; }
-  .cal-fest-nombre { display: none; }
+  .cal-fest-nombre, .cal-fest-hora { display: none; }
 }
 
 /* ═══════════════════════════════════════
@@ -1629,7 +1680,7 @@ body {
   .cal-cell { min-height: 44px; padding: 0.2rem; }
   .cal-num  { font-size: 0.72rem; }
   .cal-dow  { font-size: 0.65rem; }
-  .cal-fest-nombre { display: none; }
+  .cal-fest-nombre, .cal-fest-hora { display: none; }
 
   /* Scanner */
   .scanner-main { grid-template-columns: 1fr; }

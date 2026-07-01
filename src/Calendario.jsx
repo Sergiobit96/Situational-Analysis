@@ -35,6 +35,15 @@ async function fetchNager(year, code) {
 const toMadridDate = iso =>
   new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
 
+// Extrae la hora Madrid de un evento FF; devuelve null si es medianoche (sin hora concreta)
+const toMadridTime = iso => {
+  const d = new Date(iso)
+  const t = d.toLocaleTimeString('es-ES', {
+    timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit',
+  })
+  return t === '00:00' ? null : t
+}
+
 export default function Calendario() {
   const hoy = new Date()
   const [year,    setYear]    = useState(hoy.getFullYear())
@@ -117,6 +126,7 @@ export default function Calendario() {
         src: 'ff', currency, flag: p.flag,
         color: IMPACTOS.find(i => i.key === ev.impact)?.color ?? '#6b7280',
         name: ev.title, impact: ev.impact,
+        time: toMadridTime(ev.date),
       })
     })
   })
@@ -202,9 +212,12 @@ export default function Calendario() {
                   <div
                     key={fi}
                     className={`cal-fest impact-${ev.impact.toLowerCase()}`}
-                    title={`${ev.flag} ${ev.name}`}
+                    title={`${ev.flag} ${ev.time ? ev.time + ' · ' : ''}${ev.name}`}
                   >
                     <span className="cal-fest-flag">{ev.flag}</span>
+                    {ev.time && (
+                      <span className="cal-fest-hora">{ev.time}</span>
+                    )}
                     <span className="cal-fest-nombre" style={{ color: ev.color }}>
                       {ev.name}
                     </span>

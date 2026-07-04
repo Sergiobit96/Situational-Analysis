@@ -1015,6 +1015,12 @@ body {
 }
 .sesion-card-gap.verde { color: var(--green); }
 .sesion-card-gap.rojo  { color: var(--red); }
+.sesion-card-gap-pts {
+  display: block;
+  font-size: 0.66rem;
+  font-weight: 500;
+  opacity: 0.75;
+}
 .sesion-card-precios {
   font-size: 0.7rem;
   color: var(--muted);
@@ -1056,6 +1062,7 @@ body {
 }
 .gap-pill.up   { background: rgba(63,185,80,0.15);  color: var(--green); }
 .gap-pill.down { background: rgba(248,81,73,0.15);  color: var(--red); }
+.gap-pill-pts  { font-weight: 500; opacity: 0.85; font-size: 0.72rem; }
 
 .sesion-detalle-meta {
   font-size: 0.78rem;

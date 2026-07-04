@@ -696,6 +696,12 @@ export default function FiltroGap() {
                     <span className={`gap-pill ${seleccion.gapDir}`}>
                       {seleccion.gapDir === 'up' ? '▲' : '▼'}
                       {seleccion.gapPct > 0 ? ' +' : ' '}{seleccion.gapPct.toFixed(3)}%
+                      {seleccion.prevClose != null && seleccion.openPrice != null && (
+                        <span className="gap-pill-pts">
+                          {' '}({seleccion.openPrice - seleccion.prevClose > 0 ? '+' : ''}
+                          {(seleccion.openPrice - seleccion.prevClose).toFixed(2)} pts)
+                        </span>
+                      )}
                     </span>
                   )}
                   {seleccion.eventos?.map(e => (
@@ -849,6 +855,10 @@ function SesionCard({ sesion, activo, onClick }) {
       </div>
       <div className={`sesion-card-gap ${up ? 'verde' : 'rojo'}`}>
         {up ? '▲' : '▼'} {sesion.gapPct > 0 ? '+' : ''}{sesion.gapPct.toFixed(3)}%
+        <span className="sesion-card-gap-pts">
+          {' '}({sesion.openPrice - sesion.prevClose > 0 ? '+' : ''}
+          {(sesion.openPrice - sesion.prevClose).toFixed(2)})
+        </span>
       </div>
       <div className="sesion-card-derecha">
         <div className="sesion-card-precios">

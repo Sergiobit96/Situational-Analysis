@@ -569,7 +569,10 @@ app.post('/api/export-ppt', async (req, res) => {
     for (const s of sesiones) {
       const slide    = pptx.addSlide()
       const gapColor = s.gapDir === 'up' ? '3FB950' : 'F85149'
-      const gapText  = s.gapPct != null ? `${s.gapPct > 0 ? '+' : ''}${s.gapPct.toFixed(3)}%` : ''
+      const gapPts   = s.prevClose != null && s.openPrice != null ? s.openPrice - s.prevClose : null
+      const gapText  = s.gapPct != null
+        ? `${s.gapPct > 0 ? '+' : ''}${s.gapPct.toFixed(3)}%` + (gapPts != null ? `  (${gapPts > 0 ? '+' : ''}${gapPts.toFixed(2)} pts)` : '')
+        : ''
 
       slide.addText([
         { text: `${s.date ?? ''}   `,                      options: { bold: true, color: '0F172A', fontSize: 16 } },

@@ -810,14 +810,13 @@ body {
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
-.dia-esp-chip:hover:not(:disabled) { border-color: #a78bfa; color: #a78bfa; }
+.dia-esp-chip:hover { border-color: #a78bfa; color: #a78bfa; }
 .dia-esp-chip.activo {
   background: rgba(124,58,237,0.18);
   border-color: var(--accent-2);
   color: var(--accent-2);
   font-weight: 600;
 }
-.dia-esp-chip:disabled { opacity: 0.35; cursor: default; }
 
 /* ── Filtro de eventos económicos ── */
 .filtro-eventos { display: flex; flex-wrap: wrap; gap: 0.35rem; }

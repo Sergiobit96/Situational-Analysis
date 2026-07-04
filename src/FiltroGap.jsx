@@ -587,7 +587,6 @@ export default function FiltroGap() {
                 className={`dia-esp-chip ${diasEspeciales.has(d.id) ? 'activo' : ''}`}
                 onClick={() => toggleDiaEspecial(d.id)}
                 title={d.title}
-                disabled={!resultado}
               >{d.label}</button>
             ))}
           </div>

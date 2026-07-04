@@ -22,6 +22,21 @@ const DIAS = [
 
 const GAP_SIZES = [0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
 
+// Gaps sugeridos en puntos: varían mucho según la escala de precio del instrumento
+// (p.ej. 50 pts es pequeño para el DAX pero enorme para la Plata), así que se eligen
+// por ticker en vez de un único set de chips válido para todos.
+const GAP_PTS_SUGERIDOS = {
+  '^GDAXI': [10, 25, 50, 100, 200, 400],
+  '^FTSE':  [10, 20, 40, 75, 150, 300],
+  '^GSPC':  [5, 10, 20, 40, 75, 150],
+  '^NDX':   [10, 25, 50, 100, 200, 400],
+  '^DJI':   [25, 50, 100, 200, 400, 800],
+  'XAUUSD': [5, 10, 20, 40, 75, 150],
+  'XAGUSD': [0.1, 0.25, 0.5, 1, 2, 4],
+  'USOIL':  [0.25, 0.5, 1, 2, 4, 8],
+}
+const GAP_PTS_DEFAULT = [0.5, 1, 2, 5, 10, 25]
+
 const EVENTOS_DEF = [
   { id: 'FOMC', label: 'FOMC',  title: 'Fed rate decision' },
   { id: 'CPI',  label: 'CPI',   title: 'Consumer Price Index US' },
@@ -520,16 +535,27 @@ export default function FiltroGap() {
                 ))}
               </div>
             ) : (
-              <input
-                type="number"
-                min="0"
-                step="any"
-                inputMode="decimal"
-                className="filtro-input-puntos"
-                placeholder="0 = cualquiera"
-                value={gapMin === 0 ? '' : gapMin}
-                onChange={e => setGapMin(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-              />
+              <>
+                <div className="filtro-gap-sizes">
+                  {[0, ...(GAP_PTS_SUGERIDOS[ticker] ?? GAP_PTS_DEFAULT)].map(g => (
+                    <button
+                      key={g}
+                      className={`gap-chip ${gapMin === g ? 'activo' : ''}`}
+                      onClick={() => setGapMin(g)}
+                    >{g === 0 ? 'Todos' : g}</button>
+                  ))}
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputMode="decimal"
+                  className="filtro-input-puntos"
+                  placeholder="Personalizado"
+                  value={gapMin === 0 ? '' : gapMin}
+                  onChange={e => setGapMin(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+                />
+              </>
             )}
           </div>
         </div>

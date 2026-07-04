@@ -7,6 +7,17 @@ const HANDLE_RADIUS = 5
 const HIT_TOLERANCE = 6
 const FIB_LEVELS    = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
 
+// Un color distinto por nivel, para diferenciarlos de un vistazo (como en TradingView)
+const FIB_COLORS = {
+  0:     '#787b86',
+  0.236: '#f85149',
+  0.382: '#f97316',
+  0.5:   '#eab308',
+  0.618: '#3fb950',
+  0.786: '#3b82f6',
+  1:     '#7c3aed',
+}
+
 const COLOR_POR_TIPO = { trendline: '#7c3aed', fib: '#f59e0b', ray: '#3b82f6' }
 
 function distanciaASegmento(px, py, x1, y1, x2, y2) {
@@ -109,7 +120,8 @@ class FibonacciPrimitive extends BaseDrawingPrimitive {
       const price = priceA + (priceB - priceA) * level
       const y = this._series.priceToCoordinate(price)
       if (y == null) continue
-      ctx.strokeStyle = this._drawing.color
+      const color = FIB_COLORS[level] ?? this._drawing.color
+      ctx.strokeStyle = color
       ctx.globalAlpha = 0.85
       ctx.lineWidth = level === 0 || level === 1 ? 1.5 : 1
       ctx.beginPath()
@@ -117,7 +129,7 @@ class FibonacciPrimitive extends BaseDrawingPrimitive {
       ctx.lineTo(x2, y)
       ctx.stroke()
       ctx.globalAlpha = 1
-      ctx.fillStyle = this._drawing.color
+      ctx.fillStyle = color
       ctx.fillText(`${(level * 100).toFixed(1)}%  ${price.toFixed(2)}`, x2 + 4, y)
     }
     if (this._drawing.selected) { this._drawHandle(ctx, a.x, a.y); this._drawHandle(ctx, b.x, b.y) }

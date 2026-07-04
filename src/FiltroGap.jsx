@@ -163,6 +163,7 @@ export default function FiltroGap() {
   const [dias,          setDias]          = useState(new Set([1, 2, 3, 4, 5]))
   const [dir,           setDir]           = useState('both')
   const [gapMin,        setGapMin]        = useState(0)
+  const [gapModo,       setGapModo]       = useState('pct') // 'pct' | 'pts'
   const [meses,         setMeses]         = useState(12)
   const [eventosActivos, setEventosActivos] = useState(new Set())
   const [cargando,      setCargando]      = useState(false)
@@ -269,6 +270,7 @@ export default function FiltroGap() {
         dias:   [...dias].sort().join(','),
         dir,
         gapMin,
+        gapModo,
         meses,
         ...(diasEspeciales.size > 0 ? { diasEsp: [...diasEspeciales].join(',') } : {}),
       })
@@ -321,6 +323,7 @@ export default function FiltroGap() {
             dias:    [...dias].sort().join(', '),
             dir,
             gapMin,
+            gapModo,
             periodo: PERIODOS.find(p => p.meses === meses)?.label,
           },
         }),
@@ -494,17 +497,40 @@ export default function FiltroGap() {
           <label className="filtro-label">
             Gap mínimo&nbsp;
             <span className="filtro-valor">
-              {gapMin === 0 ? 'cualquiera' : `≥ ${gapMin}%`}
+              {gapMin === 0 ? 'cualquiera' : `≥ ${gapMin}${gapModo === 'pct' ? '%' : ' pts'}`}
             </span>
           </label>
-          <div className="filtro-gap-sizes">
-            {GAP_SIZES.map(g => (
-              <button
-                key={g}
-                className={`gap-chip ${gapMin === g ? 'activo' : ''}`}
-                onClick={() => setGapMin(g)}
-              >{g === 0 ? 'Todos' : `${g}%`}</button>
-            ))}
+          <div className="gap-modo-row">
+            <select
+              className="gap-modo-select"
+              value={gapModo}
+              onChange={e => { setGapModo(e.target.value); setGapMin(0) }}
+            >
+              <option value="pct">%</option>
+              <option value="pts">Puntos</option>
+            </select>
+            {gapModo === 'pct' ? (
+              <div className="filtro-gap-sizes">
+                {GAP_SIZES.map(g => (
+                  <button
+                    key={g}
+                    className={`gap-chip ${gapMin === g ? 'activo' : ''}`}
+                    onClick={() => setGapMin(g)}
+                  >{g === 0 ? 'Todos' : `${g}%`}</button>
+                ))}
+              </div>
+            ) : (
+              <input
+                type="number"
+                min="0"
+                step="any"
+                inputMode="decimal"
+                className="filtro-input-puntos"
+                placeholder="0 = cualquiera"
+                value={gapMin === 0 ? '' : gapMin}
+                onChange={e => setGapMin(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
+              />
+            )}
           </div>
         </div>
 

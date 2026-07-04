@@ -703,6 +703,34 @@ body {
 .dir-chip:hover { color: var(--text); }
 .dir-chip.activo { background: rgba(124,58,237,0.2); border-color: var(--accent-2); color: var(--accent-2); }
 
+/* modo del gap: % vs. puntos */
+.gap-modo-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.gap-modo-select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  outline: none;
+}
+.gap-modo-select:focus { border-color: var(--accent-2); }
+.filtro-input-puntos {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.3rem 0.6rem;
+  width: 130px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.filtro-input-puntos:focus { border-color: var(--accent-2); }
+
 /* chips gap size */
 .filtro-gap-sizes { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .gap-chip {

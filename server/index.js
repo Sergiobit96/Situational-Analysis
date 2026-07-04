@@ -425,6 +425,7 @@ app.get('/api/gap-filter', async (req, res) => {
     const dias    = req.query.dias ? req.query.dias.split(',').map(Number) : [1,2,3,4,5]
     const dir     = req.query.dir  ?? 'both'
     const gapMin  = parseFloat(req.query.gapMin ?? 0)
+    const gapModo = req.query.gapModo === 'pts' ? 'pts' : 'pct'
     const meses   = Math.min(60, Math.max(1, parseInt(req.query.meses ?? 12, 10)))
     const diasEsp = req.query.diasEsp ? new Set(req.query.diasEsp.split(',')) : null
 
@@ -441,15 +442,17 @@ app.get('/api/gap-filter', async (req, res) => {
       const curr = periodo[i]
       const prev = periodo[i - 1]
 
-      const gapPct    = (curr.open - prev.close) / prev.close * 100
+      const gapPts    = curr.open - prev.close
+      const gapPct    = gapPts / prev.close * 100
       const gapDir    = gapPct >= 0 ? 'up' : 'down'
       const date      = getMadridDate(curr.time)
       const dayOfWeek = getMadridDay(curr.time)
       const eventos   = getEventosEnFecha(evIdx, date)
+      const gapMedido = gapModo === 'pts' ? gapPts : gapPct
 
-      if (!dias.includes(dayOfWeek))         continue
-      if (dir !== 'both' && gapDir !== dir)   continue
-      if (Math.abs(gapPct) < gapMin - 0.001) continue
+      if (!dias.includes(dayOfWeek))            continue
+      if (dir !== 'both' && gapDir !== dir)      continue
+      if (Math.abs(gapMedido) < gapMin - 0.001) continue
 
       sesiones.push({
         date, dayOfWeek,
@@ -538,7 +541,7 @@ app.post('/api/export-ppt', async (req, res) => {
       const resumenFiltros = [
         filtros.dias            && `Días: ${filtros.dias}`,
         filtros.dir              && `Dirección: ${filtros.dir}`,
-        filtros.gapMin != null   && `Gap mínimo: ${filtros.gapMin === 0 ? 'cualquiera' : filtros.gapMin + '%'}`,
+        filtros.gapMin != null   && `Gap mínimo: ${filtros.gapMin === 0 ? 'cualquiera' : filtros.gapMin + (filtros.gapModo === 'pts' ? ' pts' : '%')}`,
         filtros.periodo          && `Periodo: ${filtros.periodo}`,
       ].filter(Boolean).join('   ·   ')
       if (resumenFiltros) portada.addText(resumenFiltros, { x: 0.6, y: 2.3, fontSize: 13, color: 'CBD5E1' })

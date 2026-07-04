@@ -772,6 +772,7 @@ export default function FiltroGap() {
                     ticker={resultado?.ticker ?? ticker}
                     prevClose={seleccion.prevClose}
                     openPrice={seleccion.openPrice}
+                    herramientas
                   />
                   <VelasTabla velas={velas} />
                 </>

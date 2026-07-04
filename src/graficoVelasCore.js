@@ -117,7 +117,7 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   })
 
   chart.timeScale().fitContent()
-  return chart
+  return { chart, serie }
 }
 
 // Renderiza un chart fuera de pantalla (mismo aspecto que el detalle de sesión) y devuelve
@@ -131,7 +131,7 @@ export async function capturarVelasPNG({ velas, ticker, prevClose, openPrice, wi
   document.body.appendChild(container)
 
   try {
-    const chart = crearGrafico(container, { velas, patrones: [], ticker, prevClose, openPrice, width, height })
+    const { chart } = crearGrafico(container, { velas, patrones: [], ticker, prevClose, openPrice, width, height })
     // Esperar dos frames para asegurar que el canvas ha pintado antes de capturarlo
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     const canvas = chart.takeScreenshot()

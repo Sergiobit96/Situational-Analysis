@@ -155,7 +155,30 @@ body {
   border-bottom: 1px solid var(--border);
   letter-spacing: 0.05em;
 }
+.grafico-velas-wrap { width: 100%; }
 .grafico-velas { width: 100%; }
+
+.dibujo-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.4rem;
+}
+.dibujo-btn {
+  min-width: 30px;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.dibujo-btn:hover  { border-color: var(--accent-2); color: var(--accent-2); }
+.dibujo-btn.activo { background: rgba(124,58,237,0.2); border-color: var(--accent); color: var(--accent-2); }
+.dibujo-clear       { margin-left: auto; }
+.dibujo-clear:hover { border-color: var(--red); color: var(--red); }
 
 /* ── Setups ── */
 .setups-titulo {

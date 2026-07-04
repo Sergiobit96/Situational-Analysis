@@ -908,6 +908,25 @@ body {
 .resumen-fuente { color: #60a5fa; }
 .resumen-desde  { color: var(--muted); }
 
+.btn-exportar-ppt {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-exportar-ppt:hover:not(:disabled) { border-color: var(--accent-2); color: var(--accent-2); }
+.btn-exportar-ppt:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── Área de resultados ── */
 .filtro-resultados { }
 

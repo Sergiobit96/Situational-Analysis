@@ -37,3 +37,6 @@ server/.duka-cache/
 __pycache__/
 *.pyc
 *.py[cod]
+
+.vercel
+.env*

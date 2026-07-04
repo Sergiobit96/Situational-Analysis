@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import GraficoVelas from './GraficoVelas'
+import { capturarVelasPNG } from './graficoVelasCore'
 
 // Tickers que Railway maneja via Dukascopy — el resto va a /api/yf-intraday (Vercel)
 const DUKA_TICKERS = new Set(['^GSPC', '^NDX', '^DJI', '^GDAXI', '^FTSE', 'XAUUSD', 'XAGUSD', 'USOIL'])
@@ -183,6 +184,8 @@ export default function FiltroGap() {
   const abortMultiRef = useRef({})
   const [pagina,         setPagina]         = useState(0)
   const [diasEspeciales, setDiasEspeciales] = useState(new Set())
+  const [exportando,     setExportando]     = useState(false)
+  const [exportProgreso, setExportProgreso] = useState(null)  // { done, total }
 
   const toggleDia = n => setDias(prev => {
     const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s
@@ -278,6 +281,66 @@ export default function FiltroGap() {
       setError(e.message)
     } finally {
       setCargando(false)
+    }
+  }
+
+  // Genera el PPT con el gráfico intradía de cada coincidencia (una llamada + un render
+  // por sesión, igual que al hacer clic en una sesión en la lista de resultados).
+  const exportarPPT = async () => {
+    const lista = sesionesVisibles
+    if (lista.length === 0) return
+    const tkr = resultado?.ticker ?? ticker
+    setExportando(true)
+    setError(null)
+    setExportProgreso({ done: 0, total: lista.length })
+    try {
+      const sesionesConGrafico = []
+      for (const s of lista) {
+        let imagen = null
+        try {
+          const r = await fetch(intradayUrl(tkr, s.date, timeframe))
+          const d = await r.json()
+          if (d.velas?.length) {
+            imagen = await capturarVelasPNG({
+              velas: d.velas, ticker: tkr, prevClose: s.prevClose, openPrice: s.openPrice,
+            })
+          }
+        } catch { /* sin gráfico para esta sesión, se marcará como "sin datos" en el PPT */ }
+        sesionesConGrafico.push({ ...s, imagen })
+        setExportProgreso(prev => ({ done: prev.done + 1, total: prev.total }))
+      }
+      setExportProgreso(null)
+
+      const resp = await fetch('/api/export-ppt', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker:   tkr,
+          sesiones: sesionesConGrafico,
+          filtros: {
+            dias:    [...dias].sort().join(', '),
+            dir,
+            gapMin,
+            periodo: PERIODOS.find(p => p.meses === meses)?.label,
+          },
+        }),
+      })
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}))
+        throw new Error(data.error ?? 'Error generando la presentación')
+      }
+      const blob = await resp.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `situational-analysis-${tkr}.pptx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setExportando(false)
+      setExportProgreso(null)
     }
   }
 
@@ -561,6 +624,20 @@ export default function FiltroGap() {
             {resultado.fuente      && <span className="resumen-fuente"> · {resultado.fuente}</span>}
             {resultado.fechaInicio && <span className="resumen-desde"> · desde {resultado.fechaInicio}</span>}
           </div>
+        )}
+
+        {resultado && sesionesVisibles.length > 0 && (
+          <button
+            className="btn-exportar-ppt"
+            onClick={exportarPPT}
+            disabled={exportando}
+          >
+            {exportando
+              ? <><span className="spinner" /> {exportProgreso
+                    ? `Generando gráficos… ${exportProgreso.done}/${exportProgreso.total}`
+                    : 'Generando PPT…'}</>
+              : `📊  Exportar ${sesionesVisibles.length} gráficos a PPT`}
+          </button>
         )}
       </div>
 

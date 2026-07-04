@@ -17,6 +17,7 @@ const SCRIPTS = [
   { id: 'historial', label: 'Historial Total' },
   { id: 'charts',    label: 'Chart Capture' },
   { id: 'collage',   label: 'Collage' },
+  { id: 'separador', label: 'Separador Gráficos' },
 ]
 
 export default function Pipeline() {
@@ -93,7 +94,7 @@ export default function Pipeline() {
       {/* Parámetros */}
       <div className="pipeline-params">
         <div className="param-group">
-          <label className="param-label">Mes (Collage)</label>
+          <label className="param-label">Mes (Collage / Separador)</label>
           <select
             className="param-select"
             value={month}

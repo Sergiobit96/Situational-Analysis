@@ -435,12 +435,15 @@ app.get('/api/ultima-cotizacion', async (req, res) => {
 
     const ultima   = diarias[diarias.length - 1]
     const anterior = diarias[diarias.length - 2]
-    const changePct = anterior ? (ultima.close - anterior.close) / anterior.close * 100 : null
+    const changePts = anterior ? ultima.close - anterior.close : null
+    const changePct = anterior ? changePts / anterior.close * 100 : null
 
     res.json({
       ticker,
       price:     ultima.close,
       date:      getMadridDate(ultima.time),
+      prevClose: anterior ? anterior.close : null,
+      changePts: changePts != null ? parseFloat(changePts.toFixed(3)) : null,
       changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
     })
   } catch (err) {

@@ -1205,7 +1205,15 @@ export default function FiltroGap() {
                 {cotizacion.changePct != null && (
                   <span className={`ultima-cotizacion-var ${cotizacion.changePct >= 0 ? 'verde' : 'rojo'}`}>
                     {cotizacion.changePct > 0 ? '+' : ''}{cotizacion.changePct.toFixed(2)}%
+                    {cotizacion.changePts != null && (
+                      <span className="ultima-cotizacion-pts">
+                        {' '}({cotizacion.changePts > 0 ? '+' : ''}{cotizacion.changePts.toFixed(2)})
+                      </span>
+                    )}
                   </span>
+                )}
+                {cotizacion.prevClose != null && (
+                  <span className="ultima-cotizacion-prev">Ant. {cotizacion.prevClose.toFixed(2)}</span>
                 )}
               </div>
             )}

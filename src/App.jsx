@@ -20,7 +20,6 @@ export default function App() {
       <header className="app-header">
         <div className="header-top">
           <h1>Situational Analysis</h1>
-          <p className="subtitulo">Gap Filter · DAX · FTSE · S&amp;P · Nasdaq · DJ · Oro · Plata · Petróleo</p>
         </div>
         <QuoteBar />
         <nav className="tab-nav">

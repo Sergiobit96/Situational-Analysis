@@ -33,7 +33,6 @@ body {
 /* ── Header ── */
 .app-header { margin-bottom: 1.5rem; }
 .app-header h1 { font-size: 1.8rem; font-weight: 800; }
-.subtitulo { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
 
 /* ── Navegación de pestañas ── */
 .tab-nav {
@@ -1695,7 +1694,6 @@ body {
 
   /* Header */
   .app-header h1 { font-size: 1.3rem; }
-  .subtitulo { font-size: 0.78rem; }
 
   /* Tabs */
   .tab-nav {

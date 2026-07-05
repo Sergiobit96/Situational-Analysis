@@ -47,7 +47,6 @@ const EVENTOS_DEF = [
   { id: 'PPI',  label: 'PPI',   title: 'Producer Price Index US' },
   { id: 'GDP',  label: 'GDP',   title: 'Gross Domestic Product' },
   { id: 'PMI',  label: 'PMI',   title: 'Purchasing Managers Index' },
-  { id: 'FESTIVO', label: 'Festivo+1', title: 'Día siguiente a un festivo de mercado (se saltó al menos un día hábil)' },
 ]
 
 const PERIODOS = [
@@ -980,7 +979,8 @@ export default function FiltroGap() {
         (diasEspeciales.has('primerMes')  && fechasEspeciales.primerMes.has(s.date))  ||
         (diasEspeciales.has('ultimoMes')  && fechasEspeciales.ultimoMes.has(s.date))  ||
         (diasEspeciales.has('primerTrim') && fechasEspeciales.primerTrim.has(s.date)) ||
-        (diasEspeciales.has('ultimoTrim') && fechasEspeciales.ultimoTrim.has(s.date))
+        (diasEspeciales.has('ultimoTrim') && fechasEspeciales.ultimoTrim.has(s.date)) ||
+        (diasEspeciales.has('festivo')    && s.eventos?.includes('FESTIVO'))
       )
     return all
   })()
@@ -1405,6 +1405,7 @@ export default function FiltroGap() {
             {[
               { id: 'primerMes',  label: '1º mes',       title: 'Primer día de negociación del mes' },
               { id: 'ultimoMes',  label: 'Último mes',   title: 'Último día de negociación del mes' },
+              { id: 'festivo',    label: 'Festivo+1',    title: 'Día siguiente a un festivo de mercado (se saltó al menos un día hábil)' },
               { id: 'primerTrim', label: '1º trim.',      title: 'Primer día de negociación del trimestre (ene/abr/jul/oct)' },
               { id: 'ultimoTrim', label: 'Último trim.', title: 'Último día de negociación del trimestre (mar/jun/sep/dic)' },
             ].map(d => (

@@ -571,7 +571,8 @@ app.get('/api/gap-filter', async (req, res) => {
         (diasEsp.has('primerMes')  && primerMes.has(s.date))  ||
         (diasEsp.has('ultimoMes')  && ultimoMes.has(s.date))  ||
         (diasEsp.has('primerTrim') && primerTrim.has(s.date)) ||
-        (diasEsp.has('ultimoTrim') && ultimoTrim.has(s.date))
+        (diasEsp.has('ultimoTrim') && ultimoTrim.has(s.date)) ||
+        (diasEsp.has('festivo')   && s.eventos.includes('FESTIVO'))
       )
     }
 

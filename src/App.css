@@ -643,6 +643,20 @@ body {
   letter-spacing: 0.04em;
   margin-bottom: 0.5rem;
 }
+.acciones-buscador {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  margin-bottom: 0.4rem;
+  transition: border-color 0.15s;
+}
+.acciones-buscador:focus { border-color: var(--accent-2); }
+
 .acciones-select {
   width: 100%;
   background: var(--surface);
@@ -657,6 +671,7 @@ body {
   transition: border-color 0.15s;
 }
 .acciones-select:focus { border-color: var(--accent-2); }
+.acciones-select:disabled { opacity: 0.5; cursor: default; }
 
 /* chips días */
 .filtro-dias { display: flex; gap: 0.4rem; }

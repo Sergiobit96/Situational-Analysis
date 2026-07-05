@@ -68,38 +68,148 @@ const PRESETS = [
 
 const STOCKS = {
   '^GDAXI': [
-    { name: 'SAP',            ticker: 'SAP.DE'   },
-    { name: 'Siemens',        ticker: 'SIE.DE'   },
-    { name: 'Allianz',        ticker: 'ALV.DE'   },
-    { name: 'Mercedes-Benz',  ticker: 'MBG.DE'   },
-    { name: 'BMW',            ticker: 'BMW.DE'   },
+    { name: 'Adidas', ticker: 'ADS.DE' },
+    { name: 'Airbus', ticker: 'AIR.PA' },
+    { name: 'Allianz', ticker: 'ALV.DE' },
+    { name: 'BASF', ticker: 'BAS.DE' },
+    { name: 'Bayer', ticker: 'BAYN.DE' },
+    { name: 'Beiersdorf', ticker: 'BEI.DE' },
+    { name: 'BMW', ticker: 'BMW.DE' },
+    { name: 'Brenntag', ticker: 'BNR.DE' },
+    { name: 'Commerzbank', ticker: 'CBK.DE' },
+    { name: 'Continental', ticker: 'CON.DE' },
+    { name: 'Daimler Truck', ticker: 'DTG.DE' },
+    { name: 'Deutsche Bank', ticker: 'DBK.DE' },
+    { name: 'Deutsche Börse', ticker: 'DB1.DE' },
+    { name: 'Deutsche Post', ticker: 'DHL.DE' },
     { name: 'Deutsche Telekom', ticker: 'DTE.DE' },
-    { name: 'Volkswagen',     ticker: 'VOW3.DE'  },
-    { name: 'Bayer',          ticker: 'BAYN.DE'  },
-    { name: 'BASF',           ticker: 'BAS.DE'   },
-    { name: 'Munich Re',      ticker: 'MUV2.DE'  },
-    { name: 'Rheinmetall',    ticker: 'RHM.DE'   },
-    { name: 'Airbus',         ticker: 'AIR.PA'   },
-    { name: 'Infineon',       ticker: 'IFX.DE'   },
-    { name: 'Adidas',         ticker: 'ADS.DE'   },
-    { name: 'Deutsche Bank',  ticker: 'DBK.DE'   },
+    { name: 'E.ON', ticker: 'EOAN.DE' },
+    { name: 'Fresenius', ticker: 'FRE.DE' },
+    { name: 'Fresenius Medical Care', ticker: 'FME.DE' },
+    { name: 'GEA Group', ticker: 'G1A.DE' },
+    { name: 'Hannover Re', ticker: 'HNR1.DE' },
+    { name: 'Heidelberg Materials', ticker: 'HEI.DE' },
+    { name: 'Henkel', ticker: 'HEN3.DE' },
+    { name: 'Infineon Technologies', ticker: 'IFX.DE' },
+    { name: 'Mercedes-Benz Group', ticker: 'MBG.DE' },
+    { name: 'Merck', ticker: 'MRK.DE' },
+    { name: 'MTU Aero Engines', ticker: 'MTX.DE' },
+    { name: 'Munich Re', ticker: 'MUV2.DE' },
+    { name: 'Porsche SE', ticker: 'PAH3.DE' },
+    { name: 'Qiagen', ticker: 'QIA.DE' },
+    { name: 'Rheinmetall', ticker: 'RHM.DE' },
+    { name: 'RWE', ticker: 'RWE.DE' },
+    { name: 'SAP', ticker: 'SAP.DE' },
+    { name: 'Scout24', ticker: 'G24.DE' },
+    { name: 'Siemens', ticker: 'SIE.DE' },
+    { name: 'Siemens Energy', ticker: 'ENR.DE' },
+    { name: 'Siemens Healthineers', ticker: 'SHL.DE' },
+    { name: 'Symrise', ticker: 'SY1.DE' },
+    { name: 'Volkswagen Group', ticker: 'VOW3.DE' },
+    { name: 'Vonovia', ticker: 'VNA.DE' },
+    { name: 'Zalando', ticker: 'ZAL.DE' },
   ],
   '^FTSE': [
-    { name: 'AstraZeneca',    ticker: 'AZN.L'    },
-    { name: 'Shell',          ticker: 'SHEL.L'   },
-    { name: 'HSBC',           ticker: 'HSBA.L'   },
-    { name: 'Unilever',       ticker: 'ULVR.L'   },
-    { name: 'Rio Tinto',      ticker: 'RIO.L'    },
-    { name: 'BP',             ticker: 'BP.L'     },
-    { name: 'GSK',            ticker: 'GSK.L'    },
-    { name: 'Diageo',         ticker: 'DGE.L'    },
-    { name: 'Rolls-Royce',    ticker: 'RR.L'     },
-    { name: 'BAE Systems',    ticker: 'BA.L'     },
-    { name: 'Barclays',       ticker: 'BARC.L'   },
-    { name: 'Lloyds',         ticker: 'LLOY.L'   },
-    { name: 'National Grid',  ticker: 'NG.L'     },
-    { name: 'Vodafone',       ticker: 'VOD.L'    },
-    { name: 'BT Group',       ticker: 'BT-A.L'   },
+    { name: '3i', ticker: 'III.L' },
+    { name: 'Aberdeen Group', ticker: 'ABDN.L' },
+    { name: 'Admiral Group', ticker: 'ADM.L' },
+    { name: 'Airtel Africa', ticker: 'AAF.L' },
+    { name: 'Alliance Witan', ticker: 'ALW.L' },
+    { name: 'Anglo American', ticker: 'AAL.L' },
+    { name: 'Antofagasta', ticker: 'ANTO.L' },
+    { name: 'Associated British Foods', ticker: 'ABF.L' },
+    { name: 'AstraZeneca', ticker: 'AZN.L' },
+    { name: 'Autotrader Group', ticker: 'AUTO.L' },
+    { name: 'Aviva', ticker: 'AV.L' },
+    { name: 'Babcock International', ticker: 'BAB.L' },
+    { name: 'BAE Systems', ticker: 'BA.L' },
+    { name: 'Barclays', ticker: 'BARC.L' },
+    { name: 'Barratt Redrow', ticker: 'BTRW.L' },
+    { name: 'Beazley', ticker: 'BEZ.L' },
+    { name: 'BP', ticker: 'BP.L' },
+    { name: 'British American Tobacco', ticker: 'BATS.L' },
+    { name: 'British Land', ticker: 'BLND.L' },
+    { name: 'BT Group', ticker: 'BT-A.L' },
+    { name: 'Bunzl', ticker: 'BNZL.L' },
+    { name: 'Burberry Group', ticker: 'BRBY.L' },
+    { name: 'Centrica', ticker: 'CNA.L' },
+    { name: 'Coca-Cola Europacific Partners', ticker: 'CCEP.L' },
+    { name: 'Coca-Cola HBC', ticker: 'CCH.L' },
+    { name: 'Compass Group', ticker: 'CPG.L' },
+    { name: 'Computacenter', ticker: 'CCC.L' },
+    { name: 'Convatec', ticker: 'CTEC.L' },
+    { name: 'Croda International', ticker: 'CRDA.L' },
+    { name: 'DCC', ticker: 'DCC.L' },
+    { name: 'Diageo', ticker: 'DGE.L' },
+    { name: 'Diploma', ticker: 'DPLM.L' },
+    { name: 'Endeavour Mining', ticker: 'EDV.L' },
+    { name: 'Entain', ticker: 'ENT.L' },
+    { name: 'Experian', ticker: 'EXPN.L' },
+    { name: 'F & C Investment Trust', ticker: 'FCIT.L' },
+    { name: 'Fresnillo', ticker: 'FRES.L' },
+    { name: 'Games Workshop', ticker: 'GAW.L' },
+    { name: 'Glencore', ticker: 'GLEN.L' },
+    { name: 'GSK', ticker: 'GSK.L' },
+    { name: 'Haleon', ticker: 'HLN.L' },
+    { name: 'Halma', ticker: 'HLMA.L' },
+    { name: 'Hiscox', ticker: 'HSX.L' },
+    { name: 'Howdens Joinery', ticker: 'HWDN.L' },
+    { name: 'HSBC', ticker: 'HSBA.L' },
+    { name: 'ICG', ticker: 'ICG.L' },
+    { name: 'IG Group', ticker: 'IGG.L' },
+    { name: 'IHG Hotels & Resorts', ticker: 'IHG.L' },
+    { name: 'IMI', ticker: 'IMI.L' },
+    { name: 'Imperial Brands', ticker: 'IMB.L' },
+    { name: 'Informa', ticker: 'INF.L' },
+    { name: 'International Airlines Group', ticker: 'IAG.L' },
+    { name: 'Intertek', ticker: 'ITRK.L' },
+    { name: 'Investec', ticker: 'INVP.L' },
+    { name: 'JD Sports', ticker: 'JD.L' },
+    { name: 'Lion Finance Group', ticker: 'BGEO.L' },
+    { name: 'Kingfisher', ticker: 'KGF.L' },
+    { name: 'Land Securities', ticker: 'LAND.L' },
+    { name: 'Legal & General', ticker: 'LGEN.L' },
+    { name: 'Lloyds Banking Group', ticker: 'LLOY.L' },
+    { name: 'LondonMetric Property', ticker: 'LMP.L' },
+    { name: 'London Stock Exchange Group', ticker: 'LSEG.L' },
+    { name: 'M&G', ticker: 'MNG.L' },
+    { name: 'Marks & Spencer', ticker: 'MKS.L' },
+    { name: 'Melrose Industries', ticker: 'MRO.L' },
+    { name: 'Metlen Energy & Metals', ticker: 'MTLN.L' },
+    { name: 'National Grid', ticker: 'NG.L' },
+    { name: 'NatWest Group', ticker: 'NWG.L' },
+    { name: 'Next', ticker: 'NXT.L' },
+    { name: 'Pearson', ticker: 'PSON.L' },
+    { name: 'Pershing Square Holdings', ticker: 'PSH.L' },
+    { name: 'Persimmon', ticker: 'PSN.L' },
+    { name: 'Polar Capital Technology Trust', ticker: 'PCT.L' },
+    { name: 'Prudential', ticker: 'PRU.L' },
+    { name: 'Reckitt', ticker: 'RKT.L' },
+    { name: 'RELX', ticker: 'REL.L' },
+    { name: 'Rentokil Initial', ticker: 'RTO.L' },
+    { name: 'Rio Tinto', ticker: 'RIO.L' },
+    { name: 'Rolls-Royce Holdings', ticker: 'RR.L' },
+    { name: 'Sage Group', ticker: 'SGE.L' },
+    { name: "Sainsbury's", ticker: 'SBRY.L' },
+    { name: 'Schroders', ticker: 'SDR.L' },
+    { name: 'Scottish Mortgage Investment Trust', ticker: 'SMT.L' },
+    { name: 'Segro', ticker: 'SGRO.L' },
+    { name: 'Severn Trent', ticker: 'SVT.L' },
+    { name: 'Shell', ticker: 'SHEL.L' },
+    { name: 'Smiths Group', ticker: 'SMIN.L' },
+    { name: 'Smith & Nephew', ticker: 'SN.L' },
+    { name: 'Spirax Group', ticker: 'SPX.L' },
+    { name: 'SSE', ticker: 'SSE.L' },
+    { name: 'Standard Chartered', ticker: 'STAN.L' },
+    { name: 'Standard Life', ticker: 'SDLF.L' },
+    { name: "St. James's Place", ticker: 'STJ.L' },
+    { name: 'Tesco', ticker: 'TSCO.L' },
+    { name: 'Tritax Big Box REIT', ticker: 'BBOX.L' },
+    { name: 'Unilever', ticker: 'ULVR.L' },
+    { name: 'United Utilities', ticker: 'UU.L' },
+    { name: 'Vodafone Group', ticker: 'VOD.L' },
+    { name: 'Weir Group', ticker: 'WEIR.L' },
+    { name: 'Whitbread', ticker: 'WTB.L' },
   ],
   '^GSPC': [
     { name: '3M', ticker: 'MMM' },
@@ -607,21 +717,107 @@ const STOCKS = {
     { name: 'Zoetis', ticker: 'ZTS' },
   ],
   '^NDX': [
-    { name: 'Apple',          ticker: 'AAPL'     },
-    { name: 'Microsoft',      ticker: 'MSFT'     },
-    { name: 'NVIDIA',         ticker: 'NVDA'     },
-    { name: 'Amazon',         ticker: 'AMZN'     },
-    { name: 'Meta',           ticker: 'META'     },
-    { name: 'Alphabet',       ticker: 'GOOGL'    },
-    { name: 'Tesla',          ticker: 'TSLA'     },
-    { name: 'Broadcom',       ticker: 'AVGO'     },
-    { name: 'Netflix',        ticker: 'NFLX'     },
-    { name: 'Adobe',          ticker: 'ADBE'     },
-    { name: 'AMD',            ticker: 'AMD'      },
-    { name: 'Qualcomm',       ticker: 'QCOM'     },
-    { name: 'Intel',          ticker: 'INTC'     },
-    { name: 'Applied Mat.',   ticker: 'AMAT'     },
-    { name: 'Micron',         ticker: 'MU'       },
+    { name: 'Adobe', ticker: 'ADBE' },
+    { name: 'Advanced Micro Devices', ticker: 'AMD' },
+    { name: 'Airbnb', ticker: 'ABNB' },
+    { name: 'Alnylam Pharmaceuticals', ticker: 'ALNY' },
+    { name: 'Alphabet (Class A)', ticker: 'GOOGL' },
+    { name: 'Alphabet (Class C)', ticker: 'GOOG' },
+    { name: 'Amazon', ticker: 'AMZN' },
+    { name: 'American Electric Power', ticker: 'AEP' },
+    { name: 'Amgen', ticker: 'AMGN' },
+    { name: 'Analog Devices', ticker: 'ADI' },
+    { name: 'Apple', ticker: 'AAPL' },
+    { name: 'Applied Materials', ticker: 'AMAT' },
+    { name: 'AppLovin', ticker: 'APP' },
+    { name: 'Arm Holdings', ticker: 'ARM' },
+    { name: 'ASML Holding', ticker: 'ASML' },
+    { name: 'Astera Labs', ticker: 'ALAB' },
+    { name: 'Autodesk', ticker: 'ADSK' },
+    { name: 'Automatic Data Processing', ticker: 'ADP' },
+    { name: 'Axon Enterprise', ticker: 'AXON' },
+    { name: 'Baker Hughes', ticker: 'BKR' },
+    { name: 'Booking Holdings', ticker: 'BKNG' },
+    { name: 'Broadcom', ticker: 'AVGO' },
+    { name: 'Cadence Design Systems', ticker: 'CDNS' },
+    { name: 'Cintas', ticker: 'CTAS' },
+    { name: 'Cisco', ticker: 'CSCO' },
+    { name: 'Coca-Cola Europacific Partners', ticker: 'CCEP' },
+    { name: 'Comcast', ticker: 'CMCSA' },
+    { name: 'Constellation Energy', ticker: 'CEG' },
+    { name: 'Copart', ticker: 'CPRT' },
+    { name: 'CoreWeave', ticker: 'CRWV' },
+    { name: 'Costco', ticker: 'COST' },
+    { name: 'CrowdStrike', ticker: 'CRWD' },
+    { name: 'CSX', ticker: 'CSX' },
+    { name: 'Datadog', ticker: 'DDOG' },
+    { name: 'DexCom', ticker: 'DXCM' },
+    { name: 'Diamondback Energy', ticker: 'FANG' },
+    { name: 'DoorDash', ticker: 'DASH' },
+    { name: 'Electronic Arts', ticker: 'EA' },
+    { name: 'Exelon', ticker: 'EXC' },
+    { name: 'Fastenal', ticker: 'FAST' },
+    { name: 'Ferrovial', ticker: 'FER' },
+    { name: 'Fortinet', ticker: 'FTNT' },
+    { name: 'GE HealthCare', ticker: 'GEHC' },
+    { name: 'Gilead Sciences', ticker: 'GILD' },
+    { name: 'Honeywell Technologies', ticker: 'HON' },
+    { name: 'Idexx Laboratories', ticker: 'IDXX' },
+    { name: 'Intel', ticker: 'INTC' },
+    { name: 'Intuit', ticker: 'INTU' },
+    { name: 'Intuitive Surgical', ticker: 'ISRG' },
+    { name: 'Keurig Dr Pepper', ticker: 'KDP' },
+    { name: 'KLA', ticker: 'KLAC' },
+    { name: 'Kraft Heinz', ticker: 'KHC' },
+    { name: 'Lam Research', ticker: 'LRCX' },
+    { name: 'Linde plc', ticker: 'LIN' },
+    { name: 'Lumentum', ticker: 'LITE' },
+    { name: 'Marriott International', ticker: 'MAR' },
+    { name: 'Marvell Technology', ticker: 'MRVL' },
+    { name: 'Mercado Libre', ticker: 'MELI' },
+    { name: 'Meta Platforms', ticker: 'META' },
+    { name: 'Microchip Technology', ticker: 'MCHP' },
+    { name: 'Micron Technology', ticker: 'MU' },
+    { name: 'Microsoft', ticker: 'MSFT' },
+    { name: 'MicroStrategy', ticker: 'MSTR' },
+    { name: 'Mondelez International', ticker: 'MDLZ' },
+    { name: 'Monolithic Power Systems', ticker: 'MPWR' },
+    { name: 'Monster Beverage', ticker: 'MNST' },
+    { name: 'Nebius Group', ticker: 'NBIS' },
+    { name: 'Netflix', ticker: 'NFLX' },
+    { name: 'Nvidia', ticker: 'NVDA' },
+    { name: 'NXP Semiconductors', ticker: 'NXPI' },
+    { name: "O'Reilly Automotive", ticker: 'ORLY' },
+    { name: 'Old Dominion Freight Line', ticker: 'ODFL' },
+    { name: 'Paccar', ticker: 'PCAR' },
+    { name: 'Palantir Technologies', ticker: 'PLTR' },
+    { name: 'Palo Alto Networks', ticker: 'PANW' },
+    { name: 'Paychex', ticker: 'PAYX' },
+    { name: 'PayPal', ticker: 'PYPL' },
+    { name: 'PDD Holdings', ticker: 'PDD' },
+    { name: 'PepsiCo', ticker: 'PEP' },
+    { name: 'Qualcomm', ticker: 'QCOM' },
+    { name: 'Regeneron Pharmaceuticals', ticker: 'REGN' },
+    { name: 'Rocket Lab', ticker: 'RKLB' },
+    { name: 'Roper Technologies', ticker: 'ROP' },
+    { name: 'Ross Stores', ticker: 'ROST' },
+    { name: 'Sandisk', ticker: 'SNDK' },
+    { name: 'Seagate Technology', ticker: 'STX' },
+    { name: 'Shopify', ticker: 'SHOP' },
+    { name: 'Starbucks', ticker: 'SBUX' },
+    { name: 'Synopsys', ticker: 'SNPS' },
+    { name: 'T-Mobile US', ticker: 'TMUS' },
+    { name: 'Take-Two Interactive', ticker: 'TTWO' },
+    { name: 'Teradyne', ticker: 'TER' },
+    { name: 'Tesla', ticker: 'TSLA' },
+    { name: 'Texas Instruments', ticker: 'TXN' },
+    { name: 'Thomson Reuters', ticker: 'TRI' },
+    { name: 'Vertex Pharmaceuticals', ticker: 'VRTX' },
+    { name: 'Walmart', ticker: 'WMT' },
+    { name: 'Warner Bros. Discovery', ticker: 'WBD' },
+    { name: 'Western Digital', ticker: 'WDC' },
+    { name: 'Workday', ticker: 'WDAY' },
+    { name: 'Xcel Energy', ticker: 'XEL' },
   ],
   '^DJI': [
     { name: 'UnitedHealth',   ticker: 'UNH'      },
@@ -682,6 +878,7 @@ export default function FiltroGap() {
 
   // ── Modo multi-instrumento (fecha concreta) ──
   const [indiceAcciones, setIndiceAcciones] = useState(null)
+  const [busquedaAccion, setBusquedaAccion] = useState('')
   const [instrManual, setInstrManual] = useState(new Set())
   const [velasMulti,  setVelasMulti]  = useState({})   // { ticker: {velas,fuente,loading} }
   const [fechaMulti,  setFechaMulti]  = useState(null)
@@ -936,30 +1133,51 @@ export default function FiltroGap() {
                 onClick={() => {
                   setTicker(p.value)
                   setIndiceAcciones(STOCKS[p.value] ? p.value : null)
+                  setBusquedaAccion('')
                 }}
               >{p.label}</button>
             ))}
           </div>
 
           {/* ── Acciones del índice seleccionado ── */}
-          {indiceAcciones && STOCKS[indiceAcciones] && (
-            <div className="acciones-panel">
-              <div className="acciones-header">
-                <span>Acciones · {PRESETS.find(p => p.value === indiceAcciones)?.label}</span>
-                <button className="clear-eventos" onClick={() => setIndiceAcciones(null)}>× cerrar</button>
+          {indiceAcciones && STOCKS[indiceAcciones] && (() => {
+            const q = busquedaAccion.trim().toLowerCase()
+            const acciones = STOCKS[indiceAcciones]
+            const filtradas = q
+              ? acciones.filter(s => s.name.toLowerCase().includes(q) || s.ticker.toLowerCase().includes(q))
+              : acciones
+            return (
+              <div className="acciones-panel">
+                <div className="acciones-header">
+                  <span>Acciones · {PRESETS.find(p => p.value === indiceAcciones)?.label}</span>
+                  <button
+                    className="clear-eventos"
+                    onClick={() => { setIndiceAcciones(null); setBusquedaAccion('') }}
+                  >× cerrar</button>
+                </div>
+                <input
+                  type="text"
+                  className="acciones-buscador"
+                  placeholder="Buscar empresa o ticker…"
+                  value={busquedaAccion}
+                  onChange={e => setBusquedaAccion(e.target.value)}
+                />
+                <select
+                  className="acciones-select"
+                  value={filtradas.some(s => s.ticker === ticker) ? ticker : ''}
+                  onChange={e => setTicker(e.target.value)}
+                  disabled={filtradas.length === 0}
+                >
+                  <option value="" disabled>
+                    {filtradas.length === 0 ? 'Sin resultados' : `Elegir acción… (${filtradas.length})`}
+                  </option>
+                  {filtradas.map(s => (
+                    <option key={s.ticker} value={s.ticker}>{s.name} · {s.ticker}</option>
+                  ))}
+                </select>
               </div>
-              <select
-                className="acciones-select"
-                value={STOCKS[indiceAcciones].some(s => s.ticker === ticker) ? ticker : ''}
-                onChange={e => setTicker(e.target.value)}
-              >
-                <option value="" disabled>Elegir acción… ({STOCKS[indiceAcciones].length})</option>
-                {STOCKS[indiceAcciones].map(s => (
-                  <option key={s.ticker} value={s.ticker}>{s.name} · {s.ticker}</option>
-                ))}
-              </select>
-            </div>
-          )}
+            )
+          })()}
         </div>
 
         <div className="filtro-group">

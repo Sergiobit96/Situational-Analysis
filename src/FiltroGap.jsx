@@ -907,6 +907,8 @@ export default function FiltroGap() {
   const [cargandoVelas, setCargandoVelas] = useState(false)
   const [timeframe,     setTimeframe]     = useState('m15')
   const [fechaManual,   setFechaManual]   = useState('')
+  const [cotizacion,        setCotizacion]        = useState(null)
+  const [cargandoCotizacion, setCargandoCotizacion] = useState(false)
   const abortVelasRef = useRef(null)
 
   // ── Modo multi-instrumento (fecha concreta) ──
@@ -1163,6 +1165,23 @@ export default function FiltroGap() {
     return () => controller.abort()
   }, [seleccion, timeframe])
 
+  // Última cotización del ticker escrito/seleccionado, junto al buscador de instrumento
+  // (debounced para no disparar una petición por cada letra tecleada)
+  useEffect(() => {
+    const tkr = ticker.trim()
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      if (!tkr) { setCotizacion(null); return }
+      setCargandoCotizacion(true)
+      fetch(`/api/ultima-cotizacion?ticker=${encodeURIComponent(tkr)}`, { signal: controller.signal })
+        .then(r => r.json())
+        .then(d => { if (!controller.signal.aborted) setCotizacion(d.error ? null : d) })
+        .catch(e => { if (e.name !== 'AbortError') setCotizacion(null) })
+        .finally(() => { if (!controller.signal.aborted) setCargandoCotizacion(false) })
+    }, 500)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [ticker])
+
   return (
     <div className="filtro-page">
 
@@ -1179,6 +1198,17 @@ export default function FiltroGap() {
               onKeyDown={e => e.key === 'Enter' && buscar()}
               placeholder="^GDAXI, ^GSPC…"
             />
+            {cargandoCotizacion && <span className="spinner" />}
+            {!cargandoCotizacion && cotizacion && (
+              <div className="ultima-cotizacion" title={`Cierre ${cotizacion.date}`}>
+                <span className="ultima-cotizacion-precio">{cotizacion.price.toFixed(2)}</span>
+                {cotizacion.changePct != null && (
+                  <span className={`ultima-cotizacion-var ${cotizacion.changePct >= 0 ? 'verde' : 'rojo'}`}>
+                    {cotizacion.changePct > 0 ? '+' : ''}{cotizacion.changePct.toFixed(2)}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <div className="filtro-presets">
             {PRESETS.map(p => (

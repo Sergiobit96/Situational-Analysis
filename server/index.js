@@ -424,6 +424,31 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
   return velas
 }
 
+// ── Última cotización de un ticker (para mostrar junto al buscador) ──────
+app.get('/api/ultima-cotizacion', async (req, res) => {
+  try {
+    const ticker = req.query.ticker?.trim()
+    if (!ticker) return res.status(400).json({ error: 'ticker requerido' })
+
+    const diarias = await obtenerVelasDiarias(ticker)
+    if (diarias.length === 0) return res.status(404).json({ error: 'Sin datos' })
+
+    const ultima   = diarias[diarias.length - 1]
+    const anterior = diarias[diarias.length - 2]
+    const changePct = anterior ? (ultima.close - anterior.close) / anterior.close * 100 : null
+
+    res.json({
+      ticker,
+      price:     ultima.close,
+      date:      getMadridDate(ultima.time),
+      changePct: changePct != null ? parseFloat(changePct.toFixed(3)) : null,
+    })
+  } catch (err) {
+    console.error('[ultima-cotizacion]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Gap Filter ─────────────────────────────────────────────────────────────
 app.get('/api/gap-filter', async (req, res) => {
   try {

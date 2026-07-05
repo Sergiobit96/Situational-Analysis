@@ -589,8 +589,23 @@ body {
 
 .filtro-ticker-row {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
 }
+
+.ultima-cotizacion {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0.45rem 0.75rem;
+}
+.ultima-cotizacion-precio { font-size: 0.95rem; font-weight: 700; }
+.ultima-cotizacion-var { font-size: 0.8rem; font-weight: 600; }
+.ultima-cotizacion-var.verde { color: var(--green); }
+.ultima-cotizacion-var.rojo  { color: var(--red); }
 
 .filtro-input {
   background: var(--surface-2);

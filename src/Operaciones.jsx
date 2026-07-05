@@ -11,6 +11,20 @@ export default function Operaciones() {
   const [dragging, setDragging] = useState(false)
   const [error,    setError]    = useState(null)
   const [pagina,   setPagina]   = useState(0)
+  const [productosActivos, setProductosActivos] = useState(new Set())
+  const [fechaDesde, setFechaDesde] = useState('')
+  const [fechaHasta, setFechaHasta] = useState('')
+
+  const toggleProducto = p => {
+    setProductosActivos(prev => {
+      const s = new Set(prev); s.has(p) ? s.delete(p) : s.add(p); return s
+    })
+    setPagina(0)
+  }
+
+  const cambiarFechaDesde = v => { setFechaDesde(v); setPagina(0) }
+  const cambiarFechaHasta = v => { setFechaHasta(v); setPagina(0) }
+  const limpiarFiltros = () => { setProductosActivos(new Set()); setFechaDesde(''); setFechaHasta(''); setPagina(0) }
 
   const procesar = useCallback(async file => {
     try {
@@ -51,9 +65,25 @@ export default function Operaciones() {
     }
   }, [trades])
 
-  const ordenadas    = useMemo(() => [...trades].reverse(), [trades])
-  const totalPaginas = Math.max(1, Math.ceil(ordenadas.length / PAGE_SIZE))
-  const enPagina      = ordenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
+  // Lista de productos presentes en el archivo cargado, para los chips de filtro
+  const productosDisponibles = useMemo(
+    () => [...new Set(trades.map(t => t.producto))].sort(),
+    [trades]
+  )
+
+  const hayFiltros = productosActivos.size > 0 || fechaDesde || fechaHasta
+
+  const filtradas = useMemo(() => trades.filter(t => {
+    if (productosActivos.size > 0 && !productosActivos.has(t.producto)) return false
+    const fecha = fmtFechaTS(t.openTime)
+    if (fechaDesde && fecha < fechaDesde) return false
+    if (fechaHasta && fecha > fechaHasta) return false
+    return true
+  }), [trades, productosActivos, fechaDesde, fechaHasta])
+
+  const ordenadas     = useMemo(() => [...filtradas].reverse(), [filtradas])
+  const totalPaginas  = Math.max(1, Math.ceil(ordenadas.length / PAGE_SIZE))
+  const enPagina       = ordenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
 
   return (
     <div className="subir-page">
@@ -103,6 +133,45 @@ export default function Operaciones() {
               × borrar
             </button>
           </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Instrumento
+              {productosActivos.size > 0 && (
+                <button className="clear-eventos" onClick={() => { setProductosActivos(new Set()); setPagina(0) }}>× limpiar</button>
+              )}
+            </label>
+            <div className="filtro-dias-esp">
+              {productosDisponibles.map(p => (
+                <button
+                  key={p}
+                  className={`dia-esp-chip ${productosActivos.has(p) ? 'activo' : ''}`}
+                  onClick={() => toggleProducto(p)}
+                >{p}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Fecha
+              {(fechaDesde || fechaHasta) && (
+                <button className="clear-eventos" onClick={() => { setFechaDesde(''); setFechaHasta(''); setPagina(0) }}>× limpiar</button>
+              )}
+            </label>
+            <div className="fecha-manual-row">
+              <input className="filtro-input-fecha" type="date" value={fechaDesde} onChange={e => cambiarFechaDesde(e.target.value)} />
+              <span>→</span>
+              <input className="filtro-input-fecha" type="date" value={fechaHasta} onChange={e => cambiarFechaHasta(e.target.value)} />
+            </div>
+          </div>
+
+          {hayFiltros && (
+            <div className="subir-stats">
+              <span>{filtradas.length.toLocaleString('es-ES')} de {stats.n.toLocaleString('es-ES')} operaciones tras filtrar</span>
+              <button className="clear-eventos" onClick={limpiarFiltros}>× limpiar todos los filtros</button>
+            </div>
+          )}
 
           <div className="velas-tabla-wrap">
             <table className="velas-tabla">

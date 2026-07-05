@@ -307,10 +307,12 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   return velas
 }
 
-// Últimas velas diarias para la cotización del buscador: solo ~15 días (no 5 años)
-// para responder en segundo/os en vez de los ~30s que tarda el histórico completo.
+// Últimas velas diarias para la cotización del buscador: barra d1 nativa de
+// Dukascopy en vez de agregar H1 (~200ms-1s frente a ~4s de una consulta H1,
+// una consulta H1 de un solo día vacío puede colgarse más de un minuto).
+// A cambio el open/close puede diferir unos puntos del cierre de sesión exacto
+// que usa el histórico completo — aceptable para una cotización de referencia.
 async function obtenerUltimasVelasDiarias(instrument) {
-  const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
   const cacheKey = `quoteRecent_${instrument}`
   const cached   = fromCache(cacheKey)
   if (cached) return cached
@@ -319,10 +321,15 @@ async function obtenerUltimasVelasDiarias(instrument) {
   const bars = await getHistoricalRates({
     instrument,
     dates:     { from, to: new Date() },
-    timeframe: 'h1',
+    timeframe: 'd1',
   })
 
-  const velas = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
+  // Las barras son UTC 00:00; algunos instrumentos operan la noche del domingo
+  // y generan una barra "domingo" espuria que no es un día de negociación real.
+  const velas = bars
+    .filter(([ts]) => { const dow = new Date(ts).getUTCDay(); return dow >= 1 && dow <= 5 })
+    .map(([ts, open, , , close]) => ({ time: Math.floor(ts / 1000), open, close }))
+
   toCache(cacheKey, velas, 5 * 60_000)   // TTL corto: la cotización debe refrescarse pronto
   return velas
 }

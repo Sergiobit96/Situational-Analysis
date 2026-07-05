@@ -3,7 +3,7 @@ import GraficoVelas from './GraficoVelas'
 import { capturarVelasPNG } from './graficoVelasCore'
 
 // Tickers que Railway maneja via Dukascopy — el resto va a /api/yf-intraday (Vercel)
-const DUKA_TICKERS = new Set(['^GSPC', '^NDX', '^DJI', '^GDAXI', '^FTSE', 'XAUUSD', 'XAGUSD', 'USOIL'])
+const DUKA_TICKERS = new Set(['^GSPC', '^NDX', '^DJI', '^GDAXI', '^FTSE', '^RUT', '^N225', 'XAUUSD', 'XAGUSD', 'USOIL'])
 
 function intradayUrl(tkr, date, timeframe) {
   if (DUKA_TICKERS.has(tkr)) {
@@ -31,6 +31,8 @@ const GAP_PTS_SUGERIDOS = {
   '^GSPC':  [5, 10, 20, 40, 75, 150],
   '^NDX':   [10, 25, 50, 100, 200, 400],
   '^DJI':   [25, 50, 100, 200, 400, 800],
+  '^RUT':   [2, 5, 10, 20, 40, 75],
+  '^N225':  [50, 100, 200, 400, 800, 1500],
   'XAUUSD': [5, 10, 20, 40, 75, 150],
   'XAGUSD': [0.1, 0.25, 0.5, 1, 2, 4],
   'USOIL':  [0.25, 0.5, 1, 2, 4, 8],
@@ -61,6 +63,8 @@ const PRESETS = [
   { label: 'Nasdaq', value: '^NDX'   },
   { label: 'Dow Jones', value: '^DJI'   },
   { label: 'S&P',    value: '^GSPC'  },
+  { label: 'Russell 2000', value: '^RUT' },
+  { label: 'Nikkei', value: '^N225' },
   { label: 'Oro',    value: 'XAUUSD' },
   { label: 'Plata',  value: 'XAGUSD' },
   { label: 'Petróleo', value: 'USOIL' },
@@ -1534,7 +1538,7 @@ export default function FiltroGap() {
 
               {!cargandoVelas && velas.length === 0 && (() => {
                 const tkr = resultado?.ticker ?? ticker
-                const esAccion = !['XAUUSD','XAGUSD','USOIL','^GDAXI','^FTSE','^GSPC','^NDX','^DJI'].includes(tkr)
+                const esAccion = !DUKA_TICKERS.has(tkr)
                 return (
                   <div className="filtro-vacio">
                     {esAccion

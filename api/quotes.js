@@ -9,6 +9,8 @@ const INSTRUMENTS = [
   { id: '^GSPC',  cnbc: '.SPX'   },
   { id: '^NDX',   cnbc: '.NDX'   },
   { id: '^DJI',   cnbc: '.DJI'   },
+  { id: '^RUT',   cnbc: '.RUT'   },
+  { id: '^N225',  cnbc: '.N225'  },
   { id: 'GC=F',   cnbc: '@GC.1'  },
   { id: 'SI=F',   cnbc: '@SI.1'  },
   { id: 'CL=F',   cnbc: '@CL.1'  },

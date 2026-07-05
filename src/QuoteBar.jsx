@@ -6,6 +6,8 @@ const ITEMS = [
   { symbol: '^GSPC',  label: 'S&P 500',   close: '22:00' },
   { symbol: '^NDX',   label: 'Nasdaq',    close: '22:00' },
   { symbol: '^DJI',   label: 'Dow Jones', close: '22:00' },
+  { symbol: '^RUT',   label: 'Russell 2000', close: '22:00' },
+  { symbol: '^N225',  label: 'Nikkei',    close: '08:00' },
   { symbol: 'GC=F',   label: 'Oro',       close: null    },
   { symbol: 'SI=F',   label: 'Plata',     close: null    },
   { symbol: 'CL=F',   label: 'WTI',       close: null    },

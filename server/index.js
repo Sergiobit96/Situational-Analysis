@@ -34,6 +34,8 @@ const YF_TO_DUKASCOPY = {
   '^DJI':   'usa30idxusd',
   '^GDAXI': 'deuidxeur',
   '^FTSE':  'gbridxgbp',
+  '^RUT':   'ussc2000idxusd',
+  '^N225':  'jpnidxjpy',
   'XAUUSD': 'xauusd',
   'XAGUSD': 'xagusd',
   'USOIL':  'usoususd',
@@ -46,6 +48,8 @@ const DUKASCOPY_DAILY = {
   '^GSPC':  'usa500idxusd',
   '^NDX':   'usatechidxusd',
   '^DJI':   'usa30idxusd',
+  '^RUT':   'ussc2000idxusd',
+  '^N225':  'jpnidxjpy',
   'XAUUSD': 'xauusd',
   'XAGUSD': 'xagusd',
   'USOIL':  'usoususd',
@@ -59,6 +63,8 @@ const DUKA_SESSION_LONDON = {
   'usa500idxusd':  [14*60+30,  21*60],     // S&P    14:30–21:00 Londres
   'usatechidxusd': [14*60+30,  21*60],     // Nasdaq 14:30–21:00 Londres
   'usa30idxusd':   [14*60+30,  21*60],     // DJ     14:30–21:00 Londres
+  'ussc2000idxusd':[14*60+30,  21*60],     // Russell 2000 14:30–21:00 Londres
+  'jpnidxjpy':      [0,        7*60],      // Nikkei 225 09:00–15:00 JST ≈ 00:00–07:00 Londres (Japón no cambia de horario, rango ampliado para cubrir GMT/BST)
   'xauusd':        [0,         23*60+30],  // Oro    día completo
   'xagusd':        [0,         23*60+30],  // Plata  día completo
   'usoususd':      [0,         23*60+30],  // Petróleo día completo

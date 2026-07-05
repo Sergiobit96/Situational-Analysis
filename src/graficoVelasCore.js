@@ -18,6 +18,8 @@ const SESSION_MADRID = {
   '^GSPC':  [15*60+30,  22*60],     // 15:30–22:00 (NYSE 09:30 ET = 15:30 Madrid siempre)
   '^NDX':   [15*60+30,  22*60],
   '^DJI':   [15*60+30,  22*60],
+  '^RUT':   [15*60+30,  22*60],
+  '^N225':  [1*60,      8*60],      // 09:00–15:00 JST ≈ 01:00–08:00 Madrid (Japón no cambia de horario, rango ampliado para cubrir CET/CEST)
   'SPY':    [15*60+30,  22*60],
   'QQQ':    [15*60+30,  22*60],
 }

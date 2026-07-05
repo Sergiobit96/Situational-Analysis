@@ -1106,6 +1106,16 @@ body {
   gap: 0.6rem;
 }
 
+.sesion-detalle-instrumento {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+}
 .sesion-detalle-fecha { font-size: 1rem; font-weight: 700; }
 .sesion-detalle-dia   { font-size: 0.82rem; color: var(--muted); }
 

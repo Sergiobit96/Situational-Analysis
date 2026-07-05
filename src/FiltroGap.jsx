@@ -861,6 +861,18 @@ const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: '
 const DIA_CORTO  = { 1: 'Lu', 2: 'Ma', 3: 'Mi', 4: 'Ju', 5: 'Vi' }
 const PAGE_SIZE  = 50
 
+// Nombre amigable de un ticker: el label del índice/materia prima si es un preset,
+// si no el nombre de la acción dentro de STOCKS, si no el ticker tal cual.
+function nombreInstrumento(tkr) {
+  const preset = PRESETS.find(p => p.value === tkr)
+  if (preset) return preset.label
+  for (const acciones of Object.values(STOCKS)) {
+    const accion = acciones.find(s => s.ticker === tkr)
+    if (accion) return accion.name
+  }
+  return tkr
+}
+
 // Lee los filtros de búsqueda desde la query string (para que una búsqueda sea
 // compartible/recargable), con los mismos valores por defecto que sin URL.
 function leerFiltrosDeURL() {
@@ -1485,6 +1497,7 @@ export default function FiltroGap() {
             <div className="sesion-detalle">
               <div className="sesion-detalle-header">
                 <div className="sesion-detalle-titulo">
+                  <span className="sesion-detalle-instrumento">{nombreInstrumento(resultado?.ticker ?? ticker)}</span>
                   <span className="sesion-detalle-fecha">{seleccion.date}</span>
                   {seleccion.dayOfWeek && (
                     <span className="sesion-detalle-dia">{DIA_NOMBRE[seleccion.dayOfWeek]}</span>

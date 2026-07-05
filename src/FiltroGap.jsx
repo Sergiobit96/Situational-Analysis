@@ -861,14 +861,31 @@ const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: '
 const DIA_CORTO  = { 1: 'Lu', 2: 'Ma', 3: 'Mi', 4: 'Ju', 5: 'Vi' }
 const PAGE_SIZE  = 50
 
+// Lee los filtros de búsqueda desde la query string (para que una búsqueda sea
+// compartible/recargable), con los mismos valores por defecto que sin URL.
+function leerFiltrosDeURL() {
+  const p = new URLSearchParams(window.location.search)
+  return {
+    ticker:         p.get('ticker') || '^GDAXI',
+    dias:           p.has('dias')   ? new Set(p.get('dias').split(',').filter(Boolean).map(Number)) : new Set([1, 2, 3, 4, 5]),
+    dir:            p.get('dir') || 'both',
+    gapMin:         p.has('gapMin') ? parseFloat(p.get('gapMin')) || 0 : 0,
+    gapModo:        p.get('gapModo') === 'pts' ? 'pts' : 'pct',
+    meses:          p.has('meses')  ? parseInt(p.get('meses'), 10) || 12 : 12,
+    eventosActivos: p.has('eventos') ? new Set(p.get('eventos').split(',').filter(Boolean)) : new Set(),
+    diasEspeciales: p.has('diasEsp') ? new Set(p.get('diasEsp').split(',').filter(Boolean)) : new Set(),
+  }
+}
+
 export default function FiltroGap() {
-  const [ticker,        setTicker]        = useState('^GDAXI')
-  const [dias,          setDias]          = useState(new Set([1, 2, 3, 4, 5]))
-  const [dir,           setDir]           = useState('both')
-  const [gapMin,        setGapMin]        = useState(0)
-  const [gapModo,       setGapModo]       = useState('pct') // 'pct' | 'pts'
-  const [meses,         setMeses]         = useState(12)
-  const [eventosActivos, setEventosActivos] = useState(new Set())
+  const [filtrosURL] = useState(leerFiltrosDeURL)
+  const [ticker,        setTicker]        = useState(filtrosURL.ticker)
+  const [dias,          setDias]          = useState(filtrosURL.dias)
+  const [dir,           setDir]           = useState(filtrosURL.dir)
+  const [gapMin,        setGapMin]        = useState(filtrosURL.gapMin)
+  const [gapModo,       setGapModo]       = useState(filtrosURL.gapModo) // 'pct' | 'pts'
+  const [meses,         setMeses]         = useState(filtrosURL.meses)
+  const [eventosActivos, setEventosActivos] = useState(filtrosURL.eventosActivos)
   const [cargando,      setCargando]      = useState(false)
   const [resultado,     setResultado]     = useState(null)
   const [error,         setError]         = useState(null)
@@ -888,7 +905,7 @@ export default function FiltroGap() {
   const [fechaMulti,  setFechaMulti]  = useState(null)
   const abortMultiRef = useRef({})
   const [pagina,         setPagina]         = useState(0)
-  const [diasEspeciales, setDiasEspeciales] = useState(new Set())
+  const [diasEspeciales, setDiasEspeciales] = useState(filtrosURL.diasEspeciales)
   const [exportando,     setExportando]     = useState(false)
   const [exportProgreso, setExportProgreso] = useState(null)  // { done, total }
 
@@ -989,6 +1006,28 @@ export default function FiltroGap() {
       setCargando(false)
     }
   }
+
+  // Si se abre un enlace con una búsqueda ya en la URL, la relanza automáticamente
+  useEffect(() => {
+    if (window.location.search) buscar()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Mantiene la URL sincronizada con los filtros actuales, para que la búsqueda
+  // sea compartible por enlace y sobreviva a recargar la página
+  useEffect(() => {
+    const p = new URLSearchParams({
+      ticker: ticker.trim(),
+      dias:   [...dias].sort().join(','),
+      dir,
+      gapMin,
+      gapModo,
+      meses,
+      ...(eventosActivos.size > 0 ? { eventos: [...eventosActivos].join(',') } : {}),
+      ...(diasEspeciales.size > 0 ? { diasEsp: [...diasEspeciales].join(',') } : {}),
+    })
+    window.history.replaceState(null, '', `?${p}`)
+  }, [ticker, dias, dir, gapMin, gapModo, meses, eventosActivos, diasEspeciales])
 
   // Genera el PPT con el gráfico intradía de cada coincidencia (una llamada + un render
   // por sesión, igual que al hacer clic en una sesión en la lista de resultados).

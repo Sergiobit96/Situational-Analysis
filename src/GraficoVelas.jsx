@@ -14,6 +14,8 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
   const chartRef      = useRef(null)
   const dibujoRef     = useRef(null)
   const [modo, setModo] = useState('cursor')
+  const [mostrarTrades, setMostrarTrades] = useState(false)
+  const hayTrades = trades?.length > 0
 
   useEffect(() => {
     if (!contenedorRef.current || !velas?.length) return
@@ -22,7 +24,10 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
     dibujoRef.current?.dispose()
     dibujoRef.current = null
 
-    const { chart, serie } = crearGrafico(contenedorRef.current, { velas, patrones, ticker, prevClose, openPrice, skipTz, trades })
+    const { chart, serie } = crearGrafico(contenedorRef.current, {
+      velas, patrones, ticker, prevClose, openPrice, skipTz,
+      trades: mostrarTrades ? trades : [],
+    })
     chartRef.current = chart
 
     if (herramientas) {
@@ -42,13 +47,13 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       chart.remove()
       chartRef.current = null
     }
-  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas, trades])
+  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas, trades, mostrarTrades])
 
   return (
     <div className="grafico-velas-wrap">
-      {herramientas && (
+      {(herramientas || hayTrades) && (
         <div className="dibujo-toolbar">
-          {HERRAMIENTAS.map(h => (
+          {herramientas && HERRAMIENTAS.map(h => (
             <button
               key={h.id}
               className={`dibujo-btn ${modo === h.id ? 'activo' : ''}`}
@@ -56,11 +61,20 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
               onClick={() => dibujoRef.current?.setMode(h.id)}
             >{h.icon}</button>
           ))}
-          <button
-            className="dibujo-btn dibujo-clear"
-            title="Borrar todos los dibujos"
-            onClick={() => dibujoRef.current?.clearAll()}
-          >🗑</button>
+          {herramientas && (
+            <button
+              className="dibujo-btn dibujo-clear"
+              title="Borrar todos los dibujos"
+              onClick={() => dibujoRef.current?.clearAll()}
+            >🗑</button>
+          )}
+          {hayTrades && (
+            <button
+              className={`dibujo-btn trades-toggle-btn ${mostrarTrades ? 'activo' : ''}`}
+              title="Mostrar/ocultar las operaciones del diario en el gráfico"
+              onClick={() => setMostrarTrades(v => !v)}
+            >📌 Operaciones ({trades.length})</button>
+          )}
         </div>
       )}
       <div ref={contenedorRef} className="grafico-velas" />

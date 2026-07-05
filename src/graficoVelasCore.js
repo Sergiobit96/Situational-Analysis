@@ -11,6 +11,42 @@ function madridOffsetAt(tsSecs) {
 // Minutos desde medianoche Madrid para un timestamp ya ajustado (ts + offset)
 const madridMinOfDay = adjTs => (adjTs % 86400) / 60
 
+// lightweight-charts no trae una forma de marcador "cruz" (solo circle/square/arrowUp/
+// arrowDown), así que las salidas de operaciones se dibujan con un primitive propio.
+class TradeExitsPrimitive {
+  constructor(points) { this._points = points }
+  attached({ chart, series }) { this._chart = chart; this._series = series }
+  detached() { this._chart = null; this._series = null }
+  updateAllViews() {}
+  paneViews() {
+    return [{
+      renderer: () => ({
+        draw: target => target.useMediaCoordinateSpace(({ context }) => {
+          if (!this._chart || !this._series) return
+          const r = 5
+          for (const p of this._points) {
+            const x = this._chart.timeScale().timeToCoordinate(p.time)
+            const y = this._series.priceToCoordinate(p.price)
+            if (x == null || y == null) continue
+            context.save()
+            context.strokeStyle = p.color
+            context.lineWidth = 2
+            context.beginPath()
+            context.moveTo(x - r, y - r); context.lineTo(x + r, y + r)
+            context.moveTo(x + r, y - r); context.lineTo(x - r, y + r)
+            context.stroke()
+            context.font = '10px sans-serif'
+            context.fillStyle = p.color
+            context.textBaseline = 'middle'
+            context.fillText(p.texto, x + r + 3, y)
+            context.restore()
+          }
+        }),
+      }),
+    }]
+  }
+}
+
 // Ventanas horarias de sesión regular en minutos Madrid por ticker
 const SESSION_MADRID = {
   '^GDAXI': [9*60,      17*60+30],  // 09:00–17:30 (Frankfurt = Madrid siempre)
@@ -88,19 +124,20 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   }
 
   // Marcas de operaciones reales (diario de trading) que caen en este día/instrumento:
-  // flecha de entrada + línea discontinua hasta el precio de salida, coloreada por resultado.
+  // flecha de entrada + cruz de salida, coloreadas según la dirección del trade
+  // (azul = LONG, naranja = SHORT), unidas por una línea discontinua del mismo color.
+  const salidas = []
   trades?.forEach(t => {
-    const gano  = t.puntos >= 0
-    const color = gano ? '#22c55e' : '#ef4444'
+    const esShort = t.direccion === 'SHORT'
+    const color   = esShort ? '#f97316' : '#3b82f6'
     markers.push({
-      time: t.openTime, position: t.direccion === 'SHORT' ? 'aboveBar' : 'belowBar',
-      color: '#a78bfa', shape: t.direccion === 'SHORT' ? 'arrowDown' : 'arrowUp',
-      text: `${t.direccion === 'SHORT' ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`, size: 1,
+      time: t.openTime, position: esShort ? 'aboveBar' : 'belowBar',
+      color, shape: esShort ? 'arrowDown' : 'arrowUp',
+      text: `${esShort ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`, size: 1,
     })
-    markers.push({
-      time: t.closeTime, position: t.direccion === 'SHORT' ? 'belowBar' : 'aboveBar',
-      color, shape: 'circle',
-      text: `${gano ? '+' : ''}${t.puntos.toFixed(1)} pts`, size: 1,
+    salidas.push({
+      time: t.closeTime, price: t.closePrice, color,
+      texto: `${t.puntos > 0 ? '+' : ''}${t.puntos.toFixed(1)} pts`,
     })
 
     if (t.closeTime !== t.openTime) {
@@ -115,6 +152,7 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   })
 
   if (markers.length) createSeriesMarkers(serie, [...markers].sort((a, b) => a.time - b.time))
+  if (salidas.length) serie.attachPrimitive(new TradeExitsPrimitive(salidas))
 
   // Líneas horizontales de referencia
   if (prevClose != null) serie.createPriceLine({

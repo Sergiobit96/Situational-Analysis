@@ -259,6 +259,18 @@ function getLondonDateStr(tsMs) {
 // Primera descarga ~30 s para 5 años; queda en caché 4 h
 // H1 ofrece open exacto de sesión; el close es el cierre de la última barra H1
 // (para FTSE/DAX el cierre oficial 16:30 cae dentro de la barra 16:00–17:00 → diferencia mínima)
+function agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin) {
+  const dayMap = new Map()
+  for (const [ts, open, , , close] of bars) {
+    const lm = getLondonMinutes(ts)
+    if (lm < sessionOpenMin || lm >= sessionCloseMin) continue
+    const date = getLondonDateStr(ts)
+    if (!dayMap.has(date)) dayMap.set(date, { time: Math.floor(ts / 1000), open, close })
+    else dayMap.get(date).close = close
+  }
+  return [...dayMap.values()].filter(v => v.open && v.close)
+}
+
 async function obtenerVelasDiariasDesde30m(instrument) {
   const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
   const cacheKey = `h1daily_${instrument}`
@@ -283,16 +295,7 @@ async function obtenerVelasDiariasDesde30m(instrument) {
     timeframe: 'h1',
   })
 
-  const dayMap = new Map()
-  for (const [ts, open, , , close] of bars) {
-    const lm = getLondonMinutes(ts)
-    if (lm < sessionOpenMin || lm >= sessionCloseMin) continue
-    const date = getLondonDateStr(ts)
-    if (!dayMap.has(date)) dayMap.set(date, { time: Math.floor(ts / 1000), open, close })
-    else dayMap.get(date).close = close
-  }
-
-  const velas = [...dayMap.values()].filter(v => v.open && v.close)
+  const velas = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
   toCache(cacheKey, velas, 4 * 60 * 60_000)
 
   // Al disco solo van sesiones cerradas: excluir hoy (candle incompleto si mercado abierto)
@@ -301,6 +304,26 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
 
   console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días`)
+  return velas
+}
+
+// Últimas velas diarias para la cotización del buscador: solo ~15 días (no 5 años)
+// para responder en segundo/os en vez de los ~30s que tarda el histórico completo.
+async function obtenerUltimasVelasDiarias(instrument) {
+  const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
+  const cacheKey = `quoteRecent_${instrument}`
+  const cached   = fromCache(cacheKey)
+  if (cached) return cached
+
+  const from = new Date(Date.now() - 15 * 86400_000)
+  const bars = await getHistoricalRates({
+    instrument,
+    dates:     { from, to: new Date() },
+    timeframe: 'h1',
+  })
+
+  const velas = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
+  toCache(cacheKey, velas, 5 * 60_000)   // TTL corto: la cotización debe refrescarse pronto
   return velas
 }
 
@@ -430,7 +453,11 @@ app.get('/api/ultima-cotizacion', async (req, res) => {
     const ticker = req.query.ticker?.trim()
     if (!ticker) return res.status(400).json({ error: 'ticker requerido' })
 
-    const diarias = await obtenerVelasDiarias(ticker)
+    // Índices/materias primas: ventana corta (rápida) en vez del histórico de 5 años
+    const dukaInstrument = DUKASCOPY_DAILY[ticker]
+    const diarias = dukaInstrument
+      ? await obtenerUltimasVelasDiarias(dukaInstrument)
+      : await obtenerVelasDiarias(ticker)
     if (diarias.length === 0) return res.status(404).json({ error: 'Sin datos' })
 
     const ultima   = diarias[diarias.length - 1]

@@ -155,10 +155,11 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     return time == null || price == null ? null : { time, price }
   }
 
-  // El arrastre con el ratón para crear/editar dibujos no debe además paneár el gráfico
-  // (comportamiento nativo de lightweight-charts), así que se desactiva mientras las
-  // herramientas de dibujo están activas; el zoom con rueda/pinch se mantiene.
-  chart.applyOptions({ handleScroll: { pressedMouseMove: false } })
+  // El arrastre con el ratón para crear/editar dibujos no debe además panear el gráfico
+  // (comportamiento nativo de lightweight-charts), así que se desactiva solo mientras
+  // hay una herramienta de dibujo activa o se está arrastrando un dibujo existente;
+  // en modo cursor sin arrastre, el pan normal del gráfico sigue funcionando.
+  const panActivado = activo => chart.applyOptions({ handleScroll: { pressedMouseMove: activo } })
 
   function requestUpdateAll() { requestUpdateFn?.() }
 
@@ -191,6 +192,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     modo = m
     if (m !== 'cursor') selectDrawing(null)
     container.style.cursor = m === 'cursor' ? 'default' : 'crosshair'
+    panActivado(m === 'cursor')
     onModeChange?.(m)
   }
 
@@ -263,6 +265,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     if (handleHit) {
       selectDrawing(handleHit.id)
       mouseDownState = { kind: 'handle', id: handleHit.id, handle: handleHit.handle }
+      panActivado(false)
       return
     }
     const lineHit = hitTestLine(x, y)
@@ -270,6 +273,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
       const d = drawings.find(dr => dr.id === lineHit)
       selectDrawing(lineHit)
       mouseDownState = { kind: 'move', id: lineHit, startX: x, startY: y, origP1: { ...d.p1 }, origP2: d.p2 ? { ...d.p2 } : null }
+      panActivado(false)
       return
     }
     selectDrawing(null)
@@ -321,6 +325,8 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     if (mouseDownState?.kind === 'new') {
       selectDrawing(mouseDownState.id)
       setMode('cursor')
+    } else if (mouseDownState && modo === 'cursor') {
+      panActivado(true)
     }
     mouseDownState = null
   }

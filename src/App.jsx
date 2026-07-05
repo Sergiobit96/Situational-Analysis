@@ -4,12 +4,14 @@ import SubirDatos from './SubirDatos'
 import Calendario from './Calendario'
 import Pipeline from './Pipeline'
 import QuoteBar from './QuoteBar'
+import Operaciones from './Operaciones'
 import './App.css'
 
 const TABS = [
   { id: 'gap',      label: 'Gap Filter' },
   { id: 'datos',    label: 'Subir datos' },
   { id: 'cal',      label: 'Calendario' },
+  { id: 'ops',      label: 'Operaciones' },
   ...( import.meta.env.DEV ? [{ id: 'pipeline', label: '▶ Pipeline' }] : []),
 ]
 
@@ -35,6 +37,7 @@ export default function App() {
       {tab === 'gap'      && <FiltroGap />}
       {tab === 'datos'    && <SubirDatos />}
       {tab === 'cal'      && <Calendario />}
+      {tab === 'ops'      && <Operaciones />}
       {tab === 'pipeline' && <Pipeline />}
     </div>
   )

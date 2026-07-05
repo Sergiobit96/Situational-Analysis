@@ -9,7 +9,7 @@ const HERRAMIENTAS = [
   { id: 'ray',       icon: '→',   title: 'Ray horizontal' },
 ]
 
-export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false, herramientas = false }) {
+export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false, herramientas = false, trades }) {
   const contenedorRef = useRef(null)
   const chartRef      = useRef(null)
   const dibujoRef     = useRef(null)
@@ -22,7 +22,7 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
     dibujoRef.current?.dispose()
     dibujoRef.current = null
 
-    const { chart, serie } = crearGrafico(contenedorRef.current, { velas, patrones, ticker, prevClose, openPrice, skipTz })
+    const { chart, serie } = crearGrafico(contenedorRef.current, { velas, patrones, ticker, prevClose, openPrice, skipTz, trades })
     chartRef.current = chart
 
     if (herramientas) {
@@ -42,7 +42,7 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       chart.remove()
       chartRef.current = null
     }
-  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas])
+  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas, trades])
 
   return (
     <div className="grafico-velas-wrap">

@@ -27,7 +27,7 @@ const SESSION_MADRID = {
 // Construye el chart de velas dentro de `container` (usado tanto por el componente visible
 // como por la captura headless para exportar imágenes a PPT). `width`/`height` fuerzan el
 // tamaño cuando el contenedor no está en el layout visible (p.ej. durante la exportación).
-export function crearGrafico(container, { velas, patrones, ticker, prevClose, openPrice, skipTz = false, width, height }) {
+export function crearGrafico(container, { velas, patrones, ticker, prevClose, openPrice, skipTz = false, width, height, trades }) {
   const velasAjustadas = skipTz
     ? velas
     : velas.map(v => ({ ...v, time: v.time + madridOffsetAt(v.time) }))
@@ -68,6 +68,7 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   // Marcadores de apertura y cierre de sesión regular
   // El precio de apertura se toma del primer bar intraday de sesión (exactamente 09:00 / 15:30)
   let intradayOpen = null
+  const markers = []
   if (session) {
     const sessionVelas = velasAjustadas.filter(v => {
       const m = madridMinOfDay(v.time)
@@ -76,7 +77,6 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
     const apertura = sessionVelas[0]
     const cierre   = sessionVelas[sessionVelas.length - 1]
     intradayOpen   = apertura?.open ?? null
-    const markers  = []
     if (apertura) markers.push({
       time: apertura.time, position: 'belowBar', color: '#60a5fa',
       shape: 'arrowUp', text: 'Apertura', size: 1,
@@ -85,8 +85,36 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
       time: cierre.time, position: 'aboveBar', color: '#f97316',
       shape: 'arrowDown', text: 'Cierre', size: 1,
     })
-    if (markers.length) createSeriesMarkers(serie, markers)
   }
+
+  // Marcas de operaciones reales (diario de trading) que caen en este día/instrumento:
+  // flecha de entrada + línea discontinua hasta el precio de salida, coloreada por resultado.
+  trades?.forEach(t => {
+    const gano  = t.puntos >= 0
+    const color = gano ? '#22c55e' : '#ef4444'
+    markers.push({
+      time: t.openTime, position: t.direccion === 'SHORT' ? 'aboveBar' : 'belowBar',
+      color: '#a78bfa', shape: t.direccion === 'SHORT' ? 'arrowDown' : 'arrowUp',
+      text: `${t.direccion === 'SHORT' ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`, size: 1,
+    })
+    markers.push({
+      time: t.closeTime, position: t.direccion === 'SHORT' ? 'belowBar' : 'aboveBar',
+      color, shape: 'circle',
+      text: `${gano ? '+' : ''}${t.puntos.toFixed(1)} pts`, size: 1,
+    })
+
+    if (t.closeTime !== t.openTime) {
+      const linea = chart.addSeries(LineSeries, {
+        color, lineWidth: 1, lineStyle: LineStyle.Dashed, priceLineVisible: false, lastValueVisible: false,
+      })
+      linea.setData([
+        { time: t.openTime,  value: t.openPrice },
+        { time: t.closeTime, value: t.closePrice },
+      ])
+    }
+  })
+
+  if (markers.length) createSeriesMarkers(serie, [...markers].sort((a, b) => a.time - b.time))
 
   // Líneas horizontales de referencia
   if (prevClose != null) serie.createPriceLine({

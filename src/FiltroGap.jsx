@@ -861,6 +861,9 @@ const DIA_NOMBRE = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: '
 const DIA_CORTO  = { 1: 'Lu', 2: 'Ma', 3: 'Mi', 4: 'Ju', 5: 'Vi' }
 const PAGE_SIZE  = 50
 
+// Precios y puntos con separador de miles (24731.67 → 24,731.67)
+const fmtPrecio = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 // Nombre amigable de un ticker: el label del índice/materia prima si es un preset,
 // si no el nombre de la acción dentro de STOCKS, si no el ticker tal cual.
 function nombreInstrumento(tkr) {
@@ -1201,19 +1204,19 @@ export default function FiltroGap() {
             {cargandoCotizacion && <span className="spinner" />}
             {!cargandoCotizacion && cotizacion && (
               <div className="ultima-cotizacion" title={`Cierre ${cotizacion.date}`}>
-                <span className="ultima-cotizacion-precio">{cotizacion.price.toFixed(2)}</span>
+                <span className="ultima-cotizacion-precio">{fmtPrecio(cotizacion.price)}</span>
                 {cotizacion.changePct != null && (
                   <span className={`ultima-cotizacion-var ${cotizacion.changePct >= 0 ? 'verde' : 'rojo'}`}>
                     {cotizacion.changePct > 0 ? '+' : ''}{cotizacion.changePct.toFixed(2)}%
                     {cotizacion.changePts != null && (
                       <span className="ultima-cotizacion-pts">
-                        {' '}({cotizacion.changePts > 0 ? '+' : ''}{cotizacion.changePts.toFixed(2)})
+                        {' '}({cotizacion.changePts > 0 ? '+' : ''}{fmtPrecio(cotizacion.changePts)})
                       </span>
                     )}
                   </span>
                 )}
                 {cotizacion.prevClose != null && (
-                  <span className="ultima-cotizacion-prev">Ant. {cotizacion.prevClose.toFixed(2)}</span>
+                  <span className="ultima-cotizacion-prev">Ant. {fmtPrecio(cotizacion.prevClose)}</span>
                 )}
               </div>
             )}
@@ -1547,7 +1550,7 @@ export default function FiltroGap() {
                       {seleccion.prevClose != null && seleccion.openPrice != null && (
                         <span className="gap-pill-pts">
                           {' '}({seleccion.openPrice - seleccion.prevClose > 0 ? '+' : ''}
-                          {(seleccion.openPrice - seleccion.prevClose).toFixed(2)} pts)
+                          {fmtPrecio(seleccion.openPrice - seleccion.prevClose)} pts)
                         </span>
                       )}
                     </span>
@@ -1559,9 +1562,9 @@ export default function FiltroGap() {
                 {seleccion.prevClose != null && (
                   <div className="sesion-detalle-meta">
                     Cierre anterior&nbsp;
-                    <strong>{seleccion.prevClose.toFixed(2)}</strong>
+                    <strong>{fmtPrecio(seleccion.prevClose)}</strong>
                     &nbsp;→ Apertura&nbsp;
-                    <strong>{seleccion.openPrice.toFixed(2)}</strong>
+                    <strong>{fmtPrecio(seleccion.openPrice)}</strong>
                     {velas.length > 0 && (
                       <>&nbsp;·&nbsp;{velas.length} velas
                         {fuenteVelas && (
@@ -1706,12 +1709,12 @@ function SesionCard({ sesion, activo, onClick }) {
         {up ? '▲' : '▼'} {sesion.gapPct > 0 ? '+' : ''}{sesion.gapPct.toFixed(3)}%
         <span className="sesion-card-gap-pts">
           {' '}({sesion.openPrice - sesion.prevClose > 0 ? '+' : ''}
-          {(sesion.openPrice - sesion.prevClose).toFixed(2)})
+          {fmtPrecio(sesion.openPrice - sesion.prevClose)})
         </span>
       </div>
       <div className="sesion-card-derecha">
         <div className="sesion-card-precios">
-          {sesion.prevClose.toFixed(2)} → {sesion.openPrice.toFixed(2)}
+          {fmtPrecio(sesion.prevClose)} → {fmtPrecio(sesion.openPrice)}
         </div>
         {sesion.eventos?.length > 0 && (
           <div className="sesion-card-eventos">
@@ -1744,11 +1747,11 @@ function VelasTabla({ velas }) {
             return (
               <tr key={v.time} className={alcista ? 'fila-up' : 'fila-down'}>
                 <td>{fmtHora(v.time)}</td>
-                <td>{v.open.toFixed(2)}</td>
-                <td>{v.high.toFixed(2)}</td>
-                <td>{v.low.toFixed(2)}</td>
-                <td><strong>{v.close.toFixed(2)}</strong></td>
-                <td>{(v.high - v.low).toFixed(2)}</td>
+                <td>{fmtPrecio(v.open)}</td>
+                <td>{fmtPrecio(v.high)}</td>
+                <td>{fmtPrecio(v.low)}</td>
+                <td><strong>{fmtPrecio(v.close)}</strong></td>
+                <td>{fmtPrecio(v.high - v.low)}</td>
                 <td>{alcista ? '▲' : '▼'}</td>
               </tr>
             )

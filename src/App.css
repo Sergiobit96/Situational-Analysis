@@ -1311,6 +1311,10 @@ body {
 .subir-nombre { color: var(--text); font-weight: 600; }
 .subir-rango  { margin-left: auto; }
 
+.clickable-row { cursor: pointer; }
+.fila-seleccionada td { background: rgba(124,58,237,0.15); }
+.ops-grafico { margin-top: 1.25rem; }
+
 /* ── Pestaña Calendario ── */
 .cal-page {
   padding-top: 1.5rem;

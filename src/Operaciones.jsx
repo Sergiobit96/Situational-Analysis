@@ -1,10 +1,20 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { parseTradesXLSX, fmtFechaTS, fmtHoraTS } from './parseTrades'
 import { useTrades } from './useTrades'
+import { intradayUrl } from './intradayApi'
+import GraficoVelas from './GraficoVelas'
 
 const PAGE_SIZE = 50
 
 const fmtPrecio = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+const TIMEFRAMES = [
+  { label: '1m',  duka: 'm1'  },
+  { label: '5m',  duka: 'm5'  },
+  { label: '15m', duka: 'm15' },
+  { label: '30m', duka: 'm30' },
+  { label: '1h',  duka: 'h1'  },
+]
 
 export default function Operaciones() {
   const [trades, setTrades] = useTrades()
@@ -14,6 +24,10 @@ export default function Operaciones() {
   const [productosActivos, setProductosActivos] = useState(new Set())
   const [fechaDesde, setFechaDesde] = useState('')
   const [fechaHasta, setFechaHasta] = useState('')
+  const [seleccionado, setSeleccionado]   = useState(null)
+  const [timeframe,    setTimeframe]      = useState('m15')
+  const [velas,        setVelas]          = useState([])
+  const [cargandoVelas,setCargandoVelas]  = useState(false)
 
   const toggleProducto = p => {
     setProductosActivos(prev => {
@@ -84,6 +98,30 @@ export default function Operaciones() {
   const ordenadas     = useMemo(() => [...filtradas].reverse(), [filtradas])
   const totalPaginas  = Math.max(1, Math.ceil(ordenadas.length / PAGE_SIZE))
   const enPagina       = ordenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
+
+  // Todas las operaciones (con filtros o sin ellos) del mismo instrumento+día que la
+  // fila seleccionada, para marcarlas todas en el gráfico
+  const tradesDelDia = useMemo(() => {
+    if (!seleccionado) return []
+    const fecha = fmtFechaTS(seleccionado.openTime)
+    return trades.filter(t => t.ticker === seleccionado.ticker &&
+      (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha))
+  }, [trades, seleccionado])
+
+  // Carga las velas intraday del día de la operación seleccionada
+  useEffect(() => {
+    if (!seleccionado?.ticker) return
+    const controller = new AbortController()
+    const fecha = fmtFechaTS(seleccionado.openTime)
+    setCargandoVelas(true)
+    setVelas([])
+    fetch(intradayUrl(seleccionado.ticker, fecha, timeframe), { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (!controller.signal.aborted && d.velas?.length) setVelas(d.velas) })
+      .catch(e => { if (e.name !== 'AbortError') console.error(e) })
+      .finally(() => { if (!controller.signal.aborted) setCargandoVelas(false) })
+    return () => controller.abort()
+  }, [seleccionado, timeframe])
 
   return (
     <div className="subir-page">
@@ -184,7 +222,12 @@ export default function Operaciones() {
               </thead>
               <tbody>
                 {enPagina.map((t, i) => (
-                  <tr key={i} className={t.puntos >= 0 ? 'fila-up' : 'fila-down'}>
+                  <tr
+                    key={i}
+                    className={`clickable-row ${t.puntos >= 0 ? 'fila-up' : 'fila-down'} ${seleccionado === t ? 'fila-seleccionada' : ''}`}
+                    onClick={() => { setVelas([]); setSeleccionado(t) }}
+                    title={t.ticker ? 'Ver gráfico de este día' : 'Sin ticker reconocido para este producto'}
+                  >
                     <td>{fmtFechaTS(t.openTime)}</td>
                     <td>{fmtHoraTS(t.openTime)}</td>
                     <td>{fmtPrecio(t.openPrice)}</td>
@@ -205,6 +248,46 @@ export default function Operaciones() {
             <span className="pag-info">{pagina + 1} / {totalPaginas}</span>
             <button className="pag-btn" onClick={() => setPagina(p => p + 1)} disabled={pagina >= totalPaginas - 1}>Siguiente ›</button>
           </div>
+
+          {seleccionado && (
+            <div className="ops-grafico">
+              <div className="multi-charts-header">
+                <span className="multi-charts-fecha">
+                  {seleccionado.producto} · {fmtFechaTS(seleccionado.openTime)}
+                </span>
+                <div className="tf-selector">
+                  {TIMEFRAMES.map(tf => (
+                    <button
+                      key={tf.duka}
+                      className={`tf-chip ${timeframe === tf.duka ? 'activo' : ''}`}
+                      onClick={() => setTimeframe(tf.duka)}
+                    >{tf.label}</button>
+                  ))}
+                </div>
+                <button className="btn-ir-fecha" onClick={() => { setVelas([]); setSeleccionado(null) }}>× cerrar</button>
+              </div>
+
+              {!seleccionado.ticker && (
+                <div className="filtro-vacio">
+                  "{seleccionado.producto}" no tiene un ticker reconocido en la app, no se puede cargar el gráfico.
+                </div>
+              )}
+              {seleccionado.ticker && cargandoVelas && (
+                <div className="velas-cargando"><span className="spinner" /> Cargando velas…</div>
+              )}
+              {seleccionado.ticker && !cargandoVelas && velas.length > 0 && (
+                <GraficoVelas
+                  velas={velas}
+                  patrones={[]}
+                  ticker={seleccionado.ticker}
+                  trades={tradesDelDia}
+                />
+              )}
+              {seleccionado.ticker && !cargandoVelas && velas.length === 0 && (
+                <div className="filtro-vacio">Sin datos intraday disponibles para esta fecha.</div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

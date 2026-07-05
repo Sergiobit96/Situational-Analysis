@@ -47,6 +47,7 @@ const EVENTOS_DEF = [
   { id: 'PPI',  label: 'PPI',   title: 'Producer Price Index US' },
   { id: 'GDP',  label: 'GDP',   title: 'Gross Domestic Product' },
   { id: 'PMI',  label: 'PMI',   title: 'Purchasing Managers Index' },
+  { id: 'FESTIVO', label: 'Festivo+1', title: 'Día siguiente a un festivo de mercado (se saltó al menos un día hábil)' },
 ]
 
 const PERIODOS = [

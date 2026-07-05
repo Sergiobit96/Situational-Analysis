@@ -481,8 +481,18 @@ app.get('/api/gap-filter', async (req, res) => {
       const gapDir    = gapPct >= 0 ? 'up' : 'down'
       const date      = getMadridDate(curr.time)
       const dayOfWeek = getMadridDay(curr.time)
-      const eventos   = getEventosEnFecha(evIdx, date)
       const gapMedido = gapModo === 'pts' ? gapPts : gapPct
+
+      // Festivo de mercado: hueco de días naturales entre velas mayor que un
+      // fin de semana normal ⇒ se saltó al menos un día hábil por festivo.
+      // Se detecta por instrumento a partir de sus propias velas (sin depender
+      // de un calendario de festivos por país), así vale para cualquier ticker.
+      const gapDiasCal   = Math.round((curr.time - prev.time) / 86400)
+      const gapEsperado  = dayOfWeek === 1 ? 3 : 1
+      const esPostFestivo = gapDiasCal > gapEsperado
+
+      const eventos = [...getEventosEnFecha(evIdx, date)]
+      if (esPostFestivo) eventos.push('FESTIVO')
 
       if (!dias.includes(dayOfWeek))            continue
       if (dir !== 'both' && gapDir !== dir)      continue

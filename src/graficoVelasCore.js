@@ -11,9 +11,11 @@ function madridOffsetAt(tsSecs) {
 // Minutos desde medianoche Madrid para un timestamp ya ajustado (ts + offset)
 const madridMinOfDay = adjTs => (adjTs % 86400) / 60
 
-// lightweight-charts no trae una forma de marcador "cruz" (solo circle/square/arrowUp/
-// arrowDown), así que las salidas de operaciones se dibujan con un primitive propio.
-class TradeExitsPrimitive {
+// lightweight-charts solo trae marcadores circle/square/arrowUp/arrowDown anclados
+// arriba/abajo de la barra (no al precio exacto), así que las marcas de operaciones se
+// dibujan con un primitive propio: entrada = flecha horizontal que toca el precio exacto
+// de entrada, salida = cruz en el precio exacto de salida.
+class TradeMarksPrimitive {
   constructor(points) { this._points = points }
   attached({ chart, series }) { this._chart = chart; this._series = series }
   detached() { this._chart = null; this._series = null }
@@ -23,7 +25,6 @@ class TradeExitsPrimitive {
       renderer: () => ({
         draw: target => target.useMediaCoordinateSpace(({ context }) => {
           if (!this._chart || !this._series) return
-          const r = 5
           for (const p of this._points) {
             const x = this._chart.timeScale().timeToCoordinate(p.time)
             const y = this._series.priceToCoordinate(p.price)
@@ -32,13 +33,24 @@ class TradeExitsPrimitive {
             context.strokeStyle = p.color
             context.lineWidth = 2
             context.beginPath()
-            context.moveTo(x - r, y - r); context.lineTo(x + r, y + r)
-            context.moveTo(x + r, y - r); context.lineTo(x - r, y + r)
+            if (p.tipo === 'entrada') {
+              // Flecha horizontal: el vástago llega desde la izquierda y la punta toca (x,y)
+              const largo = 12
+              context.moveTo(x - largo, y)
+              context.lineTo(x, y)
+              context.lineTo(x - 4, y - 4)
+              context.moveTo(x, y)
+              context.lineTo(x - 4, y + 4)
+            } else {
+              const r = 5
+              context.moveTo(x - r, y - r); context.lineTo(x + r, y + r)
+              context.moveTo(x + r, y - r); context.lineTo(x - r, y + r)
+            }
             context.stroke()
             context.font = '10px sans-serif'
             context.fillStyle = p.color
             context.textBaseline = 'middle'
-            context.fillText(p.texto, x + r + 3, y)
+            context.fillText(p.texto, x + 8, y)
             context.restore()
           }
         }),
@@ -124,19 +136,19 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   }
 
   // Marcas de operaciones reales (diario de trading) que caen en este día/instrumento:
-  // flecha de entrada + cruz de salida, coloreadas según la dirección del trade
-  // (azul = LONG, naranja = SHORT), unidas por una línea discontinua del mismo color.
-  const salidas = []
+  // flecha horizontal de entrada + cruz de salida, ambas exactamente al precio de la
+  // operación y coloreadas según su dirección (azul = LONG, naranja = SHORT), unidas
+  // por una línea discontinua del mismo color.
+  const marcasTrade = []
   trades?.forEach(t => {
     const esShort = t.direccion === 'SHORT'
     const color   = esShort ? '#f97316' : '#3b82f6'
-    markers.push({
-      time: t.openTime, position: esShort ? 'aboveBar' : 'belowBar',
-      color, shape: esShort ? 'arrowDown' : 'arrowUp',
-      text: `${esShort ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`, size: 1,
+    marcasTrade.push({
+      time: t.openTime, price: t.openPrice, color, tipo: 'entrada',
+      texto: `${esShort ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`,
     })
-    salidas.push({
-      time: t.closeTime, price: t.closePrice, color,
+    marcasTrade.push({
+      time: t.closeTime, price: t.closePrice, color, tipo: 'salida',
       texto: `${t.puntos > 0 ? '+' : ''}${t.puntos.toFixed(1)} pts`,
     })
 
@@ -152,7 +164,7 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   })
 
   if (markers.length) createSeriesMarkers(serie, [...markers].sort((a, b) => a.time - b.time))
-  if (salidas.length) serie.attachPrimitive(new TradeExitsPrimitive(salidas))
+  if (marcasTrade.length) serie.attachPrimitive(new TradeMarksPrimitive(marcasTrade))
 
   // Líneas horizontales de referencia
   if (prevClose != null) serie.createPriceLine({

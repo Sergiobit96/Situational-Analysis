@@ -948,19 +948,16 @@ export default function FiltroGap() {
                 <span>Acciones · {PRESETS.find(p => p.value === indiceAcciones)?.label}</span>
                 <button className="clear-eventos" onClick={() => setIndiceAcciones(null)}>× cerrar</button>
               </div>
-              <div className="acciones-lista">
+              <select
+                className="acciones-select"
+                value={STOCKS[indiceAcciones].some(s => s.ticker === ticker) ? ticker : ''}
+                onChange={e => setTicker(e.target.value)}
+              >
+                <option value="" disabled>Elegir acción… ({STOCKS[indiceAcciones].length})</option>
                 {STOCKS[indiceAcciones].map(s => (
-                  <button
-                    key={s.ticker}
-                    className={`stock-chip ${ticker === s.ticker ? 'activo' : ''}`}
-                    title={s.ticker}
-                    onClick={() => setTicker(s.ticker)}
-                  >
-                    <span className="stock-nombre">{s.name}</span>
-                    <span className="stock-ticker">{s.ticker}</span>
-                  </button>
+                  <option key={s.ticker} value={s.ticker}>{s.name} · {s.ticker}</option>
                 ))}
-              </div>
+              </select>
             </div>
           )}
         </div>

@@ -1,3 +1,5 @@
+import { madridOffsetAt } from './timezone'
+
 // Nombre de producto (tal cual aparece en el diario) → ticker usado en el resto de la app
 export const PRODUCTO_A_TICKER = {
   'Germany 40':         '^GDAXI',
@@ -11,17 +13,17 @@ export const PRODUCTO_A_TICKER = {
 }
 
 // Las celdas de fecha de Excel llegan como Date cuyos campos UTC coinciden con los
-// valores literales de la hoja. El diario registra en hora de Londres (UK), una hora
-// por detrás de Madrid, así que se suma 1h para que encaje con el resto del chart,
-// que ya muestra las velas en "hora de Madrid" vía un desplazamiento similar.
-const LONDRES_A_MADRID_SEGUNDOS = 3600
-
+// valores literales de la hoja. El diario registra en hora de Londres fija (sin cambio de
+// horario, equivalente a UTC), así que esos literales YA son UTC real; se les suma el
+// desfase de Madrid (CET/CEST, variable según la época del año) para encajar con el
+// resto del chart, que muestra las velas con ese mismo desplazamiento dinámico.
 function celdaATimestamp(valor) {
   if (!(valor instanceof Date) || isNaN(valor)) return null
-  return Math.floor(Date.UTC(
+  const utc = Math.floor(Date.UTC(
     valor.getUTCFullYear(), valor.getUTCMonth(), valor.getUTCDate(),
     valor.getUTCHours(), valor.getUTCMinutes(), valor.getUTCSeconds(),
-  ) / 1000) + LONDRES_A_MADRID_SEGUNDOS
+  ) / 1000)
+  return utc + madridOffsetAt(utc)
 }
 
 function buscarFilaCabecera(filas) {

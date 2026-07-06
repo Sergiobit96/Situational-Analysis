@@ -1,12 +1,5 @@
 import { createChart, CandlestickSeries, LineSeries, CrosshairMode, LineStyle, createSeriesMarkers } from 'lightweight-charts'
-
-// Offset Madrid en segundos para un timestamp concreto (maneja CET/CEST por fecha, no por "ahora")
-function madridOffsetAt(tsSecs) {
-  const d     = new Date(tsSecs * 1000)
-  const local = new Date(d.toLocaleString('en-US', { timeZone: 'Europe/Madrid' }))
-  const utc   = new Date(d.toLocaleString('en-US', { timeZone: 'UTC' }))
-  return Math.round((local - utc) / 1000)
-}
+import { madridOffsetAt } from './timezone'
 
 // Minutos desde medianoche Madrid para un timestamp ya ajustado (ts + offset)
 const madridMinOfDay = adjTs => (adjTs % 86400) / 60

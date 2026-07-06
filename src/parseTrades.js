@@ -12,17 +12,19 @@ export const PRODUCTO_A_TICKER = {
   'Silver':             'XAGUSD',
 }
 
-// Las celdas de fecha de Excel llegan como Date cuyos campos UTC coinciden con los
-// valores literales de la hoja. El diario registra en hora de Londres fija (sin cambio de
-// horario, equivalente a UTC), así que esos literales YA son UTC real; se les suma el
-// desfase de Madrid (CET/CEST, variable según la época del año) para encajar con el
-// resto del chart, que muestra las velas con ese mismo desplazamiento dinámico.
-function celdaATimestamp(valor) {
-  if (!(valor instanceof Date) || isNaN(valor)) return null
-  const utc = Math.floor(Date.UTC(
-    valor.getUTCFullYear(), valor.getUTCMonth(), valor.getUTCDate(),
-    valor.getUTCHours(), valor.getUTCMinutes(), valor.getUTCSeconds(),
-  ) / 1000)
+// El número de serie de Excel (días desde 1899-12-30) se convierte a mano en vez de
+// usar la opción `cellDates` de la librería xlsx: para este archivo esa conversión
+// desplazaba la hora casi 1h respecto al valor real de la celda (verificado contra
+// openpyxl y contra la fórmula estándar de fecha de Excel).
+// El diario registra en hora de Londres fija (sin cambio de horario, equivale a UTC),
+// así que el valor reconstruido YA es UTC real; se le suma el desfase de Madrid
+// (CET/CEST, variable según la época del año) para encajar con el resto del chart,
+// que muestra las velas con ese mismo desplazamiento dinámico.
+const EXCEL_EPOCH_UTC_MS = Date.UTC(1899, 11, 30)
+
+function celdaATimestamp(serial) {
+  if (typeof serial !== 'number' || isNaN(serial)) return null
+  const utc = Math.floor((EXCEL_EPOCH_UTC_MS + serial * 86400000) / 1000)
   return utc + madridOffsetAt(utc)
 }
 
@@ -37,7 +39,9 @@ function buscarFilaCabecera(filas) {
 // en vez de engordar el bundle principal de la app para todo el mundo.
 export async function parseTradesXLSX(arrayBuffer) {
   const XLSX = await import('xlsx')
-  const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true })
+  // Sin cellDates: las celdas de fecha llegan como número de serie de Excel (no como
+  // Date), para poder convertirlas nosotros mismos con celdaATimestamp() de forma fiable.
+  const wb = XLSX.read(arrayBuffer, { type: 'array' })
 
   const nombreHoja = wb.SheetNames.find(n => /^\d{4}$/.test(n.trim())) ?? wb.SheetNames[0]
   const ws   = wb.Sheets[nombreHoja]

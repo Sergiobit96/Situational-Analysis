@@ -28,6 +28,7 @@ export default function Operaciones() {
   const [timeframe,    setTimeframe]      = useState('m15')
   const [velas,        setVelas]          = useState([])
   const [cargandoVelas,setCargandoVelas]  = useState(false)
+  const [prevClose,    setPrevClose]      = useState(null)
 
   const toggleProducto = p => {
     setProductosActivos(prev => {
@@ -122,6 +123,18 @@ export default function Operaciones() {
       .finally(() => { if (!controller.signal.aborted) setCargandoVelas(false) })
     return () => controller.abort()
   }, [seleccionado, timeframe])
+
+  // Cierre del día de negociación anterior, para la línea de referencia del gráfico
+  useEffect(() => {
+    if (!seleccionado?.ticker) return
+    const controller = new AbortController()
+    const fecha = fmtFechaTS(seleccionado.openTime)
+    fetch(`/api/cierre-anterior?${new URLSearchParams({ ticker: seleccionado.ticker, date: fecha })}`, { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => { if (!controller.signal.aborted) setPrevClose(d.error ? null : d.prevClose) })
+      .catch(e => { if (e.name !== 'AbortError') console.error(e) })
+    return () => controller.abort()
+  }, [seleccionado])
 
   return (
     <div className="subir-page">
@@ -225,7 +238,7 @@ export default function Operaciones() {
                   <tr
                     key={i}
                     className={`clickable-row ${t.puntos >= 0 ? 'fila-up' : 'fila-down'} ${seleccionado === t ? 'fila-seleccionada' : ''}`}
-                    onClick={() => { setVelas([]); setSeleccionado(t) }}
+                    onClick={() => { setVelas([]); setPrevClose(null); setSeleccionado(t) }}
                     title={t.ticker ? 'Ver gráfico de este día' : 'Sin ticker reconocido para este producto'}
                   >
                     <td>{fmtFechaTS(t.openTime)}</td>
@@ -264,7 +277,7 @@ export default function Operaciones() {
                     >{tf.label}</button>
                   ))}
                 </div>
-                <button className="btn-ir-fecha" onClick={() => { setVelas([]); setSeleccionado(null) }}>× cerrar</button>
+                <button className="btn-ir-fecha" onClick={() => { setVelas([]); setPrevClose(null); setSeleccionado(null) }}>× cerrar</button>
               </div>
 
               {!seleccionado.ticker && (
@@ -281,6 +294,7 @@ export default function Operaciones() {
                   patrones={[]}
                   ticker={seleccionado.ticker}
                   trades={tradesDelDia}
+                  prevClose={prevClose}
                 />
               )}
               {seleccionado.ticker && !cargandoVelas && velas.length === 0 && (

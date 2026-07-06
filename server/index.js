@@ -486,6 +486,25 @@ app.get('/api/ultima-cotizacion', async (req, res) => {
   }
 })
 
+// ── Cierre del día de negociación anterior a una fecha concreta (para el gráfico
+// de operaciones, que puede mirar cualquier fecha histórica, no solo la más reciente) ──
+app.get('/api/cierre-anterior', async (req, res) => {
+  try {
+    const ticker = req.query.ticker?.trim()
+    const date   = req.query.date?.trim()
+    if (!ticker || !date) return res.status(400).json({ error: 'ticker y date requeridos' })
+
+    const diarias = await obtenerVelasDiarias(ticker)
+    const idx = diarias.findIndex(v => getMadridDate(v.time) === date)
+    if (idx <= 0) return res.status(404).json({ error: 'Sin cierre anterior disponible' })
+
+    res.json({ ticker, date, prevClose: diarias[idx - 1].close })
+  } catch (err) {
+    console.error('[cierre-anterior]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Gap Filter ─────────────────────────────────────────────────────────────
 app.get('/api/gap-filter', async (req, res) => {
   try {

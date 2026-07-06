@@ -40,10 +40,6 @@ class TradeMarksPrimitive {
               context.moveTo(x + r, y - r); context.lineTo(x - r, y + r)
             }
             context.stroke()
-            context.font = '10px sans-serif'
-            context.fillStyle = p.color
-            context.textBaseline = 'middle'
-            context.fillText(p.texto, x + 8, y)
             context.restore()
           }
         }),
@@ -136,14 +132,8 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   trades?.forEach(t => {
     const esShort = t.direccion === 'SHORT'
     const color   = esShort ? '#f97316' : '#3b82f6'
-    marcasTrade.push({
-      time: t.openTime, price: t.openPrice, color, tipo: 'entrada',
-      texto: `${esShort ? 'Venta' : 'Compra'} ${t.openPrice.toFixed(1)}`,
-    })
-    marcasTrade.push({
-      time: t.closeTime, price: t.closePrice, color, tipo: 'salida',
-      texto: `${t.puntos > 0 ? '+' : ''}${t.puntos.toFixed(1)} pts`,
-    })
+    marcasTrade.push({ time: t.openTime,  price: t.openPrice,  color, tipo: 'entrada' })
+    marcasTrade.push({ time: t.closeTime, price: t.closePrice, color, tipo: 'salida' })
 
     if (t.closeTime !== t.openTime) {
       const linea = chart.addSeries(LineSeries, {

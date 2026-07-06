@@ -1239,6 +1239,15 @@ body {
 .velas-tabla tr.fila-down td:nth-child(5) { color: var(--red); }
 .velas-tabla tr:hover td { background: var(--surface-2); }
 
+/* Tabla de operaciones (Operaciones tab): columnas distintas a velas-tabla, así que
+   las fechas (1ª y 4ª) van en blanco y el verde/rojo va en Puntos (9ª), no en la 5ª */
+.trades-tabla.trades-tabla td:nth-child(1),
+.trades-tabla.trades-tabla td:nth-child(4) { color: var(--text); }
+.trades-tabla.trades-tabla tr.fila-up   td:nth-child(5) { color: inherit; }
+.trades-tabla.trades-tabla tr.fila-down td:nth-child(5) { color: inherit; }
+.trades-tabla.trades-tabla tr.fila-up   td:nth-child(9) { color: var(--green); }
+.trades-tabla.trades-tabla tr.fila-down td:nth-child(9) { color: var(--red); }
+
 @media (max-width: 900px) {
   .filtro-split { grid-template-columns: 1fr; }
   .sesiones-lista { max-height: 260px; }

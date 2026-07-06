@@ -212,7 +212,7 @@ export default function Operaciones() {
           )}
 
           <div className="velas-tabla-wrap">
-            <table className="velas-tabla">
+            <table className="velas-tabla trades-tabla">
               <thead>
                 <tr>
                   <th>Fecha apertura</th><th>Hora apertura</th><th>Precio apertura</th>

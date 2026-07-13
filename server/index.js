@@ -297,11 +297,23 @@ async function obtenerVelasDiariasDesde30m(instrument) {
     : (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 5); return d })()
 
   console.log(`[Dukascopy H1→Diario] Descargando ${instrument} desde ${from.toISOString().slice(0, 10)}…`)
-  const bars = await getHistoricalRates({
-    instrument,
-    dates:     { from, to: new Date() },
-    timeframe: 'h1',
-  })
+  let bars
+  try {
+    bars = await getHistoricalRates({
+      instrument,
+      dates:     { from, to: new Date() },
+      timeframe: 'h1',
+    })
+  } catch (err) {
+    // Dukascopy caído/inaccesible: mejor servir el disco desactualizado que romper la petición.
+    // TTL corto para reintentar pronto en vez de esperar las 4h normales.
+    if (disk) {
+      console.warn(`[Dukascopy H1→Diario] ${instrument}: fetch falló (${err.message}), usando disco desactualizado (${disk.length} días, hasta ${ultimaDisco})`)
+      toCache(cacheKey, disk, 10 * 60_000)
+      return disk
+    }
+    throw err
+  }
 
   // Combinar con la base de disco (si la había) y deduplicar por fecha
   const nuevas   = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
@@ -331,11 +343,24 @@ async function obtenerUltimasVelasDiarias(instrument) {
   if (cached) return cached
 
   const from = new Date(Date.now() - 15 * 86400_000)
-  const bars = await getHistoricalRates({
-    instrument,
-    dates:     { from, to: new Date() },
-    timeframe: 'd1',
-  })
+  let bars
+  try {
+    bars = await getHistoricalRates({
+      instrument,
+      dates:     { from, to: new Date() },
+      timeframe: 'd1',
+    })
+  } catch (err) {
+    // Dukascopy caído/inaccesible: reutilizar la caché diaria en disco (h1daily) como último recurso
+    const disk = diskCacheGet(`h1daily_${instrument}`)
+    if (disk?.length) {
+      console.warn(`[quoteRecent] ${instrument}: fetch falló (${err.message}), usando disco h1daily`)
+      const velas = disk.slice(-15)
+      toCache(cacheKey, velas, 2 * 60_000)
+      return velas
+    }
+    throw err
+  }
 
   // Las barras son UTC 00:00; algunos instrumentos operan la noche del domingo
   // y generan una barra "domingo" espuria que no es un día de negociación real.

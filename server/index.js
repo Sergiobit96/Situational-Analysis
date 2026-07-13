@@ -277,29 +277,42 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   const cached   = fromCache(cacheKey)
   if (cached) return cached
 
-  // Disk cache: persiste entre reinicios del contenedor
-  const disk = diskCacheGet(cacheKey)
-  if (disk) {
+  const hoy  = getLondonDateStr(Date.now())
+  const ayer = getLondonDateStr(Date.now() - 86400_000)
+
+  // Disk cache: arranque rápido tras un reinicio del contenedor
+  const disk        = diskCacheGet(cacheKey)
+  const ultimaDisco  = disk?.length ? getLondonDateStr(disk[disk.length - 1].time * 1000) : null
+
+  // Si el disco ya llega hasta la sesión de ayer, está al día → usarlo tal cual
+  if (disk && ultimaDisco >= ayer) {
     toCache(cacheKey, disk, 4 * 60 * 60_000)
-    console.log(`[Dukascopy H1→Diario] ${instrument}: ${disk.length} días (disco)`)
+    console.log(`[Dukascopy H1→Diario] ${instrument}: ${disk.length} días (disco, al día)`)
     return disk
   }
 
-  const from = new Date()
-  from.setFullYear(from.getFullYear() - 5)
+  // Sin disco (primera vez) o desactualizado: descargar solo lo que falta desde la base en disco
+  const from = ultimaDisco
+    ? new Date(new Date(ultimaDisco).getTime() - 2 * 86400_000)  // margen de solape
+    : (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 5); return d })()
 
-  console.log(`[Dukascopy H1→Diario] Descargando ${instrument} (primera vez ~30s)…`)
+  console.log(`[Dukascopy H1→Diario] Descargando ${instrument} desde ${from.toISOString().slice(0, 10)}…`)
   const bars = await getHistoricalRates({
     instrument,
     dates:     { from, to: new Date() },
     timeframe: 'h1',
   })
 
-  const velas = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
+  // Combinar con la base de disco (si la había) y deduplicar por fecha
+  const nuevas   = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
+  const porFecha = new Map()
+  for (const v of (disk ?? [])) porFecha.set(getLondonDateStr(v.time * 1000), v)
+  for (const v of nuevas)       porFecha.set(getLondonDateStr(v.time * 1000), v)
+  const velas = [...porFecha.values()].sort((a, b) => a.time - b.time)
+
   toCache(cacheKey, velas, 4 * 60 * 60_000)
 
   // Al disco solo van sesiones cerradas: excluir hoy (candle incompleto si mercado abierto)
-  const hoy        = getLondonDateStr(Date.now())
   const velasDisco = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
   if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
 

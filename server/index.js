@@ -229,6 +229,9 @@ function toCache(key, data, ttl = CACHE_TTL) {
   cache.set(key, { ts: Date.now(), data, ttl })
 }
 
+// fetch() de Node solo da "fetch failed"; la causa real (ECONNRESET, ETIMEDOUT…) va en err.cause
+const errDetalle = err => err.cause?.code ?? err.cause?.message ?? err.message
+
 // Timezone helpers
 const getMadridDate = ts =>
   new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
@@ -271,6 +274,46 @@ function agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin) {
   return [...dayMap.values()].filter(v => v.open && v.close)
 }
 
+// ── Yahoo Finance: fallback diario cuando Dukascopy no responde ──────────
+// Solo se usa si la petición a Dukascopy falla. Para materias primas se usa
+// el futuro correspondiente (GC=F, SI=F, CL=F) ya que Yahoo no publica los
+// tickers spot XAUUSD/XAGUSD/USOIL; el precio difiere unos puntos del CFD
+// de Dukascopy pero sirve para no dejar la caché completamente congelada.
+const DUKA_TO_YF_FALLBACK = {
+  'usa500idxusd':   '^GSPC',
+  'usatechidxusd':  '^NDX',
+  'usa30idxusd':    '^DJI',
+  'deuidxeur':      '^GDAXI',
+  'gbridxgbp':      '^FTSE',
+  'ussc2000idxusd': '^RUT',
+  'jpnidxjpy':      '^N225',
+  'xauusd':         'GC=F',
+  'xagusd':         'SI=F',
+  'usoususd':       'CL=F',
+}
+
+async function obtenerVelasDiariasYF(yfTicker, from) {
+  const auth  = await getYFAuth()
+  const p1    = Math.floor(from.getTime() / 1000)
+  const sym   = encodeURIComponent(yfTicker)
+  const crumb = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
+  const hdrs  = auth ? { ...YF_HEADERS, 'Cookie': auth.cookie } : YF_HEADERS
+  const url   = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&period1=${p1}&period2=${Math.floor(Date.now() / 1000)}${crumb}`
+  const resp  = await fetch(url, { headers: hdrs })
+  const json  = await resp.json()
+  const r     = json.chart?.result?.[0]
+  if (!r) throw new Error(json.chart?.error?.description ?? `Sin datos Yahoo para ${yfTicker}`)
+
+  const ts    = r.timestamp ?? []
+  const q     = r.indicators.quote[0]
+  const velas = []
+  for (let i = 0; i < ts.length; i++) {
+    if (q.open[i] == null || q.close[i] == null) continue
+    velas.push({ time: ts[i], open: q.open[i], close: q.close[i] })
+  }
+  return velas
+}
+
 async function obtenerVelasDiariasDesde30m(instrument) {
   const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
   const cacheKey = `h1daily_${instrument}`
@@ -305,10 +348,34 @@ async function obtenerVelasDiariasDesde30m(instrument) {
       timeframe: 'h1',
     })
   } catch (err) {
-    // Dukascopy caído/inaccesible: mejor servir el disco desactualizado que romper la petición.
+    console.warn(`[Dukascopy H1→Diario] ${instrument}: fetch falló (${errDetalle(err)}), probando Yahoo Finance…`)
+
+    // Dukascopy caído/inaccesible: probar Yahoo Finance antes de rendirse al disco desactualizado
+    const yfTicker = DUKA_TO_YF_FALLBACK[instrument]
+    if (yfTicker) {
+      try {
+        const yfVelas  = await obtenerVelasDiariasYF(yfTicker, from)
+        const porFecha = new Map()
+        for (const v of (disk ?? [])) porFecha.set(getLondonDateStr(v.time * 1000), v)
+        for (const v of yfVelas)      porFecha.set(getLondonDateStr(v.time * 1000), v)
+        const velas = [...porFecha.values()].sort((a, b) => a.time - b.time)
+
+        // TTL corto: es un fallback, reintentar Dukascopy pronto en vez de esperar 4h
+        toCache(cacheKey, velas, 30 * 60_000)
+        const velasDisco = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
+        if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
+
+        console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días (Yahoo fallback)`)
+        return velas
+      } catch (yfErr) {
+        console.warn(`[Dukascopy H1→Diario] ${instrument}: Yahoo fallback también falló (${yfErr.message})`)
+      }
+    }
+
+    // Último recurso: mejor servir el disco desactualizado que romper la petición.
     // TTL corto para reintentar pronto en vez de esperar las 4h normales.
     if (disk) {
-      console.warn(`[Dukascopy H1→Diario] ${instrument}: fetch falló (${err.message}), usando disco desactualizado (${disk.length} días, hasta ${ultimaDisco})`)
+      console.warn(`[Dukascopy H1→Diario] ${instrument}: usando disco desactualizado (${disk.length} días, hasta ${ultimaDisco})`)
       toCache(cacheKey, disk, 10 * 60_000)
       return disk
     }
@@ -351,10 +418,25 @@ async function obtenerUltimasVelasDiarias(instrument) {
       timeframe: 'd1',
     })
   } catch (err) {
-    // Dukascopy caído/inaccesible: reutilizar la caché diaria en disco (h1daily) como último recurso
+    // Dukascopy caído/inaccesible: probar Yahoo Finance antes de recurrir al disco h1daily
+    const yfTicker = DUKA_TO_YF_FALLBACK[instrument]
+    if (yfTicker) {
+      try {
+        const velas = await obtenerVelasDiariasYF(yfTicker, from)
+        if (velas.length > 0) {
+          toCache(cacheKey, velas, 2 * 60_000)
+          console.log(`[quoteRecent] ${instrument}: Yahoo fallback ok (${velas.length} días)`)
+          return velas
+        }
+      } catch (yfErr) {
+        console.warn(`[quoteRecent] ${instrument}: Yahoo fallback también falló (${yfErr.message})`)
+      }
+    }
+
+    // Último recurso: reutilizar la caché diaria en disco (h1daily)
     const disk = diskCacheGet(`h1daily_${instrument}`)
     if (disk?.length) {
-      console.warn(`[quoteRecent] ${instrument}: fetch falló (${err.message}), usando disco h1daily`)
+      console.warn(`[quoteRecent] ${instrument}: fetch falló (${errDetalle(err)}), usando disco h1daily`)
       const velas = disk.slice(-15)
       toCache(cacheKey, velas, 2 * 60_000)
       return velas

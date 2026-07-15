@@ -3,8 +3,8 @@ import express from 'express'
 import cors from 'cors'
 import { getHistoricalRates } from 'dukascopy-node'
 import { getEventIndex, getEventosEnFecha } from './eventos.js'
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs'
-import { join, dirname } from 'path'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs'
+import { join, dirname, relative, resolve, sep, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import PptxGenJS from 'pptxgenjs'
@@ -906,6 +906,112 @@ app.get('/api/velas15m', async (req, res) => {
   } catch (err) {
     console.error('[velas15m]', err.message)
     res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Fotos de trades (solo local — lee las carpetas Trading<año> de Google Drive) ──
+const PHOTOS_ROOT = process.env.PHOTOS_DIR || 'G:\\Mi unidad'
+const IMG_EXT      = /\.(jpe?g|png)$/i
+
+// Cada año guarda las capturas en una carpeta distinta con convenciones distintas;
+// 2026 solo cuenta la subcarpeta "Separados" (recorte por instrumento, no el collage del día completo)
+const PHOTO_YEARS = [
+  { year: 2022, dir: 'Trading 2022\\Trades 2022' },
+  { year: 2023, dir: 'Trading 2023\\DAY' },
+  { year: 2024, dir: 'Trading 2024\\Trades' },
+  { year: 2025, dir: 'Trading 2025\\Trades' },
+  { year: 2026, dir: 'Trading 2026\\Trades', onlyInDirNamed: 'Separados' },
+]
+
+function walkImages(dir, onlyInDirNamed) {
+  let out = []
+  let entries
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return out }
+  for (const e of entries) {
+    const full = join(dir, e.name)
+    if (e.isDirectory()) {
+      out = out.concat(walkImages(full, onlyInDirNamed))
+    } else if (IMG_EXT.test(e.name)) {
+      if (!onlyInDirNamed || basename(dir).toLowerCase() === onlyInDirNamed.toLowerCase()) {
+        out.push(full)
+      }
+    }
+  }
+  return out
+}
+
+let _photoIndex   = null
+let _photoIndexTs = 0
+function getPhotoIndex() {
+  if (_photoIndex && Date.now() - _photoIndexTs < 10 * 60_000) return _photoIndex
+  const all = []
+  for (const { year, dir, onlyInDirNamed } of PHOTO_YEARS) {
+    const files = walkImages(join(PHOTOS_ROOT, dir), onlyInDirNamed)
+    for (const path of files) all.push({ year, path })
+  }
+  _photoIndex   = all
+  _photoIndexTs = Date.now()
+  console.log(`[fotos] índice construido: ${all.length} imágenes`)
+  return _photoIndex
+}
+
+// Erratas conocidas en los nombres de archivo de origen (carpetas "Separados")
+const INSTRUMENTO_ALIAS = { NADSAQ: 'NASDAQ' }
+
+// Extrae fecha/instrumento del nombre de archivo: "DD-M-YY.ext" o "DD-M-YY_INSTRUMENTO.ext"
+// (2022/2023 usan numeración secuencial sin fecha, ej. "0001.png")
+function parseFotoInfo({ year, path }) {
+  const stem = basename(path).replace(/\.[^.]+$/, '')
+  const m = stem.match(/^(\d{1,2})-(\d{1,2})-(\d{2})(?:_(.+))?$/)
+  if (m) {
+    const [, d, mo, yy] = m
+    const instrumentoRaw = m[4]?.toUpperCase() ?? null
+    const instrumento = instrumentoRaw ? (INSTRUMENTO_ALIAS[instrumentoRaw] ?? instrumentoRaw) : null
+    return { year, fecha: `20${yy}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`, instrumento, numero: null }
+  }
+  return { year, fecha: null, instrumento: null, numero: stem }
+}
+
+function photoToDTO(pick) {
+  const rel = relative(PHOTOS_ROOT, pick.path)
+  return { id: Buffer.from(rel).toString('base64url'), ...parseFotoInfo(pick) }
+}
+
+app.get('/api/fotos/aleatoria', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    const idx = getPhotoIndex()
+    if (idx.length === 0) return res.status(404).json({ error: 'Sin fotos disponibles' })
+    const pick = idx[Math.floor(Math.random() * idx.length)]
+    res.json({ total: idx.length, ...photoToDTO(pick) })
+  } catch (err) {
+    console.error('[fotos/aleatoria]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Catálogo completo (sin bytes de imagen) para que el cliente filtre por fecha/instrumento/resultado
+app.get('/api/fotos/lista', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    const idx = getPhotoIndex()
+    res.json({ total: idx.length, fotos: idx.map(photoToDTO) })
+  } catch (err) {
+    console.error('[fotos/lista]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/api/fotos/archivo', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).end()
+  try {
+    const rel  = Buffer.from(req.query.id ?? '', 'base64url').toString('utf8')
+    const abs  = resolve(join(PHOTOS_ROOT, rel))
+    const root = resolve(PHOTOS_ROOT) + sep
+    if (!abs.startsWith(root)) return res.status(400).end()
+    res.sendFile(abs)
+  } catch {
+    res.status(400).end()
   }
 })
 

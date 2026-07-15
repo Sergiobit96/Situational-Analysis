@@ -839,6 +839,8 @@ body {
   color: var(--accent-2);
   font-weight: 600;
 }
+.dia-esp-chip:disabled { opacity: 0.35; cursor: not-allowed; }
+.dia-esp-chip:disabled:hover { border-color: var(--border); color: var(--muted); }
 
 /* ── Filtro de eventos económicos ── */
 .filtro-eventos { display: flex; flex-wrap: wrap; gap: 0.35rem; }
@@ -1722,6 +1724,63 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
+}
+
+/* ═══════════════════════════════════════
+   FOTOS
+═══════════════════════════════════════ */
+
+.fotos-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-top: 1.25rem;
+}
+
+.fotos-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.fotos-total {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.fotos-error {
+  color: var(--red);
+  font-size: 0.85rem;
+}
+
+.fotos-placeholder {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 3rem;
+}
+
+.fotos-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.fotos-img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  border-radius: 6px;
+  align-self: center;
+}
+
+.fotos-caption {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 /* ═══════════════════════════════════════

@@ -5,6 +5,7 @@ import Calendario from './Calendario'
 import Pipeline from './Pipeline'
 import QuoteBar from './QuoteBar'
 import Operaciones from './Operaciones'
+import Fotos from './Fotos'
 import './App.css'
 
 const TABS = [
@@ -12,7 +13,10 @@ const TABS = [
   { id: 'datos',    label: 'Subir datos' },
   { id: 'cal',      label: 'Calendario' },
   { id: 'ops',      label: 'Operaciones' },
-  ...( import.meta.env.DEV ? [{ id: 'pipeline', label: '▶ Pipeline' }] : []),
+  ...( import.meta.env.DEV ? [
+    { id: 'pipeline', label: '▶ Pipeline' },
+    { id: 'fotos',    label: '📷 Fotos' },
+  ] : []),
 ]
 
 export default function App() {
@@ -39,6 +43,7 @@ export default function App() {
       {tab === 'cal'      && <Calendario />}
       {tab === 'ops'      && <Operaciones />}
       {tab === 'pipeline' && <Pipeline />}
+      {tab === 'fotos'    && <Fotos />}
     </div>
   )
 }

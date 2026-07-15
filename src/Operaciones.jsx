@@ -8,6 +8,9 @@ const PAGE_SIZE = 50
 
 const fmtPrecio = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+// Clave para no duplicar una operación ya cargada al añadir el archivo de otro año
+const claveTrade = t => `${t.producto}|${t.openTime}|${t.closeTime}`
+
 const TIMEFRAMES = [
   { label: '1m',  duka: 'm1'  },
   { label: '5m',  duka: 'm5'  },
@@ -46,13 +49,17 @@ export default function Operaciones() {
       const buffer = await file.arrayBuffer()
       const parsed = await parseTradesXLSX(buffer)
       if (!parsed.length) throw new Error('No se encontraron filas de tipo TRADE en el archivo')
-      setTrades(parsed)
+      // Se añade al histórico ya cargado (p.ej. subir "DAY 2025.xlsx" y luego
+      // "DAY 2026.xlsx") en vez de reemplazarlo, evitando duplicar operaciones repetidas.
+      const claves = new Set(trades.map(claveTrade))
+      const nuevas = parsed.filter(t => !claves.has(claveTrade(t)))
+      setTrades([...trades, ...nuevas].sort((a, b) => a.openTime - b.openTime))
       setError(null)
       setPagina(0)
     } catch (err) {
       setError(err.message)
     }
-  }, [setTrades])
+  }, [trades, setTrades])
 
   const onDrop = useCallback(e => {
     e.preventDefault()
@@ -147,7 +154,7 @@ export default function Operaciones() {
       >
         <input id="trades-file-input" type="file" accept=".xlsx" hidden onChange={onFileInput} />
         {trades.length ? (
-          <span className="drop-replace">📂 Cambiar archivo de operaciones</span>
+          <span className="drop-replace">📂 Añadir otro archivo de operaciones (p.ej. de otro año)</span>
         ) : (
           <>
             <div className="drop-icon">📈</div>
@@ -155,7 +162,8 @@ export default function Operaciones() {
               {dragging ? 'Suelta el archivo aquí' : 'Arrastra tu diario de operaciones (.xlsx) o haz clic para seleccionar'}
             </div>
             <div className="drop-hint">
-              Formato del diario "DAY &lt;año&gt;.xlsx": hoja con el nombre del año y columnas -ENTRY-/-EXIT-.
+              Formato del diario "DAY &lt;año&gt;.xlsx": hoja(s) con el nombre del año y columnas -ENTRY-/-EXIT-.
+              Puedes subir varios años, ya sea en el mismo archivo (una hoja por año) o subiendo un archivo por año.
               <br />Los datos se procesan solo en tu navegador, no se suben a ningún servidor.
             </div>
           </>

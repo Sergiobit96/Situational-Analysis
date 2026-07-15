@@ -28,30 +28,28 @@ function celdaATimestamp(serial) {
   return utc + madridOffsetAt(utc)
 }
 
-function buscarFilaCabecera(filas) {
+function buscarFilaCabeceraDiario(filas) {
   return filas.findIndex(f => f?.includes('-EXIT-') && f?.includes('-ENTRY-'))
 }
 
-// Parsea el diario de operaciones tipo "DAY <año>.xlsx": localiza la hoja nombrada
-// como un año (p.ej. "2026") y extrae cada fila de tipo TRADE (se ignoran las de
-// financiación/rollover marcadas como FIN).
-// Import dinámico: xlsx solo se descarga cuando de verdad se sube un archivo,
-// en vez de engordar el bundle principal de la app para todo el mundo.
-export async function parseTradesXLSX(arrayBuffer) {
-  const XLSX = await import('xlsx')
-  // Sin cellDates: las celdas de fecha llegan como número de serie de Excel (no como
-  // Date), para poder convertirlas nosotros mismos con celdaATimestamp() de forma fiable.
-  const wb = XLSX.read(arrayBuffer, { type: 'array' })
+const MES_ENTRE_PARENTESIS = /\((Jan|Feb|Mar|Apr|May|Jun|June|Jul|Aug|Sep|Oct|Nov|Dec)\)/i
 
-  const nombreHoja = wb.SheetNames.find(n => /^\d{4}$/.test(n.trim())) ?? wb.SheetNames[0]
-  const ws   = wb.Sheets[nombreHoja]
-  const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
+// El bróker usa variantes del mismo instrumento según el tipo de contrato ("Silver" vs
+// "Silver (Variable Spreads)", "Germany 40" vs "Germany 40 - Future (Dec)"...): sin
+// normalizar, cada variante aparecía como un producto distinto y el filtro de
+// instrumento (y el ticker de PRODUCTO_A_TICKER) solo pillaba una de ellas.
+function normalizarProducto(nombre) {
+  return nombre
+    .replace(/\s*-\s*(Rolling\s+)?Future\b/i, '')
+    .replace(MES_ENTRE_PARENTESIS, '')
+    .replace(/\s*\(Variable Spreads\)/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
-  const iCab = buscarFilaCabecera(filas)
-  if (iCab === -1) {
-    throw new Error(`No se encontró la cabecera de operaciones (-EXIT-/-ENTRY-) en la hoja "${nombreHoja}"`)
-  }
-
+// Hoja del diario "DAY <año>.xlsx": cabecera con marcadores -ENTRY-/-EXIT- y una fila
+// ACTION==='TRADE' por operación.
+function parseHojaDiario(filas, iCab) {
   const cab   = filas[iCab]
   const col   = nombre => cab.indexOf(nombre)
   const iExit    = col('-EXIT-')
@@ -75,7 +73,7 @@ export async function parseTradesXLSX(arrayBuffer) {
     const closePrice = parseFloat(fila[iClose])
     if (openTime == null || closeTime == null || isNaN(openPrice) || isNaN(closePrice)) continue
 
-    const producto = fila[iProduct]?.toString().trim() ?? ''
+    const producto = normalizarProducto(fila[iProduct]?.toString().trim() ?? '')
     trades.push({
       producto,
       ticker:    PRODUCTO_A_TICKER[producto] ?? null,
@@ -85,6 +83,102 @@ export async function parseTradesXLSX(arrayBuffer) {
       closeTime, closePrice,
       puntos: iDif !== -1 && !isNaN(parseFloat(fila[iDif])) ? parseFloat(fila[iDif]) : closePrice - openPrice,
     })
+  }
+  return trades
+}
+
+function esCabeceraHistorial(fila) {
+  return Array.isArray(fila) && fila.includes('Transaction.Date') && fila.includes('Open.Period')
+}
+
+// Hoja de tipo "Historial de transacciones" (export de cuenta completo, no el diario
+// día a día): cabecera en la primera fila con columnas Transaction.Date/Open.Period/
+// Opening/Closing/P.L. El bróker etiquetó las operaciones como ACTION==='TRADE' hasta
+// mediados de 2023 y como 'Trade Payable'/'Trade Receivable' (según si cerraron en
+// pérdida o beneficio) a partir de esa fecha — se tratan todas como la misma operación.
+function parseHojaHistorial(filas) {
+  const ACCIONES_TRADE = new Set(['TRADE', 'Trade Payable', 'Trade Receivable'])
+  const cab      = filas[0]
+  const col      = nombre => cab.indexOf(nombre)
+  const iFecha   = col('Transaction.Date')
+  const iAction  = col('Action')
+  const iDesc    = col('Description')
+  const iAmount  = col('Amount')
+  const iEntry   = col('Open.Period')
+  const iOpen    = col('Opening')
+  const iClose   = col('Closing')
+  const iPL      = col('P.L')
+
+  const trades = []
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i]
+    if (!fila || !ACCIONES_TRADE.has(fila[iAction])) continue
+
+    const openTime  = celdaATimestamp(fila[iEntry])
+    const closeTime = celdaATimestamp(fila[iFecha])
+    const openPrice  = parseFloat(fila[iOpen])
+    const closePrice = parseFloat(fila[iClose])
+    const pl = parseFloat(fila[iPL])
+    if (openTime == null || closeTime == null || isNaN(openPrice) || isNaN(closePrice) || isNaN(pl)) continue
+
+    // No hay columna de dirección explícita: se infiere comparando el signo del P&L
+    // con el del movimiento de precio (mismo signo → compra, signo contrario → venta).
+    const diff = closePrice - openPrice
+    const direccion = (pl === 0 || diff === 0) ? null : ((pl > 0) === (diff > 0) ? 'Buy' : 'Sell')
+    const size = iAmount !== -1 ? parseFloat(fila[iAmount]) : NaN
+    const producto = normalizarProducto(fila[iDesc]?.toString().trim() ?? '')
+
+    trades.push({
+      producto,
+      ticker:    PRODUCTO_A_TICKER[producto] ?? null,
+      direccion,
+      size:      !isNaN(size) ? size : null,
+      openTime, openPrice,
+      closeTime, closePrice,
+      // "Puntos" = movimiento de precio en positivo-si-hay-beneficio, no el P&L en
+      // divisa: se deshace el tamaño de la posición (P.L / Amount) para que sea
+      // comparable con las operaciones del formato diario.
+      puntos: !isNaN(size) && size !== 0 ? pl / size : (direccion === 'Sell' ? -diff : diff),
+    })
+  }
+  return trades
+}
+
+// Admite dos formatos de export, detectados por el contenido de cada hoja (no por su
+// nombre): el diario "DAY <año>.xlsx" (una hoja por año, cabecera -ENTRY-/-EXIT-) y el
+// "Historial de transacciones" de la cuenta completa (una única hoja con años mezclados,
+// cabecera Transaction.Date/Open.Period). Se recorren todas las hojas del libro y se usa
+// cualquiera que encaje con alguno de los dos formatos, ignorando el resto (p.ej. hojas
+// de resumen/pivote); así un mismo archivo o varios subidos por separado pueden traer
+// cualquier combinación de años.
+// Import dinámico: xlsx solo se descarga cuando de verdad se sube un archivo,
+// en vez de engordar el bundle principal de la app para todo el mundo.
+export async function parseTradesXLSX(arrayBuffer) {
+  const XLSX = await import('xlsx')
+  // Sin cellDates: las celdas de fecha llegan como número de serie de Excel (no como
+  // Date), para poder convertirlas nosotros mismos con celdaATimestamp() de forma fiable.
+  const wb = XLSX.read(arrayBuffer, { type: 'array' })
+
+  const trades = []
+  let algunaHojaReconocida = false
+  for (const nombreHoja of wb.SheetNames) {
+    const ws    = wb.Sheets[nombreHoja]
+    const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
+
+    const iCab = buscarFilaCabeceraDiario(filas)
+    if (iCab !== -1) {
+      algunaHojaReconocida = true
+      trades.push(...parseHojaDiario(filas, iCab))
+      continue
+    }
+    if (esCabeceraHistorial(filas[0])) {
+      algunaHojaReconocida = true
+      trades.push(...parseHojaHistorial(filas))
+    }
+  }
+
+  if (!algunaHojaReconocida) {
+    throw new Error('No se encontró ninguna hoja con formato de operaciones reconocido (columnas -ENTRY-/-EXIT- o Transaction.Date/Open.Period)')
   }
 
   trades.sort((a, b) => a.openTime - b.openTime)

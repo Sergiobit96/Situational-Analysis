@@ -232,6 +232,20 @@ function toCache(key, data, ttl = CACHE_TTL) {
 // fetch() de Node solo da "fetch failed"; la causa real (ECONNRESET, ETIMEDOUT…) va en err.cause
 const errDetalle = err => err.cause?.code ?? err.cause?.message ?? err.message
 
+// dukascopy-node descarga en tandas de 10 conexiones en paralelo con ~10s de connect-timeout
+// cada una; sin límite propio, una caída del feed encadena tanda tras tanda y la petición
+// se queda "colgada" varios minutos antes de fallar. Cortamos a los 10s (una sola tanda) para
+// que el fallback (Yahoo Finance / disco) entre en juego enseguida en vez de hacer esperar.
+const DUKA_TIMEOUT_MS = 10_000
+function dukaFetch(params) {
+  return Promise.race([
+    getHistoricalRates(params),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Dukascopy: sin respuesta en ${DUKA_TIMEOUT_MS / 1000}s`)), DUKA_TIMEOUT_MS)
+    ),
+  ])
+}
+
 // Timezone helpers
 const getMadridDate = ts =>
   new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
@@ -342,7 +356,7 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   console.log(`[Dukascopy H1→Diario] Descargando ${instrument} desde ${from.toISOString().slice(0, 10)}…`)
   let bars
   try {
-    bars = await getHistoricalRates({
+    bars = await dukaFetch({
       instrument,
       dates:     { from, to: new Date() },
       timeframe: 'h1',
@@ -412,7 +426,7 @@ async function obtenerUltimasVelasDiarias(instrument) {
   const from = new Date(Date.now() - 15 * 86400_000)
   let bars
   try {
-    bars = await getHistoricalRates({
+    bars = await dukaFetch({
       instrument,
       dates:     { from, to: new Date() },
       timeframe: 'd1',
@@ -555,7 +569,7 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
   const from = new Date(date + 'T00:00:00Z')
   const to   = new Date(date + 'T23:59:00Z')
 
-  const data = await getHistoricalRates({
+  const data = await dukaFetch({
     instrument,
     dates:     { from, to },
     timeframe: tf,

@@ -5,11 +5,11 @@ import { crearHerramientasDibujo } from './chartDrawingTools'
 const HERRAMIENTAS = [
   { id: 'cursor',    icon: '↖',   title: 'Cursor / seleccionar' },
   { id: 'trendline', icon: '╱',   title: 'Línea de tendencia' },
-  { id: 'fib',       icon: 'Fib', title: 'Retroceso de Fibonacci' },
+  { id: 'fib',       icon: 'Fib', title: 'Fibonacci (retroceso + extensión)' },
   { id: 'ray',       icon: '→',   title: 'Ray horizontal' },
 ]
 
-export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false, herramientas = false, trades }) {
+export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false, herramientas = false, trades, rango, operacion, alto, pantallaCompleta = false, onPantallaCompleta }) {
   const contenedorRef = useRef(null)
   const chartRef      = useRef(null)
   const dibujoRef     = useRef(null)
@@ -25,8 +25,10 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
     dibujoRef.current = null
 
     const { chart, serie } = crearGrafico(contenedorRef.current, {
-      velas, patrones, ticker, prevClose, openPrice, skipTz,
+      velas, patrones, ticker, prevClose, openPrice, skipTz, rango, operacion,
       trades: mostrarTrades ? trades : [],
+      // `alto` lo manda quien pone el gráfico a pantalla completa; sin él vale la altura normal
+      height: alto,
     })
     chartRef.current = chart
 
@@ -47,11 +49,11 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
       chart.remove()
       chartRef.current = null
     }
-  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas, trades, mostrarTrades])
+  }, [velas, patrones, ticker, prevClose, openPrice, skipTz, herramientas, trades, mostrarTrades, rango, operacion, alto])
 
   return (
     <div className="grafico-velas-wrap">
-      {(herramientas || hayTrades) && (
+      {(herramientas || hayTrades || onPantallaCompleta) && (
         <div className="dibujo-toolbar">
           {herramientas && HERRAMIENTAS.map(h => (
             <button
@@ -74,6 +76,13 @@ export default function GraficoVelas({ velas, patrones, ticker, prevClose, openP
               title="Mostrar/ocultar las operaciones del diario en el gráfico"
               onClick={() => setMostrarTrades(v => !v)}
             >📌 Operaciones ({trades.length})</button>
+          )}
+          {onPantallaCompleta && (
+            <button
+              className={`dibujo-btn grafico-pantalla ${pantallaCompleta ? 'activo' : ''}`}
+              title={pantallaCompleta ? 'Salir de pantalla completa (Esc)' : 'Pantalla completa'}
+              onClick={onPantallaCompleta}
+            >{pantallaCompleta ? '⤡' : '⤢'}</button>
           )}
         </div>
       )}

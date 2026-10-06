@@ -3,7 +3,7 @@ import GraficoVelas from './GraficoVelas'
 import { capturarVelasPNG } from './graficoVelasCore'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
-import { DUKA_TICKERS, intradayUrl } from './intradayApi'
+import { DUKA_TICKERS, INSTRUMENTOS as PRESETS, intradayUrl } from './intradayApi'
 
 const DIAS = [
   { n: 1, label: 'L', nombre: 'Lunes' },
@@ -48,19 +48,6 @@ const PERIODOS = [
   { meses: 12, label: '12m' },
   { meses: 24, label: '2a'  },
   { meses: 60, label: '5a'  },
-]
-
-const PRESETS = [
-  { label: 'DAX',    value: '^GDAXI' },
-  { label: 'FTSE',   value: '^FTSE'  },
-  { label: 'Nasdaq', value: '^NDX'   },
-  { label: 'Dow Jones', value: '^DJI'   },
-  { label: 'S&P',    value: '^GSPC'  },
-  { label: 'Russell 2000', value: '^RUT' },
-  { label: 'Nikkei', value: '^N225' },
-  { label: 'Oro',    value: 'XAUUSD' },
-  { label: 'Plata',  value: 'XAGUSD' },
-  { label: 'Petróleo', value: 'USOIL' },
 ]
 
 const STOCKS = {

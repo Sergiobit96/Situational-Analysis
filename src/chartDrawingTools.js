@@ -5,7 +5,11 @@
 
 const HANDLE_RADIUS = 5
 const HIT_TOLERANCE = 6
-const FIB_LEVELS    = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
+// Niveles de retroceso (0–1) + niveles de extensión (>1), proyectados con el mismo
+// ancho acotado que el retroceso (nunca se extienden infinitamente hacia el borde)
+const FIB_RETRACEMENT_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]
+const FIB_EXTENSION_LEVELS   = [1.272, 1.618, 2, 2.618]
+const FIB_LEVELS = [...FIB_RETRACEMENT_LEVELS, ...FIB_EXTENSION_LEVELS]
 
 // Un color distinto por nivel, para diferenciarlos de un vistazo (como en TradingView)
 const FIB_COLORS = {
@@ -16,6 +20,10 @@ const FIB_COLORS = {
   0.618: '#3fb950',
   0.786: '#3b82f6',
   1:     '#7c3aed',
+  1.272: '#06b6d4',
+  1.618: '#ec4899',
+  2:     '#a855f7',
+  2.618: '#f43f5e',
 }
 
 const COLOR_POR_TIPO = { trendline: '#7c3aed', fib: '#f59e0b', ray: '#3b82f6' }
@@ -106,6 +114,16 @@ class RayPrimitive extends BaseDrawingPrimitive {
 }
 
 class FibonacciPrimitive extends BaseDrawingPrimitive {
+  // Sin esto, lightweight-charts solo autoescala el eje de precios a las velas visibles:
+  // los niveles de extensión (que caen fuera del rango A-B) quedarían dibujados fuera
+  // del área visible. Esto le pide a la librería que amplíe el rango para incluirlos siempre.
+  autoscaleInfo() {
+    const { price: priceA } = this._drawing.p1
+    const { price: priceB } = this._drawing.p2 ?? {}
+    if (priceA == null || priceB == null) return null
+    const prices = FIB_LEVELS.map(level => priceA + (priceB - priceA) * level)
+    return { priceRange: { minValue: Math.min(...prices), maxValue: Math.max(...prices) } }
+  }
   _draw(ctx) {
     const a = this._coord(this._drawing.p1)
     const b = this._coord(this._drawing.p2)
@@ -123,7 +141,7 @@ class FibonacciPrimitive extends BaseDrawingPrimitive {
       const color = FIB_COLORS[level] ?? this._drawing.color
       ctx.strokeStyle = color
       ctx.globalAlpha = 0.85
-      ctx.lineWidth = level === 0 || level === 1 ? 1.5 : 1
+      ctx.lineWidth = level === 0 || level === 1 ? 2.5 : 1.75
       ctx.beginPath()
       ctx.moveTo(x1, y)
       ctx.lineTo(x2, y)

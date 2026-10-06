@@ -31,9 +31,13 @@ async function getAuth() {
 const getMadridDate = t =>
   new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
 
+// Intervalos de Yahoo equivalentes a cada timeframe de Dukascopy (los que usa la interfaz)
+const DUKA_TF_TO_YF = { m1: '1m', m5: '5m', m15: '15m', m30: '30m', h1: '60m' }
+
 export default async function handler(req, res) {
-  const { ticker, date } = req.query ?? {}
+  const { ticker, date, timeframe } = req.query ?? {}
   if (!ticker || !date) return res.status(400).json({ error: 'ticker y date requeridos' })
+  const interval = DUKA_TF_TO_YF[timeframe] ?? '15m'
 
   try {
     const auth  = await getAuth()
@@ -42,13 +46,13 @@ export default async function handler(req, res) {
     const sym   = encodeURIComponent(ticker)
     const crumb = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
     const hdrs  = auth ? { 'User-Agent': UA, 'Cookie': auth.cookie } : { 'User-Agent': UA }
-    const url   = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=15m&period1=${p1}&period2=${p2}${crumb}`
+    const url   = `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?interval=${interval}&period1=${p1}&period2=${p2}${crumb}`
 
     const resp = await fetch(url, { headers: hdrs })
     const json = await resp.json()
     const r    = json.chart?.result?.[0]
 
-    if (!r) return res.json({ ticker, date, velas: [], fuente: 'Yahoo 15m' })
+    if (!r) return res.json({ ticker, date, velas: [], fuente: `Yahoo ${interval}` })
 
     const ts    = r.timestamp ?? []
     const q     = r.indicators.quote[0]
@@ -66,7 +70,7 @@ export default async function handler(req, res) {
       })
     }
 
-    res.json({ ticker, date, velas, fuente: 'Yahoo 15m' })
+    res.json({ ticker, date, velas, fuente: `Yahoo ${interval}` })
   } catch (err) {
     console.error('[yf-intraday]', err.message)
     res.status(500).json({ error: err.message })

@@ -1,4 +1,4 @@
-import { madridOffsetAt } from './timezone'
+import { madridOffsetAt, londresOffsetAt } from './timezone'
 
 // Nombre de producto (tal cual aparece en el diario) → ticker usado en el resto de la app
 export const PRODUCTO_A_TICKER = {
@@ -16,21 +16,129 @@ export const PRODUCTO_A_TICKER = {
 // usar la opción `cellDates` de la librería xlsx: para este archivo esa conversión
 // desplazaba la hora casi 1h respecto al valor real de la celda (verificado contra
 // openpyxl y contra la fórmula estándar de fecha de Excel).
-// El diario registra en hora de Londres fija (sin cambio de horario, equivale a UTC),
-// así que el valor reconstruido YA es UTC real; se le suma el desfase de Madrid
-// (CET/CEST, variable según la época del año) para encajar con el resto del chart,
-// que muestra las velas con ese mismo desplazamiento dinámico.
+//
+// La celda guarda la hora de pared de Londres, CON su cambio de horario (GMT en invierno,
+// BST en verano): comprobado cruzando 144 entradas y salidas con las velas de 15 min, donde
+// el precio cae dentro del rango de su vela en el 87% de los casos con este criterio y solo
+// en el 22% si se toma la celda como UTC en verano. Por eso primero se deshace el desfase
+// de Londres para tener UTC real y luego se suma el de Madrid (CET/CEST), que es el mismo
+// desplazamiento con el que el chart pinta las velas.
 const EXCEL_EPOCH_UTC_MS = Date.UTC(1899, 11, 30)
 
 function celdaATimestamp(serial) {
   if (typeof serial !== 'number' || isNaN(serial)) return null
-  const utc = Math.floor((EXCEL_EPOCH_UTC_MS + serial * 86400000) / 1000)
+  const pared = Math.floor((EXCEL_EPOCH_UTC_MS + serial * 86400000) / 1000)
+  // el desfase se mira con la hora de pared: solo diferiría dentro de la hora del cambio
+  // de horario, de madrugada y con los mercados cerrados
+  const utc = pared - londresOffsetAt(pared)
   return utc + madridOffsetAt(utc)
 }
 
 function buscarFilaCabeceraDiario(filas) {
   return filas.findIndex(f => f?.includes('-EXIT-') && f?.includes('-ENTRY-'))
 }
+
+// Cuánto hay que dividir el precio del diario para llevarlo a la escala del gráfico. El
+// bróker cotiza la plata multiplicada por 100 (6.406,5 en el diario = 64,065 $/onza en
+// XAGUSD), así que sin esto las marcas de esas operaciones se salían del gráfico y las
+// velas quedaban aplastadas. Medido contra las velas: la razón es 99,6 de mediana en plata
+// y 1,00 en oro, DAX y FTSE, que por eso no aparecen aquí.
+export const FACTOR_PRECIO = { XAGUSD: 100 }
+
+// Cuánto vale un punto respecto al tamaño de la posición, para el PNL en dinero del diario,
+// que no trae columna de importe. El oro se cotiza "per 0.1", así que su punto vale 10× el
+// tamaño. Comprobado contra el P.L real del bróker en el historial: con este factor,
+// puntos × |tamaño| coincide con su importe en el 97,7% de las operaciones de 2026 (el
+// resto baila unos céntimos porque el diario redondea la diferencia a un decimal).
+const MULTIPLICADOR_PNL = { 'Gold (per 0.1)': 10 }
+
+function pnlDelDiario(producto, puntos, size) {
+  if (!Number.isFinite(size) || !Number.isFinite(puntos)) return null
+  return puntos * Math.abs(size) * (MULTIPLICADOR_PNL[producto] ?? 1)
+}
+
+// PNL de una operación ya parseada. Las guardadas antes de que el parser lo calculara no
+// traen el campo, así que se reconstruye con el tamaño en lugar de obligar a recargarlas.
+export function pnlDeTrade(t) {
+  if (Number.isFinite(t?.pnl)) return t.pnl
+  return pnlDelDiario(t?.producto, t?.puntos, t?.size)
+}
+
+// Nombre de producto → token de instrumento usado en los nombres de archivo de las
+// capturas locales ("Separados/DD-M-YY_TOKEN.jpg"), para poder cruzar cada operación
+// con su foto vía /api/fotos del servidor local.
+export const PRODUCTO_A_INSTRUMENTO = {
+  'Germany 40':       'DAX',
+  'UK 100':           'FTSE',
+  'Wall Street 30':   'DOW',
+  'US Tech 100':      'NASDAQ',
+  'US 500 (Per 1.0)': 'SP500',
+  'Gold (per 0.1)':   'GOLD',
+  'Silver':           'SILVER',
+}
+
+// Las 12 categorías del "Book of Horror": errores de PROCESO (no de resultado),
+// tal cual están tituladas en la hoja "Scenarios" del diario de Google Sheets.
+export const CATEGORIAS_HORROR = [
+  { n: 1,  nombre: 'Adding aggressively and waiting', corto: 'Adding aggressively' },
+  { n: 2,  nombre: 'Adding and letting it run and it quickly reverses', corto: 'Add + reversa rápida' },
+  { n: 3,  nombre: 'Adding and not letting it run enough', corto: 'Add, corta pronto' },
+  { n: 4,  nombre: 'Being afraid to add', corto: 'Miedo a añadir' },
+  { n: 5,  nombre: 'Getting stopped out very frequently', corto: 'Stops frecuentes' },
+  { n: 6,  nombre: 'Trade goes nowhere for too long', corto: 'No va a ningún lado' },
+  { n: 7,  nombre: 'Being unable to pull the trigger and missing a good trade', corto: 'No apretar el gatillo' },
+  { n: 8,  nombre: 'Adding too aggressively', corto: 'Adding muy agresivo' },
+  { n: 9,  nombre: 'Not accepting the risk and exiting for no reason', corto: 'Salir sin motivo' },
+  { n: 10, nombre: 'Stopped by 1 point', corto: 'Stop por 1 punto' },
+  { n: 11, nombre: 'Flip the switch', corto: 'Flip the switch' },
+  { n: 12, nombre: 'Not exiting manually and waiting for the stop to trigger when feeling incorrect', corto: 'No salir manualmente' },
+]
+
+// La hoja "Scenarios" tiene una columna por categoría (cabecera "#1 ...", "#2 ...", etc.)
+// y en cada columna, los números de sesión ("D53" → 53) que el usuario clasificó ahí.
+function esCabeceraScenarios(fila) {
+  if (!Array.isArray(fila)) return false
+  const conNumero = fila.filter(c => typeof c === 'string' && /^#\d+/.test(c.trim()))
+  return conNumero.length >= 3
+}
+
+// Devuelve { [numeroDeSesion]: [1, 8] } (una sesión puede estar en varias categorías)
+function parseHojaScenarios(filas) {
+  const iCab = filas.findIndex(esCabeceraScenarios)
+  if (iCab === -1) return {}
+  const cab = filas[iCab]
+  const colACategoria = {}
+  cab.forEach((c, i) => {
+    const m = typeof c === 'string' && c.trim().match(/^#(\d+)/)
+    if (m) {
+      const n = parseInt(m[1], 10)
+      if (n >= 1 && n <= CATEGORIAS_HORROR.length) colACategoria[i] = n
+    }
+  })
+
+  const mapa = {}
+  for (let i = iCab + 1; i < filas.length; i++) {
+    const fila = filas[i]
+    if (!fila) continue
+    for (const [colStr, catN] of Object.entries(colACategoria)) {
+      const valor = fila[Number(colStr)]
+      const num = typeof valor === 'number' ? valor
+        : (typeof valor === 'string' && /^\d+$/.test(valor.trim())) ? parseInt(valor, 10)
+        : null
+      if (num == null) continue
+      if (!mapa[num]) mapa[num] = []
+      if (!mapa[num].includes(catN)) mapa[num].push(catN)
+    }
+  }
+  return mapa
+}
+
+// Años a los que NO se les aplica la clasificación de la hoja "Scenarios". La pestaña de
+// DAY 2025 y la de DAY 2026 son copia una de otra —los mismos 25 números de sesión, hasta
+// el mismo "NXT 68"—, así que esos números no son de 2025 y pintaban en sus operaciones
+// etiquetas de otro año. Las de 2025 se dejan sin categoría hasta que se clasifiquen desde
+// la propia app (Operaciones → Etiquetas), que las guarda por trade y no por nº de sesión.
+const SIN_SCENARIOS = new Set([2025])
 
 const MES_ENTRE_PARENTESIS = /\((Jan|Feb|Mar|Apr|May|Jun|June|Jul|Aug|Sep|Oct|Nov|Dec)\)/i
 
@@ -61,6 +169,7 @@ function parseHojaDiario(filas, iCab) {
   const iDir     = col('↑↓')
   const iDif     = col('DIF')
   const iSize    = col('Size')
+  const iSesion  = col('#')
 
   const trades = []
   for (let i = iCab + 1; i < filas.length; i++) {
@@ -74,14 +183,20 @@ function parseHojaDiario(filas, iCab) {
     if (openTime == null || closeTime == null || isNaN(openPrice) || isNaN(closePrice)) continue
 
     const producto = normalizarProducto(fila[iProduct]?.toString().trim() ?? '')
+    const size   = iSize !== -1 ? parseFloat(fila[iSize]) : null
+    const puntos = iDif !== -1 && !isNaN(parseFloat(fila[iDif])) ? parseFloat(fila[iDif]) : closePrice - openPrice
     trades.push({
       producto,
       ticker:    PRODUCTO_A_TICKER[producto] ?? null,
       direccion: fila[iDir] ?? null,
-      size:      iSize !== -1 ? parseFloat(fila[iSize]) : null,
+      size,
+      sesion:    iSesion !== -1 ? (fila[iSesion] ?? null) : null,
+      categorias: [],
       openTime, openPrice,
       closeTime, closePrice,
-      puntos: iDif !== -1 && !isNaN(parseFloat(fila[iDif])) ? parseFloat(fila[iDif]) : closePrice - openPrice,
+      puntos,
+      // el diario no tiene columna de importe: se reconstruye con el tamaño
+      pnl: pnlDelDiario(producto, puntos, size),
     })
   }
   return trades
@@ -133,8 +248,11 @@ function parseHojaHistorial(filas) {
       ticker:    PRODUCTO_A_TICKER[producto] ?? null,
       direccion,
       size:      !isNaN(size) ? size : null,
+      sesion:    null,
+      categorias: [],
       openTime, openPrice,
       closeTime, closePrice,
+      pnl: pl,   // aquí sí viene el importe real de la cuenta
       // "Puntos" = movimiento de precio en positivo-si-hay-beneficio, no el P&L en
       // divisa: se deshace el tamaño de la posición (P.L / Amount) para que sea
       // comparable con las operaciones del formato diario.
@@ -144,27 +262,19 @@ function parseHojaHistorial(filas) {
   return trades
 }
 
-// Admite dos formatos de export, detectados por el contenido de cada hoja (no por su
-// nombre): el diario "DAY <año>.xlsx" (una hoja por año, cabecera -ENTRY-/-EXIT-) y el
-// "Historial de transacciones" de la cuenta completa (una única hoja con años mezclados,
-// cabecera Transaction.Date/Open.Period). Se recorren todas las hojas del libro y se usa
-// cualquiera que encaje con alguno de los dos formatos, ignorando el resto (p.ej. hojas
-// de resumen/pivote); así un mismo archivo o varios subidos por separado pueden traer
-// cualquier combinación de años.
-// Import dinámico: xlsx solo se descarga cuando de verdad se sube un archivo,
-// en vez de engordar el bundle principal de la app para todo el mundo.
-export async function parseTradesXLSX(arrayBuffer) {
-  const XLSX = await import('xlsx')
-  // Sin cellDates: las celdas de fecha llegan como número de serie de Excel (no como
-  // Date), para poder convertirlas nosotros mismos con celdaATimestamp() de forma fiable.
-  const wb = XLSX.read(arrayBuffer, { type: 'array' })
-
+// Detecta el formato de cada hoja por su contenido (no por su nombre) y arma la lista de
+// operaciones: el diario "DAY <año>" (una hoja por año, cabecera -ENTRY-/-EXIT-), el
+// "Historial de transacciones" de la cuenta completa (cabecera Transaction.Date/Open.Period)
+// y la hoja "Scenarios" del Book of Horror, que no aporta operaciones directamente sino el
+// cruce sesión→categoría que se aplica al final sobre las del diario.
+// Compartido entre parseTradesXLSX (hojas de un .xlsx subido) y parseTradesDesdeAPI (hojas
+// leídas directamente de Google Sheets vía el servidor local).
+function hojasATrades(listaDeFilas) {
   const trades = []
+  let scenariosMapa = {}
   let algunaHojaReconocida = false
-  for (const nombreHoja of wb.SheetNames) {
-    const ws    = wb.Sheets[nombreHoja]
-    const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null })
 
+  for (const filas of listaDeFilas) {
     const iCab = buscarFilaCabeceraDiario(filas)
     if (iCab !== -1) {
       algunaHojaReconocida = true
@@ -174,6 +284,13 @@ export async function parseTradesXLSX(arrayBuffer) {
     if (esCabeceraHistorial(filas[0])) {
       algunaHojaReconocida = true
       trades.push(...parseHojaHistorial(filas))
+      continue
+    }
+    // Hoja "Scenarios" del Book of Horror (mismo libro que el diario): mapea número
+    // de sesión ("D53" → 53) a las categorías de error de proceso ya clasificadas.
+    const mapaHoja = parseHojaScenarios(filas)
+    if (Object.keys(mapaHoja).length) {
+      scenariosMapa = { ...scenariosMapa, ...mapaHoja }
     }
   }
 
@@ -181,8 +298,39 @@ export async function parseTradesXLSX(arrayBuffer) {
     throw new Error('No se encontró ninguna hoja con formato de operaciones reconocido (columnas -ENTRY-/-EXIT- o Transaction.Date/Open.Period)')
   }
 
+  // Cruce sesión → categorías: solo aplica a las filas del diario, que sí llevan el
+  // número de sesión ("#" → "D53"); el historial de cuenta no lo tiene.
+  if (Object.keys(scenariosMapa).length) {
+    for (const t of trades) {
+      const m = typeof t.sesion === 'string' && t.sesion.match(/^D(\d+)$/)
+      if (!m) continue
+      if (SIN_SCENARIOS.has(new Date(t.openTime * 1000).getUTCFullYear())) continue
+      const nums = scenariosMapa[parseInt(m[1], 10)]
+      if (nums?.length) t.categorias = nums.map(n => CATEGORIAS_HORROR[n - 1])
+    }
+  }
+
   trades.sort((a, b) => a.openTime - b.openTime)
   return trades
+}
+
+// Import dinámico: xlsx solo se descarga cuando de verdad se sube un archivo,
+// en vez de engordar el bundle principal de la app para todo el mundo.
+export async function parseTradesXLSX(arrayBuffer) {
+  const XLSX = await import('xlsx')
+  // Sin cellDates: las celdas de fecha llegan como número de serie de Excel (no como
+  // Date), para poder convertirlas nosotros mismos con celdaATimestamp() de forma fiable.
+  const wb = XLSX.read(arrayBuffer, { type: 'array' })
+  const listaDeFilas = wb.SheetNames.map(nombreHoja =>
+    XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { header: 1, raw: true, defval: null })
+  )
+  return hojasATrades(listaDeFilas)
+}
+
+// Mismo diario, pero leído directamente de Google Sheets vía el servidor local
+// (endpoint /api/day-trades) en vez de tener que exportar y subir el .xlsx a mano.
+export function parseTradesDesdeAPI({ log, scenarios }) {
+  return hojasATrades([log, scenarios ?? []])
 }
 
 export const fmtFechaTS = ts => new Date(ts * 1000).toISOString().slice(0, 10)

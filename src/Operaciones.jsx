@@ -139,6 +139,14 @@ export default function Operaciones({ abrir, onAbierto }) {
       : `Comentario borrado de ${clave}`))
   }, [guardarAnotacion])
 
+  // El mismo tick de revisado que Trades comentados y Seguimiento: se guarda al momento
+  const alternarRevisado = useCallback(clave => {
+    const nuevo = !(anotaciones[clave]?.revisado === true)
+    return guardarAnotacion(clave, { revisado: nuevo }, d => (d.revisado
+      ? `${clave} marcado como revisado`
+      : `${clave} desmarcado como revisado`))
+  }, [anotaciones, guardarAnotacion])
+
   const mandarABook = useCallback(async (foto, book) => {
     if (!foto) return
     setAvisoBook(null)
@@ -477,6 +485,7 @@ export default function Operaciones({ abrir, onAbierto }) {
     const guardado = (anotaciones[clave] ?? ANOTACION_VACIA).texto ?? ''
     const texto    = borradorTexto?.clave === clave ? borradorTexto.texto : guardado
     const sinGuardar = texto.trim() !== guardado
+    const revisado   = anotaciones[clave]?.revisado === true
 
     return (
       <div className="ops-comentario">
@@ -485,6 +494,11 @@ export default function Operaciones({ abrir, onAbierto }) {
           <span className="ops-comentario-clave">{clave}</span>
           <span className="ops-etiquetas-guardar">
             {sinGuardar && <span className="ops-sin-guardar">sin guardar</span>}
+            <button
+              className={`ts-revisado ${revisado ? 'activo' : ''}`}
+              onClick={() => alternarRevisado(clave)}
+              title={revisado ? 'Marcado como revisado · clic para desmarcar' : 'Marcar como revisado'}
+            >✓ revisado</button>
             <button
               className="diario-add"
               onClick={() => guardarComentario(clave, texto.trim())}

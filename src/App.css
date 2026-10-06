@@ -997,6 +997,8 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
 
 /* ── Filtro de categorías Book of Horror (errores de proceso) ── */
 .horror-chip:hover { border-color: var(--red); color: var(--red); }
+.horror-chip:disabled,
+.horror-chip:disabled:hover { opacity: 0.4; cursor: default; border-color: var(--border); color: inherit; }
 .horror-chip.activo {
   background: rgba(239,68,68, 0.18);
   border-color: var(--red);

@@ -316,11 +316,12 @@ export default function Operaciones({ abrir, onAbierto }) {
   )
 
   // Categorías del Book of Horror presentes en las operaciones cargadas (requiere que
-  // el .xlsx subido incluya la hoja "Scenarios" del mismo libro que el diario)
-  const categoriasDisponibles = useMemo(() => {
-    const presentes = new Set(trades.flatMap(t => (t.categorias ?? []).map(c => c.nombre)))
-    return CATEGORIAS_HORROR.filter(c => presentes.has(c.nombre))
-  }, [trades])
+  // el .xlsx subido incluya la hoja "Scenarios" del mismo libro que el diario). El filtro
+  // enseña las 13; las que no tienen ningún trade salen apagadas.
+  const categoriasPresentes = useMemo(
+    () => new Set(trades.flatMap(t => (t.categorias ?? []).map(c => c.nombre))),
+    [trades],
+  )
 
   const hayFiltros = productosActivos.size > 0 || categoriasActivas.size > 0 || fechaDesde || fechaHasta
 
@@ -767,7 +768,7 @@ export default function Operaciones({ abrir, onAbierto }) {
             </div>
           </div>
 
-          {categoriasDisponibles.length > 0 && (
+          {categoriasPresentes.size > 0 && (
             <div className="filtro-group">
               <label className="filtro-label">
                 Categoría (Book of Horror)
@@ -776,11 +777,13 @@ export default function Operaciones({ abrir, onAbierto }) {
                 )}
               </label>
               <div className="filtro-dias-esp">
-                {categoriasDisponibles.map(c => (
+                {CATEGORIAS_HORROR.map(c => (
                   <button
                     key={c.n}
                     className={`dia-esp-chip horror-chip ${categoriasActivas.has(c.nombre) ? 'activo' : ''}`}
-                    title={c.nombre}
+                    title={categoriasPresentes.has(c.nombre) ? c.nombre : `${c.nombre}
+(ningún trade en esta columna de Scenarios)`}
+                    disabled={!categoriasPresentes.has(c.nombre)}
                     onClick={() => toggleCategoria(c.nombre)}
                   >#{c.n} {c.corto}</button>
                 ))}

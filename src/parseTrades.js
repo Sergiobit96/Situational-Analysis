@@ -77,8 +77,9 @@ export const PRODUCTO_A_INSTRUMENTO = {
   'Silver':           'SILVER',
 }
 
-// Las 12 categorías del "Book of Horror": errores de PROCESO (no de resultado),
-// tal cual están tituladas en la hoja "Scenarios" del diario de Google Sheets.
+// Las categorías del "Book of Horror": errores de PROCESO (no de resultado). Las 12
+// primeras, tal cual están tituladas en la hoja "Scenarios" del diario de Google Sheets;
+// la 13 solo existe en la app.
 export const CATEGORIAS_HORROR = [
   { n: 1,  nombre: 'Adding aggressively and waiting', corto: 'Adding aggressively' },
   { n: 2,  nombre: 'Adding and letting it run and it quickly reverses', corto: 'Add + reversa rápida' },
@@ -92,6 +93,7 @@ export const CATEGORIAS_HORROR = [
   { n: 10, nombre: 'Stopped by 1 point', corto: 'Stop por 1 punto' },
   { n: 11, nombre: 'Flip the switch', corto: 'Flip the switch' },
   { n: 12, nombre: 'Not exiting manually and waiting for the stop to trigger when feeling incorrect', corto: 'No salir manualmente' },
+  { n: 13, nombre: 'Entering with double the position size and getting stopped out', corto: 'Doble tamaño + stop' },
 ]
 
 // La hoja "Scenarios" tiene una columna por categoría (cabecera "#1 ...", "#2 ...", etc.)

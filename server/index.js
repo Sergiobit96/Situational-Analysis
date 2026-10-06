@@ -1457,10 +1457,10 @@ function guardarComentariosTrades(comentarios) {
   renameSync(tmp, TRADES_COMENTARIOS_PATH)
 }
 
-// Lo que hay escrito sobre un trade: su comentario, sus etiquetas (las 12 categorías del
+// Lo que hay escrito sobre un trade: su comentario, sus etiquetas (las 13 categorías del
 // Book of Horror, por número) y si ya está revisado. Todo en la misma anotación, para que
 // respaldar ese JSON respalde el trabajo entero.
-const CATEGORIAS_BOH = 12
+const CATEGORIAS_BOH = 13
 
 function normalizaCats(v) {
   if (!Array.isArray(v)) return []

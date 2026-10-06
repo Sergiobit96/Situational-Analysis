@@ -200,7 +200,7 @@ export default function DiarioTrades() {
     }
   }, [])
 
-  // Las 12 etiquetas del Book of Horror para un trade. Marcar solo cambia el borrador:
+  // Las 13 etiquetas del Book of Horror para un trade. Marcar solo cambia el borrador:
   // lo que las asocia al trade es el botón de guardar, igual que en Operaciones.
   const editorEtiquetas = trade => {
     const guardadas = trade.cats ?? []

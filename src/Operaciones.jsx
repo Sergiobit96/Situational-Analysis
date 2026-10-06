@@ -94,7 +94,7 @@ export default function Operaciones({ abrir, onAbierto }) {
     return () => { vivo = false }
   }, [])
 
-  // Etiquetas ya puestas a cada trade (las 12 categorías del Book of Horror). Viven en el
+  // Etiquetas ya puestas a cada trade (las 13 categorías del Book of Horror). Viven en el
   // mismo JSON que los comentarios, junto a las fotos de Drive.
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -474,7 +474,7 @@ export default function Operaciones({ abrir, onAbierto }) {
     )
   }
 
-  // Etiquetas del trade seleccionado: las 12 del Book of Horror. Marcar y desmarcar solo
+  // Etiquetas del trade seleccionado: las 13 del Book of Horror. Marcar y desmarcar solo
   // cambia el borrador; lo que las asocia al trade es el botón de guardar, que las escribe
   // donde los comentarios y hace que salgan en el book junto a su captura.
   // Comentario del trade seleccionado, al final del panel. Como las etiquetas: lo escrito

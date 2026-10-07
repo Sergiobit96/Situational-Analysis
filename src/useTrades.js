@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useSyncExternalStore, useCallback } from 'react'
 import { londresOffsetAt } from './timezone'
 
 const STORAGE_KEY = 'abcd_trades_v1'
@@ -55,20 +55,30 @@ function leerAlmacenadas() {
   }
 }
 
+// Copia en memoria compartida por todas las pestañas de la app: la que se monta después ve
+// lo último aunque localStorage no haya podido guardarlo (cuota llena), y las que ya están
+// abiertas se repintan al cambiar, en vez de quedarse con lo que leyeron al montarse.
+let enMemoria = null
+const actuales = () => (enMemoria ??= leerAlmacenadas())
+const oyentes  = new Set()
+const suscribir = fn => { oyentes.add(fn); return () => oyentes.delete(fn) }
+
 // Operaciones parseadas del diario Excel, persistidas en localStorage (100% local:
 // el archivo nunca sale del navegador) para que estén disponibles en cualquier pestaña.
 // setTrades admite tanto un array como un actualizador funcional (prev => next), igual
 // que el setState nativo de React, para poder fusionar varias fuentes sin condiciones
 // de carrera cuando se sincronizan varios años a la vez.
+// Se guarda fuera del actualizador de React a propósito: React no lo ejecuta si el
+// componente ya se desmontó, y salir de Operaciones antes de que acabara la sincronización
+// (tarda 2-3 s) tiraba el resultado sin guardarlo.
 export function useTrades() {
-  const [trades, setTradesState] = useState(leerAlmacenadas)
+  const trades = useSyncExternalStore(suscribir, actuales)
 
   const setTrades = useCallback(nuevas => {
-    setTradesState(prev => {
-      const siguiente = typeof nuevas === 'function' ? nuevas(prev) : nuevas
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(siguiente)) } catch { /* cuota llena, no crítico */ }
-      return siguiente
-    })
+    const siguiente = typeof nuevas === 'function' ? nuevas(actuales()) : nuevas
+    enMemoria = siguiente
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(siguiente)) } catch { /* cuota llena, no crítico */ }
+    oyentes.forEach(fn => fn())
   }, [])
 
   return [trades, setTrades]

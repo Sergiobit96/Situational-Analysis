@@ -16,6 +16,8 @@ const fmtSize = v => Number.isFinite(v) ? Math.abs(v).toLocaleString('es-ES', { 
 // Clave para no duplicar una operación ya cargada al añadir el archivo de otro año
 const claveTrade = t => `${t.producto}|${t.openTime}|${t.closeTime}`
 
+const anioDe = t => new Date(t.openTime * 1000).getUTCFullYear()
+
 const TIMEFRAMES = [
   { label: '1m',  duka: 'm1'  },
   { label: '5m',  duka: 'm5'  },
@@ -178,6 +180,16 @@ export default function Operaciones({ abrir, onAbierto }) {
     return añadidas
   }, [setTrades])
 
+  // Al sincronizar, lo que llega de Sheets sustituye a lo guardado de esos mismos años en
+  // vez de sumarse: con mergeTrades las operaciones guardadas por un parser anterior (sin
+  // importe, o con la hora movida un segundo) se quedaban para siempre junto a las buenas.
+  // Solo se tocan los años que traen alguna operación, para que una hoja vacía no borre nada.
+  const reemplazarAnios = useCallback(frescas => {
+    const anios = new Set(frescas.map(anioDe))
+    setTrades(prev => [...prev.filter(t => !anios.has(anioDe(t))), ...frescas]
+      .sort((a, b) => a.openTime - b.openTime))
+  }, [setTrades])
+
   // Trae el diario directamente de Google Sheets vía el servidor local, sin tener que
   // exportar y subir el .xlsx a mano cada día.
   const sincronizarAnios = useCallback(async years => {
@@ -201,11 +213,11 @@ export default function Operaciones({ abrir, onAbierto }) {
         if (!data.error && Array.isArray(data.filas)) {
           const conDiario = new Set(years)
           delHistorial = parseTradesDesdeAPI({ log: data.filas, scenarios: [] })
-            .filter(t => !conDiario.has(new Date(t.openTime * 1000).getUTCFullYear()))
+            .filter(t => !conDiario.has(anioDe(t)))
         }
       } catch { /* sin historial se sigue con los diarios */ }
 
-      mergeTrades([...resultados.flat(), ...delHistorial])
+      reemplazarAnios([...resultados.flat(), ...delHistorial])
       setErrorSync(null)
       setUltimaSync(new Date())
     } catch (err) {
@@ -213,7 +225,7 @@ export default function Operaciones({ abrir, onAbierto }) {
     } finally {
       setSincronizando(false)
     }
-  }, [mergeTrades])
+  }, [reemplazarAnios])
 
   // Al abrir la pestaña: averigua qué años están conectados a Sheets y los sincroniza
   // solo, sin que haga falta subir el archivo a mano.
@@ -923,6 +935,10 @@ export default function Operaciones({ abrir, onAbierto }) {
 
               {!pantallaCompleta && editorEtiquetas(seleccionado)}
 
+              {!pantallaCompleta && visorFoto(seleccionado)}
+
+              {!pantallaCompleta && editorComentario(seleccionado)}
+
               {!seleccionado.ticker && (
                 <div className="filtro-vacio">
                   "{seleccionado.producto}" no tiene un ticker reconocido en la app, no se puede cargar el gráfico.
@@ -946,10 +962,6 @@ export default function Operaciones({ abrir, onAbierto }) {
               {seleccionado.ticker && !cargandoVelas && velas.length === 0 && (
                 <div className="filtro-vacio">Sin datos intraday disponibles para esta fecha.</div>
               )}
-
-              {!pantallaCompleta && editorComentario(seleccionado)}
-
-              {!pantallaCompleta && visorFoto(seleccionado)}
 
               {/* saltar de sesión sin volver a la tabla, al final del repaso */}
               {!pantallaCompleta && (

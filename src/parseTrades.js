@@ -256,9 +256,13 @@ function parseHojaHistorial(filas) {
       closeTime, closePrice,
       pnl: pl,   // aquí sí viene el importe real de la cuenta
       // "Puntos" = movimiento de precio en positivo-si-hay-beneficio, no el P&L en
-      // divisa: se deshace el tamaño de la posición (P.L / Amount) para que sea
-      // comparable con las operaciones del formato diario.
-      puntos: !isNaN(size) && size !== 0 ? pl / size : (direccion === 'Sell' ? -diff : diff),
+      // divisa: se deshace el tamaño de la posición (P.L / |Amount|) para que sea
+      // comparable con las operaciones del formato diario. El Amount viene en negativo en
+      // las ventas: dividir por él con signo daba la vuelta a todas, y el PNL reconstruido
+      // de 2021-2024 salía -40.266 en vez de -6.696.
+      puntos: !isNaN(size) && size !== 0
+        ? pl / (Math.abs(size) * (MULTIPLICADOR_PNL[producto] ?? 1))
+        : (direccion === 'Sell' ? -diff : diff),
     })
   }
   return trades

@@ -2996,7 +2996,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
   border-radius: 8px;
   padding: 0.5rem;
 }
-.ts-etiquetas .dia-esp-chip { font-size: 0.66rem; padding: 0.16rem 0.4rem; }
+.ts-etiquetas .dia-esp-chip { font-size: 0.82rem; padding: 0.26rem 0.7rem; }
 .ts-etiquetas .ops-etiquetas-guardar { margin-left: 0; justify-content: flex-end; }
 .ts-badges { gap: 0.2rem; }
 .ts-revisado.abierto { color: var(--text); border-color: var(--accent); background: rgba(109,93,252,0.14); }
@@ -3311,3 +3311,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   white-space: nowrap;
 }
 .ops-nav-pie { justify-content: center; margin-top: 0.7rem; }
+.fotos-comentario .fotos-etiquetas { gap: 0.35rem; }
+.fotos-comentario .fotos-etiquetas .dia-esp-chip { font-size: 0.85rem; padding: 0.3rem 0.75rem; }
+
+/* Etiquetas del Book of Horror en Operaciones: legibles sin tener que afinar la vista */
+.ops-etiquetas-chips .dia-esp-chip { font-size: 0.85rem; padding: 0.3rem 0.75rem; }

@@ -46,6 +46,7 @@ export default function Fotos() {
   // mismas que se ven en Trades comentados y en Operaciones.
   const [anotaciones, setAnotaciones] = useState({})
   const [borrador,  setBorrador]  = useState('')
+  const [catsBorrador, setCatsBorrador] = useState(null)   // { clave, cats } mientras se tocan
   const [editando,  setEditando]  = useState(false)
   const [guardando, setGuardando] = useState(false)
   // qué fotos se han mandado a cada book en esta sesión, para marcar el botón
@@ -57,6 +58,7 @@ export default function Fotos() {
   const [fechaDesde, setFechaDesde] = useState('')
   const [fechaHasta, setFechaHasta] = useState('')
   const [filtroResultado, setFiltroResultado] = useState('todos') // todos | ganador | perdedor
+  const [filtroRevisado,  setFiltroRevisado]  = useState('todos') // todos | si | no
 
   useEffect(() => {
     fetch(`${API}/api/fotos/lista`)
@@ -126,17 +128,28 @@ export default function Fotos() {
     if (fechaDesde && (!f.fecha || f.fecha < fechaDesde)) return false
     if (fechaHasta && (!f.fecha || f.fecha > fechaHasta)) return false
     if (filtroResultado !== 'todos' && resultadoDeFoto(f) !== filtroResultado) return false
+    if (filtroRevisado !== 'todos') {
+      const revisado = !!anotaciones[claveDeFoto(f)]?.revisado
+      if (revisado !== (filtroRevisado === 'si')) return false
+    }
     return true
-  }), [catalogo, filtroAnios, filtroMeses, filtroInstrumentos, fechaDesde, fechaHasta, filtroResultado, resultadoDeFoto])
+  }), [catalogo, filtroAnios, filtroMeses, filtroInstrumentos, fechaDesde, fechaHasta, filtroResultado, resultadoDeFoto, filtroRevisado, anotaciones])
 
-  const hayFiltros = filtroAnios.size > 0 || filtroMeses.size > 0 || filtroInstrumentos.size > 0 || fechaDesde || fechaHasta || filtroResultado !== 'todos'
+  // cuántas capturas del catálogo tienen ya el tick, para saber cuánto queda por repasar
+  const revisadas = useMemo(
+    () => catalogo.filter(f => anotaciones[claveDeFoto(f)]?.revisado).length,
+    [catalogo, anotaciones],
+  )
+
+  const hayFiltros = filtroAnios.size > 0 || filtroMeses.size > 0 || filtroInstrumentos.size > 0
+    || fechaDesde || fechaHasta || filtroResultado !== 'todos' || filtroRevisado !== 'todos'
 
   const toggleSet = (set, setSet, valor) => {
     const s = new Set(set); s.has(valor) ? s.delete(valor) : s.add(valor); setSet(s)
   }
   const limpiarFiltros = () => {
     setFiltroAnios(new Set()); setFiltroMeses(new Set()); setFiltroInstrumentos(new Set())
-    setFechaDesde(''); setFechaHasta(''); setFiltroResultado('todos')
+    setFechaDesde(''); setFechaHasta(''); setFiltroResultado('todos'); setFiltroRevisado('todos')
   }
 
   function mostrarAleatoria() {
@@ -150,26 +163,43 @@ export default function Fotos() {
 
   // El comentario se guarda por clave de trade, no por archivo: la misma anotación que ya
   // existe en Trades comentados, así que lo que escribas aquí sale allí y al revés.
-  const guardarComentario = useCallback(async (clave, texto) => {
+  const guardarAnotacion = useCallback(async (clave, cambios, mensaje) => {
+    if (!clave) return
     setError(null)
     setGuardando(true)
     try {
       const res = await fetch(`${API}/api/trades-comentados/etiquetas?clave=${encodeURIComponent(clave)}`, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ comentario: texto }),
+        body:    JSON.stringify(cambios),
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setAnotaciones(prev => ({ ...prev, [clave]: { texto: data.texto, cats: data.cats, revisado: data.revisado } }))
-      setEditando(false)
-      setAviso(texto ? 'Comentario guardado' : 'Comentario borrado')
+      setAviso(typeof mensaje === 'function' ? mensaje(data) : mensaje)
     } catch (err) {
-      setError(`No se pudo guardar el comentario: ${err.message}`)
+      setError(`No se pudo guardar: ${err.message}`)
     } finally {
       setGuardando(false)
     }
   }, [])
+
+  const guardarComentario = useCallback(async (clave, texto) => {
+    await guardarAnotacion(clave, { comentario: texto }, texto ? 'Comentario guardado' : 'Comentario borrado')
+    setEditando(false)
+  }, [guardarAnotacion])
+
+  const guardarEtiquetas = useCallback(async (clave, cats) => {
+    await guardarAnotacion(clave, { cats }, d => (d.cats.length
+      ? `${d.cats.length} etiqueta(s) guardadas`
+      : 'Etiquetas quitadas'))
+    setCatsBorrador(null)
+  }, [guardarAnotacion])
+
+  // El tick de revisado se guarda solo, sin botón aparte: es un sí o un no.
+  const alternarRevisado = useCallback((clave, valor) => (
+    guardarAnotacion(clave, { revisado: valor }, valor ? 'Marcado como revisado' : 'Marca de revisado quitada')
+  ), [guardarAnotacion])
 
   // Un clic: copia la captura al book elegido. El original se queda donde está, y si ya
   // estaba en ese book el servidor lo dice en vez de duplicarla.
@@ -275,6 +305,24 @@ export default function Fotos() {
         </div>
       </div>
 
+      <div className="filtro-group">
+        <label className="filtro-label">
+          Revisado
+          <span className="filtro-valor">
+            {revisadas} de {catalogo.length} capturas con el tick puesto
+          </span>
+        </label>
+        <div className="filtro-dias-esp">
+          {[['todos', 'Todas'], ['si', '✓ Revisadas'], ['no', 'Sin revisar']].map(([v, l]) => (
+            <button
+              key={v}
+              className={`dia-esp-chip ${filtroRevisado === v ? 'activo' : ''}`}
+              onClick={() => setFiltroRevisado(v)}
+            >{l}</button>
+          ))}
+        </div>
+      </div>
+
       <div className="fotos-toolbar">
         <button className="btn-run-all" onClick={mostrarAleatoria} disabled={cargandoCatalogo || catalogoFiltrado.length === 0}>
           🎲 Trade aleatorio
@@ -308,8 +356,16 @@ export default function Fotos() {
             {` · ${foto.year}`}
           </div>
           {(() => {
-            const clave     = claveDeFoto(foto)
-            const anotacion = anotaciones[clave] ?? {}
+            const clave      = claveDeFoto(foto)
+            const anotacion  = anotaciones[clave] ?? {}
+            const guardadas  = anotacion.cats ?? []
+            // lo marcado se queda en el borrador hasta pulsar guardar, igual que en Operaciones
+            const cats       = catsBorrador?.clave === clave ? catsBorrador.cats : guardadas
+            const sinGuardar = cats.length !== guardadas.length || cats.some(n => !guardadas.includes(n))
+            const alternarCat = n => setCatsBorrador({
+              clave,
+              cats: (cats.includes(n) ? cats.filter(x => x !== n) : [...cats, n]).sort((a, b) => a - b),
+            })
             return (
               <div className="fotos-comentario">
                 {editando ? (
@@ -334,25 +390,39 @@ export default function Fotos() {
                     <p className={`ts-comentario ${anotacion.texto ? '' : 'vacio'}`}>
                       {anotacion.texto || 'Sin comentario'}
                     </p>
-                    {anotacion.cats?.length > 0 && (
-                      <div className="fotos-etiquetas">
-                        {anotacion.cats.map(n => {
-                          const cat = CATEGORIAS_HORROR.find(c => c.n === n)
-                          return (
-                            <span key={n} className="horror-badge" title={cat?.nombre ?? `Categoría ${n}`}>
-                              #{n} {cat?.corto ?? ''}
-                            </span>
-                          )
-                        })}
-                      </div>
-                    )}
-                    {anotacion.revisado && <span className="horror-badge">✓ revisado</span>}
                     <button
                       className="clear-eventos"
                       onClick={() => { setBorrador(anotacion.texto ?? ''); setEditando(true) }}
                     >{anotacion.texto ? '✎ editar comentario' : '+ comentar'}</button>
                   </>
                 )}
+
+                {/* Las mismas 12 etiquetas del Book of Horror que en Operaciones, con su
+                    botón de guardar, y el tick de revisado, que se guarda solo */}
+                <div className="fotos-etiquetas">
+                  {CATEGORIAS_HORROR.map(c => (
+                    <button
+                      key={c.n}
+                      className={`dia-esp-chip horror-chip ${cats.includes(c.n) ? 'activo' : ''}`}
+                      onClick={() => alternarCat(c.n)}
+                      title={c.nombre}
+                    >#{c.n} {c.corto}</button>
+                  ))}
+                </div>
+                <div className="fotos-comentario-botones">
+                  {sinGuardar && <span className="ops-sin-guardar">sin guardar</span>}
+                  <button
+                    className="diario-add"
+                    disabled={!sinGuardar || guardando || !clave}
+                    onClick={() => guardarEtiquetas(clave, cats)}
+                  >guardar etiquetas</button>
+                  <button
+                    className={`dia-esp-chip ${anotacion.revisado ? 'activo' : ''}`}
+                    disabled={guardando || !clave}
+                    onClick={() => alternarRevisado(clave, !anotacion.revisado)}
+                    title="Lo mismo que el tick de Trades comentados y Seguimiento"
+                  >{anotacion.revisado ? '✓ revisado' : 'marcar revisado'}</button>
+                </div>
               </div>
             )
           })()}

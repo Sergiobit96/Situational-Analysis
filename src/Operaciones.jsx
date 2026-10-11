@@ -3,6 +3,7 @@ import { parseTradesXLSX, parseTradesDesdeAPI, fmtFechaTS, fmtHoraTS, CATEGORIAS
 import { useTrades } from './useTrades'
 import { intradayUrl } from './intradayApi'
 import GraficoVelas from './GraficoVelas'
+import { capturarVelasPNG } from './graficoVelasCore'
 
 const PAGE_SIZE = 50
 const PAGE_SIZE_FOTOS = 12
@@ -466,20 +467,59 @@ export default function Operaciones({ abrir, onAbierto }) {
   // Los books son carpetas del disco: los botones solo tienen sentido con el servidor local
   const hayBooks = import.meta.env.DEV
 
-  // Un clic manda al Book of Horror o al de Glory la misma captura que se está viendo
-  const botonesBook = foto => {
-    if (!hayBooks || !foto) return null
-    const clave = claveDeFoto(foto)
+  // Sin captura en Drive no hay nada que copiar, así que se manda el gráfico que pinta la
+  // app, con sus marcas de entrada y salida. El nombre lo pone el servidor a partir de la
+  // clave del trade, para que el book siga enseñando su comentario y sus etiquetas.
+  const mandarGraficoABook = useCallback(async (trade, book, velasDelDia, marcas, cierreAnterior) => {
+    setAvisoBook(`Pintando el gráfico para el ${book.nombre}…`)
+    try {
+      if (!velasDelDia?.length) throw new Error('todavía no hay velas cargadas')
+      const imagen = await capturarVelasPNG({
+        velas: velasDelDia, ticker: trade.ticker, prevClose: cierreAnterior,
+        trades: marcas, width: 1280, height: 720,
+      })
+      if (!imagen) throw new Error('no se pudo pintar el gráfico')
+
+      const clave = claveDeOperacion(trade)
+      const res   = await fetch(`${API}/api/books/grafico?book=${book.id}&clave=${encodeURIComponent(clave)}`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ imagen }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setEnBooks(prev => ({ ...prev, [book.id]: new Set(prev[book.id]).add(clave) }))
+      setAvisoBook(`${data.yaEstaba ? 'Ya estaba' : 'Añadido'}: gráfico "${data.archivo}" en el ${data.nombre}`)
+    } catch (err) {
+      setAvisoBook(`No se pudo añadir al ${book.nombre}: ${err.message}`)
+    }
+  }, [])
+
+  // Un clic manda el trade al Book of Horror o al de Glory: su captura de Drive si la hay,
+  // y si no, el gráfico de la app.
+  const botonesBook = trade => {
+    if (!hayBooks || !trade) return null
+    const foto  = fotoDeTrade(trade)
+    const clave = claveDeFoto(foto) ?? claveDeOperacion(trade)
     return (
       <span className="ts-books">
         {BOOKS.map(b => {
           const dentro = clave && enBooks[b.id]?.has(clave)
+          const titulo = dentro
+            ? `Ya está en el ${b.nombre}`
+            : foto
+              ? `Mandar la captura al ${b.nombre}`
+              : `Sin captura de este trade: manda el gráfico al ${b.nombre}`
           return (
             <button
               key={b.id}
               className={`ts-book-btn ${dentro ? 'activo' : ''}`}
-              onClick={e => { e.stopPropagation(); mandarABook(foto, b) }}
-              title={dentro ? `Ya está en el ${b.nombre}` : `Mandar al ${b.nombre}`}
+              onClick={e => {
+                e.stopPropagation()
+                if (foto) mandarABook(foto, b)
+                else mandarGraficoABook(trade, b, velas, tradesDelDia, prevClose)
+              }}
+              title={titulo}
             >{b.icono}</button>
           )
         })}
@@ -920,7 +960,7 @@ export default function Operaciones({ abrir, onAbierto }) {
                       onClick={() => setTimeframe(tf.duka)}
                     >{tf.label}</button>
                   ))}
-                  {botonesBook(fotoDeTrade(seleccionado))}
+                  {botonesBook(seleccionado)}
                 </div>
                 <button
                   className="tf-chip ops-pantalla"

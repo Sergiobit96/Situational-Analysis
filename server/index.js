@@ -1200,16 +1200,15 @@ function claveDesdeNombre(nombre) {
   const stem   = basename(nombre).replace(/\.[^.]+$/, '')
   const claves = clavesDelArchivo()
 
-  // 1) convención del archivo: DD-M-YY[_INSTRUMENTO]
+  // 1) convención del archivo: DD-M-YY[_INSTRUMENTO]. El nombre ya identifica el trade,
+  // así que vale aunque no haya captura suya en Separados: puede ser el gráfico que la app
+  // guardó desde Operaciones para un día que todavía no se ha exportado.
   const { fecha, instrumento } = parseFotoInfo({ year: null, path: nombre })
-  if (fecha) {
-    const clave = claveTrade({ rel: nombre, fecha, instrumento })
-    if (claves.has(clave)) return clave
-  }
+  if (fecha) return claveTrade({ rel: nombre, fecha, instrumento })
 
   // 2) numeradas de 2022-2023, que la propia app copia como AAAA_NNNN
   const num = stem.match(/^(\d{4})_(\d+)$/)
-  if (num && claves.has(`${num[1]}#${num[2]}`)) return `${num[1]}#${num[2]}`
+  if (num) return `${num[1]}#${num[2]}`
 
   // 3) nombre puesto a mano: la fecha en cualquier posición y el instrumento suelto
   const m = stem.match(/(\d{1,2})[-_. ](\d{1,2})[-_. ](\d{4}|\d{2})(?!\d)/)
@@ -1350,6 +1349,48 @@ app.post('/api/books/copiar', (req, res) => {
     })
   } catch (err) {
     console.error('[books/copiar]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Nombre de archivo para un trade, en la convención del archivo de capturas, para que el
+// book pueda seguir sabiendo de qué trade es: '2026-09-25_SILVER' -> '25-9-26_SILVER.png'
+// y '2023#0408' -> '2023_0408.png'.
+function nombreDesdeClave(clave) {
+  const numerado = clave.match(/^(\d{4})#(\d+)$/)
+  if (numerado) return `${numerado[1]}_${numerado[2]}.png`
+  const m = clave.match(/^(\d{4})-(\d{2})-(\d{2})_(.*)$/)
+  if (!m) return null
+  const [, anio, mes, dia, instrumento] = m
+  const base = `${dia}-${Number(mes)}-${anio.slice(2)}`
+  return instrumento ? `${base}_${instrumento}.png` : `${base}.png`
+}
+
+// Mandar un trade al book cuando no hay captura suya en Drive: se guarda el gráfico que
+// pinta la propia app, con marcas de entrada y salida incluidas.
+app.post('/api/books/grafico', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const book = bookDe(req)
+  if (!book) return res.status(400).json({ error: 'Book desconocido' })
+  try {
+    const clave  = String(req.query.clave ?? '').trim()
+    const nombre = clave && clave.length <= 100 ? nombreDesdeClave(clave) : null
+    if (!nombre) return res.status(400).json({ error: 'Clave de trade no válida' })
+
+    const m = String(req.body?.imagen ?? '').match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/)
+    if (!m) return res.status(400).json({ error: 'La imagen no llegó en PNG' })
+    const bytes = Buffer.from(m[1], 'base64')
+    if (bytes.length === 0 || bytes.length > 20 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Imagen vacía o demasiado grande' })
+    }
+
+    mkdirSync(book.dir, { recursive: true })
+    const destino  = join(book.dir, nombre)
+    const yaEstaba = existsSync(destino)
+    if (!yaEstaba) writeFileSync(destino, bytes)
+    res.json({ book: book.id, nombre: book.nombre, archivo: nombre, yaEstaba, clave })
+  } catch (err) {
+    console.error('[books/grafico]', err.message)
     res.status(500).json({ error: err.message })
   }
 })

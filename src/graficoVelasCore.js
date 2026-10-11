@@ -336,7 +336,7 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
 // Renderiza un chart fuera de pantalla (mismo aspecto que el detalle de sesión) y devuelve
 // un PNG en base64 (data URL). Usado por la exportación a PPT para capturar los gráficos
 // de todas las coincidencias sin tener que montarlos en la interfaz.
-export async function capturarVelasPNG({ velas, ticker, prevClose, openPrice, width = 960, height = 540 }) {
+export async function capturarVelasPNG({ velas, ticker, prevClose, openPrice, trades, width = 960, height = 540 }) {
   if (!velas?.length) return null
 
   const container = document.createElement('div')
@@ -344,7 +344,7 @@ export async function capturarVelasPNG({ velas, ticker, prevClose, openPrice, wi
   document.body.appendChild(container)
 
   try {
-    const { chart } = crearGrafico(container, { velas, patrones: [], ticker, prevClose, openPrice, width, height })
+    const { chart } = crearGrafico(container, { velas, patrones: [], ticker, prevClose, openPrice, trades, width, height })
     // Esperar dos frames para asegurar que el canvas ha pintado antes de capturarlo
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
     const canvas = chart.takeScreenshot()

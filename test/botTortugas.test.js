@@ -496,3 +496,33 @@ test('un registro de antes de los dos sistemas se lee con sus posiciones en el s
     assert.deepEqual(d.planes, {})
   } finally { rmSync(carpeta, { recursive: true, force: true }) }
 })
+
+test('con cortos: vende al romper el mínimo, añade ½ N más abajo y sale al romper el máximo de 10', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-11-27') }, { ...soloS1, lados: 'ambos' })
+  try {
+    enHora(fra(11, 30, 9, 0, 5)); await bot._paso()
+    assert.equal(mercado(bot, '^GDAXI').plan.sistemas[1].entrada.corto.nivel, 24_850)
+    // rompe el mínimo de 20: venta a la oferta de compra (bid) con el stop 2 N por encima
+    ig.precios['^GDAXI'] = [24_845, 24_846]
+    vela1m('^GDAXI', fra(11, 30, 10), 24_860, 24_844)
+    enHora(fra(11, 30, 10, 0, 20)); await bot._paso()
+    const venta = ig.ordenes.find(o => o.tipo === 'abrir')
+    assert.deepEqual([venta.lado, venta.tamano, venta.stop], ['corto', 0.6, 25_445])
+    // ½ N a favor es más abajo (24.695): otra unidad, y el stop de las dos baja a 2 N de ella
+    ig.precios['^GDAXI'] = [24_694, 24_695]
+    vela1m('^GDAXI', fra(11, 30, 11), 24_710, 24_690)
+    enHora(fra(11, 30, 11, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI').unidades.length, 2)
+    assert.equal(posicion(bot, '^GDAXI').stop, 25_294)
+    // rompe el máximo de 10 (25.150): fuera las dos, comprando a la oferta
+    ig.precios['^GDAXI'] = [25_154, 25_155]
+    vela1m('^GDAXI', fra(11, 30, 12), 25_156, 25_100)
+    enHora(fra(11, 30, 12, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI'), null)
+    const op = bot.estado().operaciones[0]
+    assert.equal(op.lado, 'corto')
+    assert.equal(op.motivo, 'canal 10')
+    assert.ok(Math.abs(op.resultadoEur - ((24_845 - 25_155) * 0.6 + (24_694 - 25_155) * 0.6)) < 1e-6)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})

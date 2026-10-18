@@ -170,7 +170,7 @@ export default function BotTortugas() {
               sub={grupos.map(g => `${g} ${unidades(p => p.sistema === s && p.grupo === g && p.lado === lado)}/${config.maxGrupo}`).join(' · ')} />
           )))}
           <Tile label="Si saltan los stops" valor={abiertas.length ? eur(alStop) : '—'} tonoValor={tono(alStop)}
-            sub={`${saldo && abiertas.length ? `${num(100 * alStop / saldo, 1)}% del saldo · ` : ''}lo peor con estos límites: −${num(peor.n * config.riesgoPct, 1)}%`} />
+            sub={`${saldo && abiertas.length ? `${num(100 * alStop / saldo, 1)}% del saldo · ` : ''}lo peor con estos límites: −${num(peor.n * config.riesgoPct, 1)}%${config.lados === 'ambos' ? ' por sentido' : ''}`} />
           <Tile label="Nominal abierto" valor={`${num(nominal / 1000, 1)} mil €`}
             sub={saldo ? `${num(nominal / saldo, 1)} veces el saldo (máximo ${reglas.apalancamiento}, entre los dos sistemas)` : ''} />
           <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'}
@@ -265,7 +265,7 @@ export default function BotTortugas() {
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
           Cada uno tiene la mitad del capital y sus propias posiciones y límites, así que con los dos llenos se arriesga lo mismo que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
           Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
-          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas costaría un {num(peor.unidades * config.riesgoPct, 1)}% del saldo, y si saltaran a la vez todos los stops, hasta un {num(peor.n * config.riesgoPct, 1)}%
+          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * config.riesgoPct, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peor.n * config.riesgoPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
           (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;

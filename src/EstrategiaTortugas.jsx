@@ -305,9 +305,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Riesgo por N y unidad
             <span className="filtro-valor">
-              1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad ({nf(ajustes.riesgo * peor.unidades, 1)} % con las {peor.unidades} unidades que caben a la vez).
+              1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad ({nf(ajustes.riesgo * peor.unidades, 1)} % con las {peor.unidades} unidades que caben a la vez{ajustes.lados === 'ambos' ? ' en cada sentido' : ''}).
               Hasta el stop, a {nf(CONFIG_TORTUGAS.stopN)} N, una unidad recién entrada pierde {nf(ajustes.riesgo * CONFIG_TORTUGAS.stopN, 2)} %;
-              como el stop sube con cada añadido, lo peor si saltan a la vez todos los stops es un {nf(ajustes.riesgo * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
+              como el stop sube con cada añadido, lo peor si saltan a la vez todos los stops{ajustes.lados === 'ambos' ? ' de un sentido' : ''} es un {nf(ajustes.riesgo * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
             </span>
           </label>
           <div className="filtro-presets">

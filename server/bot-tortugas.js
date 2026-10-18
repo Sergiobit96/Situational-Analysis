@@ -1,10 +1,9 @@
 // ── Bot de las tortugas en la demo de IG ──────────────────────────────────────────
 // Opera las tortugas de la pestaña Estrategias (src/tortugas.js) con dinero de la demo, en
-// los mismos índices y horas que el bot SRS (SESIONES_BOT), pero con las posiciones abiertas
-// de un día para otro:
-//   · al empezar cada sesión de un índice, con sus velas diarias de Yahoo hasta la anterior
-//     (las mismas que usa el backtest), saca la N (ATR de Wilder de 20) y los canales
-//     (server/tortugas-niveles.js);
+// los índices del bot SRS (a las horas de su sesión de contado) y en divisas y materias primas
+// (MERCADOS_TORTUGAS), con las posiciones abiertas de un día para otro:
+//   · al empezar cada sesión de un mercado, con sus velas diarias hasta la anterior, saca la N
+//     (ATR de Wilder de 20) y los canales (server/tortugas-niveles.js);
 //   · juega los dos sistemas a la vez, como las tortugas: el Sistema 1 entra al romper el
 //     máximo de 20 sesiones y sale al romper el mínimo de 10; el Sistema 2 entra en la de 55 y
 //     sale en la de 20. El filtro del Sistema 1 de las tortugas (saltarse la ruptura si la
@@ -32,15 +31,64 @@
 // son los mismos.
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
-import { SESIONES_BOT, sesionDe, proximaApertura, tamanoPorRiesgo } from './bot-srs.js'
-import { fechaEnZona } from './zonas.js'
+import { SESIONES_BOT, tamanoPorRiesgo } from './bot-srs.js'
+import { fechaEnZona, instanteEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
 import { nivelesTortugas } from './tortugas-niveles.js'
 
-// Los índices que opera y su grupo, para el límite de unidades muy correlacionadas
-export const GRUPOS_TORTUGAS = {
-  '^N225': 'Asia', '^GDAXI': 'Europa', '^FTSE': 'Europa', '^NDX': 'EEUU', '^GSPC': 'EEUU', '^DJI': 'EEUU', '^RUT': 'EEUU',
+// Los mercados que opera, con su grupo (para el límite de unidades muy correlacionadas), las
+// horas de su sesión en una zona (minutos desde la medianoche del día de la sesión; negativos si
+// empieza la víspera) y de dónde salen sus niveles:
+//   · índices: la sesión de contado de su bolsa (la del bot SRS) y el diario de Yahoo, como el backtest;
+//   · divisas: el día de 17:00 a 17:00 de Nueva York y el diario de Yahoo (el contado, que Yahoo
+//     fecha en Londres), que cotiza igual que IG;
+//   · materias primas: de 18:00 a 17:00 de Nueva York (cada una cotiza dentro de ese rato, a las
+//     horas de su mercado) y el diario de IG del propio CFD de contado: los futuros de Yahoo
+//     saltan al cambiar de vencimiento y no cotizan como el contado de IG (que va entre dos).
+// En los de 24 horas el plan se hace `esperaPlan` minutos después de abrir, cuando la vela
+// diaria del día anterior ya está cerrada en Yahoo y en IG.
+const indice = (ticker, grupo) => ({ ...SESIONES_BOT[ticker], grupo, datos: { fuente: 'yahoo', simbolo: ticker } })
+const divisa = (nombre, simbolo) => ({ nombre, grupo: 'Divisas', zona: 'America/New_York', apertura: -7 * 60, cierre: 17 * 60, esperaPlan: 150, datos: { fuente: 'yahoo', simbolo, zona: 'Europe/London' } })
+const materia = (nombre, grupo) => ({ nombre, grupo, zona: 'America/New_York', apertura: -6 * 60, cierre: 17 * 60, esperaPlan: 150, datos: { fuente: 'ig' } })
+export const MERCADOS_TORTUGAS = {
+  '^N225': indice('^N225', 'Asia'), '^GDAXI': indice('^GDAXI', 'Europa'), '^FTSE': indice('^FTSE', 'Europa'),
+  '^NDX': indice('^NDX', 'EEUU'), '^GSPC': indice('^GSPC', 'EEUU'), '^DJI': indice('^DJI', 'EEUU'), '^RUT': indice('^RUT', 'EEUU'),
+  EURUSD: divisa('EUR/USD', 'EURUSD=X'), GBPUSD: divisa('GBP/USD', 'GBPUSD=X'), USDJPY: divisa('USD/JPY', 'JPY=X'),
+  AUDUSD: divisa('AUD/USD', 'AUDUSD=X'), USDCAD: divisa('USD/CAD', 'CAD=X'), USDCHF: divisa('USD/CHF', 'CHF=X'),
+  XAUUSD: materia('Oro', 'Metales'), XAGUSD: materia('Plata', 'Metales'), COPPER: materia('Cobre', 'Metales'),
+  USOIL: materia('Crudo WTI', 'Energía'), UKOIL: materia('Crudo Brent', 'Energía'), NATGAS: materia('Gas natural', 'Energía'),
+  COFFEE: materia('Café', 'Blandas'), COCOA: materia('Cacao', 'Blandas'), SUGAR: materia('Azúcar', 'Blandas'), COTTON: materia('Algodón', 'Blandas'),
+  CORN: materia('Maíz', 'Granos'), SOYBEAN: materia('Soja', 'Granos'),
+}
+export const GRUPOS_TORTUGAS = Object.fromEntries(Object.entries(MERCADOS_TORTUGAS).map(([t, m]) => [t, m.grupo]))
+
+// ── Sesiones (las de divisas y materias primas empiezan la víspera) ──
+const masDias = (fecha, n) => new Date(Date.parse(`${fecha}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
+function sesionDelDia(ticker, fecha) {
+  const m = MERCADOS_TORTUGAS[ticker]
+  const dow = new Date(`${fecha}T12:00:00Z`).getUTCDay()
+  if (!m || dow === 0 || dow === 6) return null
+  return { ticker, fecha, abre: instanteEnZona(fecha, m.apertura, m.zona), cierra: instanteEnZona(fecha, m.cierre, m.zona), esperaPlan: (m.esperaPlan ?? 0) * 60 }
+}
+// La sesión en curso en `t`; si no hay ninguna, la de ese día en la zona del mercado (null en fin de semana)
+export function sesionTortugas(ticker, t) {
+  const m = MERCADOS_TORTUGAS[ticker]
+  if (!m) return null
+  const hoy = fechaEnZona(t, m.zona)
+  const manana = sesionDelDia(ticker, masDias(hoy, 1))
+  if (manana && t >= manana.abre && t < manana.cierra) return manana
+  return sesionDelDia(ticker, hoy)
+}
+export function proximaAperturaTortugas(ticker, t) {
+  const m = MERCADOS_TORTUGAS[ticker]
+  if (!m) return null
+  const hoy = fechaEnZona(t, m.zona)
+  for (let d = 0; d < 9; d++) {
+    const s = sesionDelDia(ticker, masDias(hoy, d))
+    if (s && s.abre > t) return s.abre
+  }
+  return null
 }
 export const SISTEMAS = [1, 2]
 
@@ -77,9 +125,16 @@ const MAX_EVENTOS = 1000
 const MAX_OPERACIONES = 500
 
 const dir = lado => (lado === 'largo' ? 1 : -1)
-const redondear = x => Math.round(x * 10) / 10
+const redondear = (x, dec = 1) => Math.round(x * 10 ** dec) / 10 ** dec
 const num = (x, dec = 1) => (x == null ? '—' : Number(x).toLocaleString('es-ES', { maximumFractionDigits: dec }))
-const nombreDe = ticker => SESIONES_BOT[ticker]?.nombre ?? ticker
+// Decimales para enseñar un precio (o una distancia) según su tamaño: las divisas, con 5
+export const decimalesPara = x => { const a = Math.abs(x ?? 0); return a >= 1000 ? 1 : a >= 100 ? 2 : a >= 10 ? 3 : 5 }
+const px = x => (x == null ? '—' : num(x, decimalesPara(x)))
+const nombreDe = ticker => MERCADOS_TORTUGAS[ticker]?.nombre ?? ticker
+// Lo que vale moverse una unidad del precio, por contrato (en divisas el punto de IG es el pip)
+const valorDe = m => m.valorPrecio ?? m.valorPunto
+// Los contratos que admiten tamaños por debajo de la décima, de centésima en centésima
+const pasoDe = m => (m.tamanoMin != null && m.tamanoMin < 0.1 ? 0.01 : 0.1)
 // Posiciones e intentos van por índice y sistema
 export const claveDe = (ticker, sistema) => `${ticker}|${sistema}`
 // El sistema de una orden del bot, por su referencia (TOR1-…, TOR2-…); null si no es suya
@@ -129,7 +184,9 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
     const vale = deEsa && !(enSesion && plan.calculado < ses.abre)
     const reintento = deEsa && plan.error && ahora >= plan.reintentar
     const recienCerrada = !!ses && ahora >= ses.cierra && ahora < ses.cierra + ESPERA_TRAS_CIERRE_S
-    if ((!vale || reintento) && !recienCerrada) return { accion: 'plan', ses: objetivo }
+    // en los de 24 horas, el de la sesión se hace un rato después de abrir (con la vela de ayer cerrada)
+    const pronto = enSesion && ahora < ses.abre + (ses.esperaPlan ?? 0)
+    if ((!vale || reintento) && !recienCerrada && !pronto) return { accion: 'plan', ses: objetivo }
   }
   if (!enSesion) return { accion: pos ? 'vigilar' : 'nada' }
 
@@ -259,13 +316,17 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const anterior = datos.planes[ticker]
     const reparto = cfg.sistemas.length || 1
     const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct, reparto }
-    const falla = texto => {
-      Object.assign(plan, { error: texto, reintentar: ahora() + REINTENTO_PLAN_S })
+    const falla = (texto, espera = REINTENTO_PLAN_S) => {
+      Object.assign(plan, { error: texto, reintentar: ahora() + espera })
       datos.planes[ticker] = plan
       apuntar(ticker, texto, { aviso: !plan.provisional })
     }
+    const fuente = MERCADOS_TORTUGAS[ticker]?.datos?.fuente === 'ig' ? 'IG' : 'Yahoo'
     let velas
-    try { velas = await velasDiarias(ticker) } catch (err) { return falla(`Yahoo no da el diario: ${err.message}`) }
+    try { velas = await velasDiarias(ticker) } catch (err) {
+      // sin el cupo semanal de histórico de IG, no tiene sentido pedirlo más a menudo que cada hora
+      return falla(`${fuente} no da el diario: ${err.message}`, /cupo/i.test(err.message) ? 3600 : REINTENTO_PLAN_S)
+    }
     const nv = nivelesTortugas((velas ?? []).filter(v => v.date < ses.fecha), { stopN: STOP_N })
     if (!nv) return falla('No hay bastantes velas diarias para calcular los niveles')
     if ((Date.parse(ses.fecha) - Date.parse(nv.ultimoDia)) / 86_400_000 > DIAS_VIEJO) {
@@ -287,31 +348,31 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     for (const epic of EPICS_OPERAR[ticker] ?? [null]) {
       const m = await ig.operar.datosMercado(ticker, epic)
       if (!m.conPrecio) { descartes.push(`${m.epic} sin precio para esta cuenta`); continue }
-      const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: nv.n, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin })
+      const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: nv.n, valorPunto: valorDe(m), cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin, paso: pasoDe(m) })
       if (!t.ok) { descartes.push(`${m.epic}: ${t.motivo.replace('arriesgaría', 'costaría')} por N`); continue }
-      plan.unidad = { ok: true, epic: m.epic, moneda: m.moneda, tamano: t.tamano, eurPorN: t.riesgoEur, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin, factorMargen: m.factorMargen ?? 0.05 }
+      plan.unidad = { ok: true, epic: m.epic, moneda: m.moneda, tamano: t.tamano, eurPorN: t.riesgoEur, valorPunto: valorDe(m), cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin, factorMargen: m.factorMargen ?? 0.05 }
       break
     }
     plan.unidad ??= { ok: false, motivo: descartes.join('; ') || 'sin contrato' }
     datos.planes[ticker] = plan
 
-    const partes = [`N ${num(plan.n)}`]
+    const partes = [`N ${px(plan.n)}`]
     for (const s of SISTEMAS) {
       const pos = datos.posiciones[claveDe(ticker, s)]
       const sp = plan.sistemas[s]
       if (pos) {
         const n = pos.unidades.length
-        partes.push(`S${s}: ${n} ${n === 1 ? 'unidad abierta' : 'unidades abiertas'}, stop ${num(pos.stop)}, salida por el canal en ${num(sp.salida[pos.lado])}`
-          + (n < cfg.maxUnidades ? `, siguiente unidad en ${num(siguienteAnadido(pos))}` : ''))
+        partes.push(`S${s}: ${n} ${n === 1 ? 'unidad abierta' : 'unidades abiertas'}, stop ${px(pos.stop)}, salida por el canal en ${px(sp.salida[pos.lado])}`
+          + (n < cfg.maxUnidades ? `, siguiente unidad en ${px(siguienteAnadido(pos))}` : ''))
       } else if (cfg.sistemas.includes(s)) {
         const lados = []
-        if (cfg.lados !== 'cortos') lados.push(`compra por encima de ${num(sp.entrada.largo.nivel)} (máximo de ${sp.k} sesiones${sp.filtro ? ': la ruptura anterior habría ganado' : ''})`)
-        if (cfg.lados !== 'largos') lados.push(`venta por debajo de ${num(sp.entrada.corto.nivel)} (mínimo de ${sp.k})`)
+        if (cfg.lados !== 'cortos') lados.push(`compra por encima de ${px(sp.entrada.largo.nivel)} (máximo de ${sp.k} sesiones${sp.filtro ? ': la ruptura anterior habría ganado' : ''})`)
+        if (cfg.lados !== 'largos') lados.push(`venta por debajo de ${px(sp.entrada.corto.nivel)} (mínimo de ${sp.k})`)
         partes.push(`S${s}: ${lados.join(', ')}`)
       }
     }
     partes.push(plan.unidad.ok
-      ? `unidad de ${num(plan.unidad.tamano)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N${reparto > 1 ? ' en cada sistema' : ''})`
+      ? `unidad de ${num(plan.unidad.tamano, 2)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N${reparto > 1 ? ' en cada sistema' : ''})`
       : `no se puede operar: ${plan.unidad.motivo}`)
     // el plan provisional (antes de abrir) no se avisa; el de la apertura, solo si cambia algo
     const texto = `${plan.provisional ? 'Próxima sesión' : 'Sesión de hoy'}: ${partes.join(' · ')}`
@@ -332,9 +393,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const ladoTexto = lado === 'largo' ? 'largas' : 'cortas'
     if (unidadesDe(mismoLado.filter(p => GRUPOS_TORTUGAS[p.ticker] === grupo)) >= cfg.maxGrupo) return `el Sistema ${sistema} ya tiene ${cfg.maxGrupo} unidades ${ladoTexto} en ${grupo}`
     if (unidadesDe(mismoLado) >= cfg.maxSentido) return `el Sistema ${sistema} ya tiene ${cfg.maxSentido} unidades ${ladoTexto}`
-    const nominal = Object.values(datos.posiciones).reduce((s, p) => s + nominalDe(p), 0) + tamano * precio * m.valorPunto * m.cambioAEur
+    const nominal = Object.values(datos.posiciones).reduce((s, p) => s + nominalDe(p), 0) + tamano * precio * valorDe(m) * m.cambioAEur
     if (cuenta.saldo > 0 && nominal > APALANCAMIENTO * cuenta.saldo) return `el nominal de las tortugas pasaría de ${APALANCAMIENTO} veces el saldo`
-    const margen = tamano * precio * m.valorPunto * m.cambioAEur * (m.factorMargen ?? 0.05)
+    const margen = tamano * precio * valorDe(m) * m.cambioAEur * (m.factorMargen ?? 0.05)
     if (cuenta.disponible != null && margen > MARGEN_MAX * cuenta.disponible) return `el margen (${Math.round(margen)} €) pasa del ${MARGEN_MAX * 100}% del disponible`
     return null
   }
@@ -358,12 +419,12 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const motivo = noCabe(ticker, sistema, lado, u.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
       sp.esperaEntrar = ahora() + 60
-      apuntar(ticker, `Ruptura de ${num(nivel)}, pero no entra: ${motivo}`, { sistema })
+      apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: ${motivo}`, { sistema })
       return
     }
-    const stop = redondear(precio - dir(lado) * STOP_N * plan.n)
+    const stop = redondear(precio - dir(lado) * STOP_N * plan.n, m.decimales ?? 1)
     const referencia = referenciaNueva(ticker, sistema)
-    apuntar(ticker, `Ruptura del ${lado === 'largo' ? 'máximo' : 'mínimo'} de ${sp.k} sesiones (${num(nivel)}): ${lado === 'largo' ? 'compra' : 'venta'} de ${num(u.tamano)} con stop en ${num(stop)}`, { aviso: false, sistema })
+    apuntar(ticker, `Ruptura del ${lado === 'largo' ? 'máximo' : 'mínimo'} de ${sp.k} sesiones (${px(nivel)}): ${lado === 'largo' ? 'compra' : 'venta'} de ${num(u.tamano, 2)} con stop en ${px(stop)}`, { aviso: false, sistema })
     // Se apunta ANTES de mandarla: si la confirmación no llega, el bot no la repite, sino que
     // mira en IG si entró (repetirla podría dejar dos posiciones)
     const clave = claveDe(ticker, sistema)
@@ -389,8 +450,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       valorPunto: u.valorPunto ?? 1, cambioAEur: u.cambioAEur ?? 1, stop,
       unidades: [{ dealId, tamano, entrada, stop, hora: h, referencia, nivel, deslizamiento }],
     }
-    apuntar(ticker, `${lado === 'largo' ? 'Compra' : 'Venta'} de ${num(tamano)} a ${num(entrada)} (ruptura de ${k} sesiones en ${num(nivel)}`
-      + `${deslizamiento != null ? `, ${deslizamiento >= 0 ? '+' : ''}${num(deslizamiento)} puntos` : ''}), stop en ${num(stop)} (2 N, con N ${num(n0)})`, { sistema })
+    apuntar(ticker, `${lado === 'largo' ? 'Compra' : 'Venta'} de ${num(tamano, 2)} a ${px(entrada)} (ruptura de ${k} sesiones en ${px(nivel)}`
+      + `${deslizamiento != null ? `, ${deslizamiento >= 0 ? '+' : ''}${px(deslizamiento)}` : ''}), stop en ${px(stop)} (2 N, con N ${px(n0)})`, { sistema })
   }
 
   async function anadir(ticker, sistema, ses) {
@@ -402,7 +463,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const nivel = siguienteAnadido(pos)
     if (precio == null || (largo ? precio < nivel : precio > nivel)) { pos.esperaAnadir = ahora() + 5; return }
     // la unidad de hoy (la N y el capital de hoy), en el contrato de la posición
-    const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin })
+    const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin, paso: pasoDe(m) })
     if (!t.ok) { pos.sinAnadidos = ses.fecha; apuntar(ticker, `Hoy no se añade: ${t.motivo}`, { sistema }); return }
     const motivo = noCabe(ticker, sistema, pos.lado, t.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
@@ -410,7 +471,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       apuntar(ticker, `La unidad ${pos.unidades.length + 1} no entra: ${motivo}`, { sistema })
       return
     }
-    const stop = redondear(precio - dir(pos.lado) * STOP_N * pos.n0)
+    const stop = redondear(precio - dir(pos.lado) * STOP_N * pos.n0, m.decimales ?? 1)
     const referencia = referenciaNueva(ticker, sistema)
     const clave = claveDe(ticker, sistema)
     datos.intentos[clave] = { ticker, sistema, tipo: 'anadido', lado: pos.lado, tamano: t.tamano, stop, hora: ahora(), referencia, nivel }
@@ -432,8 +493,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const nuevo = pos.lado === 'largo' ? Math.max(pos.stop ?? -Infinity, stop) : Math.min(pos.stop ?? Infinity, stop)
     const fallos = await moverStops(pos, nuevo)
     const n = pos.unidades.filter(u => !u.salida).length
-    apuntar(pos.ticker, `Pirámide: ${num(tamano)} más a ${num(entrada)}, ${n} de ${datos.config.maxUnidades} unidades;`
-      + (fallos.length ? ` IG no deja subir el stop de todas a ${num(nuevo)} (${fallos[0]})` : ` stop de todas en ${num(nuevo)}`), { sistema: pos.sistema })
+    apuntar(pos.ticker, `Pirámide: ${num(tamano, 2)} más a ${px(entrada)}, ${n} de ${datos.config.maxUnidades} unidades;`
+      + (fallos.length ? ` IG no deja mover el stop de todas a ${px(nuevo)} (${fallos[0]})` : ` stop de todas en ${px(nuevo)}`), { sistema: pos.sistema })
   }
 
   async function moverStops(pos, nivel) {
@@ -483,7 +544,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       const limite = m.aMercado ? null : (pos.lado === 'largo' ? m.bid - margen : m.oferta + margen)
       r = await ig.operar.cerrar({ ticker: pos.ticker, dealId: u.dealId, lado: pos.lado, tamano: u.tamano, limite })
       if (r.aceptada) break
-      apuntar(pos.ticker, `IG no cierra ${limite == null ? 'a mercado' : `con ${num(margen)} puntos de margen`} (${r.motivo})`, { sistema: pos.sistema })
+      apuntar(pos.ticker, `IG no cierra ${limite == null ? 'a mercado' : `con ${px(margen)} de margen`} (${r.motivo})`, { sistema: pos.sistema })
     }
     return r
   }
@@ -524,7 +585,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const us = pos.unidades
     const volumen = us.reduce((s, u) => s + u.tamano, 0)
     const { pts, n, eur } = resultadoDe(pos)
-    const zona = SESIONES_BOT[ticker]?.zona ?? 'Europe/Madrid'
+    const zona = MERCADOS_TORTUGAS[ticker]?.zona ?? 'Europe/Madrid'
     const op = {
       ticker, sistema, lado: pos.lado, ruptura: pos.ruptura, n0: pos.n0, abierta: pos.abierta, abiertaHora: pos.abiertaHora,
       cerrada: fechaEnZona(ahora(), zona), cerradaHora: ahora(), motivo, unidades: us.length, contratos: volumen,
@@ -540,7 +601,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if (datos.operaciones.length > MAX_OPERACIONES) datos.operaciones.length = MAX_OPERACIONES
     delete datos.posiciones[claveDe(ticker, sistema)]
     const dias = Math.round((op.cerradaHora - op.abiertaHora) / 86400)
-    apuntar(ticker, `Fuera a ${num(op.salida)} (${motivo}${op.aproximado ? ', precio aproximado' : ''}) con ${us.length} ${us.length === 1 ? 'unidad' : 'unidades'}`
+    apuntar(ticker, `Fuera a ${px(op.salida)} (${motivo}${op.aproximado ? ', precio aproximado' : ''}) con ${us.length} ${us.length === 1 ? 'unidad' : 'unidades'}`
       + `${dias >= 1 ? ` tras ${dias} ${dias === 1 ? 'día' : 'días'}` : ''}: ${eur >= 0 ? '+' : ''}${Math.round(eur)} € (${n >= 0 ? '+' : ''}${num(n, 2)} N)`, { sistema })
   }
 
@@ -574,7 +635,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       if (!pos.cruce || ahora() - pos.cruceVisto > 5) pos.cruce = ahora()
       pos.cruceVisto = ahora()
       if (ahora() - pos.cruce < ESPERA_STOP_S) return
-      apuntar(ticker, `El precio pasó el stop (${num(pos.stop)}) y IG no ha cerrado: se cierra a mercado`, { sistema })
+      apuntar(ticker, `El precio pasó el stop (${px(pos.stop)}) y IG no ha cerrado: se cierra a mercado`, { sistema })
       if ((await cerrarUnidades(pos, vivas)).length) return
       terminar(pos, 'stop')
       return
@@ -644,8 +705,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       const m = await ig.operar.datosMercado(p.ticker, p.epic)
       const n0 = p.stop != null ? Math.abs(p.nivel - p.stop) / STOP_N : null
       datos.posiciones[claveDe(p.ticker, sistema)] = {
-        ticker: p.ticker, sistema, lado: p.lado, n0, ruptura: null, abierta: fechaEnZona(hora, SESIONES_BOT[p.ticker].zona), abiertaHora: hora,
-        epic: p.epic, moneda: m.moneda, valorPunto: m.valorPunto ?? 1, cambioAEur: m.cambioAEur ?? 1, stop: p.stop, recuperada: true,
+        ticker: p.ticker, sistema, lado: p.lado, n0, ruptura: null, abierta: fechaEnZona(hora, MERCADOS_TORTUGAS[p.ticker].zona), abiertaHora: hora,
+        epic: p.epic, moneda: m.moneda, valorPunto: valorDe(m) ?? 1, cambioAEur: m.cambioAEur ?? 1, stop: p.stop, recuperada: true,
         unidades: [{ dealId: p.dealId, tamano: p.tamano, entrada: p.nivel, stop: p.stop, hora, referencia: p.referencia, nivel: null, deslizamiento: null }],
       }
     }
@@ -683,8 +744,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
         || datos.posiciones[claveDe(ticker, s)] || datos.intentos[claveDe(ticker, s)])
       if (!sistemas.length) continue
       try {
-        const ses = sesionDe(ticker, t)
-        const proxima = sesionDe(ticker, proximaApertura(ticker, t) ?? t)
+        const ses = sesionTortugas(ticker, t)
+        const abre = proximaAperturaTortugas(ticker, t)
+        const proxima = abre ? sesionTortugas(ticker, abre) : null
         const velas = ultimasVelas('ig', ticker, 5)
         for (const sistema of sistemas) {
           const clave = claveDe(ticker, sistema)
@@ -801,10 +863,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       reglas: { pasoN: PASO_N, stopN: STOP_N, apalancamiento: APALANCAMIENTO, sistemas: SISTEMAS },
       picoSaldo: datos.picoSaldo,
       mercados: Object.keys(GRUPOS_TORTUGAS).map(ticker => {
-        const ses = sesionDe(ticker, t)
+        const ses = sesionTortugas(ticker, t)
         return {
           ticker, nombre: nombreDe(ticker), grupo: GRUPOS_TORTUGAS[ticker], encendido: !!datos.config.instrumentos[ticker],
-          enSesion: !!ses && t >= ses.abre && t < ses.cierra, proxima: proximaApertura(ticker, t),
+          enSesion: !!ses && t >= ses.abre && t < ses.cierra, proxima: proximaAperturaTortugas(ticker, t),
           precio: ultimasVelas('ig', ticker, 1).at(-1)?.close ?? null,
           plan: datos.planes[ticker] ?? null,
           posiciones: Object.fromEntries(SISTEMAS.map(s => [s, datos.posiciones[claveDe(ticker, s)] ?? null])),

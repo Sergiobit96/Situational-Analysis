@@ -61,6 +61,24 @@ export const EPICS_IG = {
   'XAUUSD': { epic: 'CS.D.CFEGOLD.CEC.IP',   nombre: 'Spot Gold ($1)' },
   'XAGUSD': { epic: 'CS.D.CFDSILVER.CFM.IP', nombre: 'Plata contado (mini, 500oz)', escala: 0.01 },
   'USOIL':  { epic: 'CC.D.CL.UEC.IP',        nombre: 'Crudo - Crudo EE.UU. (1$)', escala: 0.01 },
+  // Los del bot de las tortugas (divisas y materias primas), comprobados el 18-oct-2026 con la
+  // demo de CFD: los de contado, sin vencimiento. `escala` pasa a la unidad de siempre los que
+  // IG da en centavos o fracciones (el Brent en centavos de dólar, el gas en milésimas…)
+  'EURUSD':  { epic: 'CS.D.EURUSD.CECM.IP',   nombre: 'EUR/USD Mini' },
+  'GBPUSD':  { epic: 'CS.D.GBPUSD.MINI.IP',   nombre: 'GBP/USD Mini' },
+  'USDJPY':  { epic: 'CS.D.USDJPY.MINI.IP',   nombre: 'USD/JPY Mini' },
+  'AUDUSD':  { epic: 'CS.D.AUDUSD.MINI.IP',   nombre: 'AUD/USD Mini' },
+  'USDCAD':  { epic: 'CS.D.USDCAD.MINI.IP',   nombre: 'USD/CAD Mini' },
+  'USDCHF':  { epic: 'CS.D.USDCHF.MINI.IP',   nombre: 'USD/CHF Mini' },
+  'COPPER':  { epic: 'CC.D.HG.UNC.IP',        nombre: 'Cobre de Alto Grado (2.50$)', escala: 0.0001 },
+  'UKOIL':   { epic: 'CC.D.LCO.UNC.IP',       nombre: 'Crudo Brent (10$)', escala: 0.01 },
+  'NATGAS':  { epic: 'CC.D.NG.UNC.IP',        nombre: 'Gas natural (10$)', escala: 0.001 },
+  'COFFEE':  { epic: 'CC.D.KC.UNC.IP',        nombre: 'Café Arábica (3.75$)', escala: 0.01 },
+  'COCOA':   { epic: 'CC.D.CC.UNC.IP',        nombre: 'Cacao Nueva York (10$)' },
+  'SUGAR':   { epic: 'CC.D.SB.UNC.IP',        nombre: 'Azúcar de NY No. 11 (11.20$)', escala: 0.01 },
+  'COTTON':  { epic: 'CC.D.CT.UNC.IP',        nombre: 'Algodón NY (5$)', escala: 0.01 },
+  'CORN':    { epic: 'CC.D.C.UNC.IP',         nombre: 'Maíz (50$)' },
+  'SOYBEAN': { epic: 'CC.D.S.UNC.IP',         nombre: 'Soja (50$)' },
 }
 
 // Los contratos con los que operan los bots (SRS y tortugas), por orden de preferencia: primero
@@ -78,6 +96,25 @@ export const EPICS_OPERAR = {
   '^DJI':   ['IX.D.DOW.ICE.IP', 'IX.D.DOW.IEC.IP', 'IX.D.DOW.IFD.IP'],
   '^RUT':   ['IX.D.RUSSELL.ICE.IP', 'IX.D.RUSSELL.IEC.IP', 'IX.D.RUSSELL.IFD.IP'],
   '^N225':  ['IX.D.NIKKEI.IFM.IP', 'IX.D.NIKKEI.IFD.IP'],
+  // Solo el bot de las tortugas: divisas (primero el mini, de 10.000) y materias primas
+  'EURUSD':  ['CS.D.EURUSD.CECM.IP', 'CS.D.EURUSD.CEC.IP'],
+  'GBPUSD':  ['CS.D.GBPUSD.MINI.IP', 'CS.D.GBPUSD.CFD.IP'],
+  'USDJPY':  ['CS.D.USDJPY.MINI.IP', 'CS.D.USDJPY.CFD.IP'],
+  'AUDUSD':  ['CS.D.AUDUSD.MINI.IP', 'CS.D.AUDUSD.CFD.IP'],
+  'USDCAD':  ['CS.D.USDCAD.MINI.IP', 'CS.D.USDCAD.CFD.IP'],
+  'USDCHF':  ['CS.D.USDCHF.MINI.IP', 'CS.D.USDCHF.CFD.IP'],
+  'XAUUSD':  ['CS.D.CFEGOLD.CEC.IP'],
+  'XAGUSD':  ['CS.D.CFDSILVER.CFM.IP'],
+  'COPPER':  ['CC.D.HG.UNC.IP'],
+  'USOIL':   ['CC.D.CL.UCE.IP', 'CC.D.CL.UEC.IP'],
+  'UKOIL':   ['CC.D.LCO.UNC.IP'],
+  'NATGAS':  ['CC.D.NG.UNC.IP'],
+  'COFFEE':  ['CC.D.KC.UNC.IP'],
+  'COCOA':   ['CC.D.CC.UNC.IP'],
+  'SUGAR':   ['CC.D.SB.UNC.IP'],
+  'COTTON':  ['CC.D.CT.UNC.IP'],
+  'CORN':    ['CC.D.C.UNC.IP'],
+  'SOYBEAN': ['CC.D.S.UNC.IP'],
 }
 
 // Una vela con los precios multiplicados por `escala` (si la hay)
@@ -367,7 +404,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     // veces. En disco solo se guarda esto último: si se guardaran también los fijos, un
     // cambio en EPICS_IG no llegaría nunca a aplicarse.
     const encontrados = { ...guardado.epics }
-    for (const ticker of Object.keys(BUSQUEDAS_IG)) {
+    for (const ticker of new Set([...Object.keys(BUSQUEDAS_IG), ...Object.keys(EPICS_IG)])) {
       if (epicsFijos[ticker]) estado.epics[ticker] = { epic: epicsFijos[ticker], nombre: 'fijado en IG_EPICS' }
       else if (EPICS_IG[ticker]) estado.epics[ticker] = EPICS_IG[ticker]
       else if (encontrados[ticker]) estado.epics[ticker] = encontrados[ticker]
@@ -665,7 +702,10 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   // Lo que hace falta para mandar una orden: moneda, tamaño mínimo, distancia mínima del
   // stop, cuánto vale un punto (y en euros, con el cambio que da IG: baseExchangeRate es lo
   // que vale 1 € en esa moneda), si la cuenta tiene precio, que es lo que dice si puede
-  // operarlo, y si admite órdenes a mercado (los de diario sí; el DAX de fin de semana no)
+  // operarlo, y si admite órdenes a mercado (los de diario sí; el DAX de fin de semana no).
+  // `valorPunto` es por punto (pip) de IG; `valorPrecio`, por unidad del precio con el que se
+  // trabaja: en divisas el pip es 0,0001 del precio (scalingFactor 10.000), y en los que IG da
+  // en centavos el precio se pasa a dólares con `escala`
   async function datosMercado(ticker, epic = null) {
     const { json } = await pedir(`/markets/${encodeURIComponent(epicDe(ticker, epic))}`, { version: 3 })
     const reglas = json.dealingRules ?? {}
@@ -677,6 +717,9 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       moneda:      moneda.code,
       cambioAEur:  moneda.code === 'EUR' ? 1 : (moneda.baseExchangeRate ? 1 / moneda.baseExchangeRate : null),
       valorPunto:  Number(json.instrument?.valueOfOnePip) || null,
+      valorPrecio: (Number(json.instrument?.valueOfOnePip) || 0) * (Number(json.snapshot?.scalingFactor) || 1) / escalaDe(ticker) || null,
+      // los decimales del precio (los de IG, más los que añade la escala): un stop con más no vale
+      decimales:   (Number(json.snapshot?.decimalPlacesFactor) || 0) + Math.max(0, Math.round(-Math.log10(escalaDe(ticker)))),
       tamanoMin:   reglas.minDealSize?.value ?? null,
       stopMin:     deIG(ticker, reglas.minNormalStopOrLimitDistance?.value ?? null),
       estado:      json.snapshot?.marketStatus,

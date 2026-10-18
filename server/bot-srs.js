@@ -214,13 +214,14 @@ export function nivelStop(bracket, lado, stopPct) {
 // Lo que se arriesga por operación: un `riesgoPct` % del saldo de la cuenta
 export const riesgoDeCuenta = (saldo, riesgoPct) => (saldo > 0 && riesgoPct > 0 ? saldo * riesgoPct / 100 : null)
 
-// Contratos para arriesgar `riesgoEur` hasta el stop, de décima en décima. Si eso queda por
-// debajo del mínimo de IG, se usa el mínimo mientras no arriesgue más del doble; si no, no.
-export function tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto, cambioAEur, tamanoMin }) {
+// Contratos para arriesgar `riesgoEur` hasta el stop, de `paso` en `paso` (décimas, o
+// centésimas en los contratos que admiten tamaños menores). Si eso queda por debajo del mínimo
+// de IG, se usa el mínimo mientras no arriesgue más del doble; si no, no.
+export function tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto, cambioAEur, tamanoMin, paso = 0.1 }) {
   if (!(riesgoPts > 0) || !(valorPunto > 0) || !(cambioAEur > 0)) return { ok: false, motivo: 'faltan datos del mercado' }
   const eurPorContrato = riesgoPts * valorPunto * cambioAEur
   const min = tamanoMin ?? 0.1
-  let tamano = Math.floor((riesgoEur / eurPorContrato) * 10 + 1e-9) / 10
+  let tamano = Math.round(Math.floor(riesgoEur / eurPorContrato / paso + 1e-9) * paso * 100) / 100
   if (tamano < min) {
     if (min * eurPorContrato > 2 * riesgoEur) {
       return { ok: false, motivo: `el mínimo de IG (${min}) arriesgaría ${Math.round(min * eurPorContrato)} €` }

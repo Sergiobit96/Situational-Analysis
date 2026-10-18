@@ -12,6 +12,9 @@ import './Bot.css'
 const num = (n, dec = 1) => (n == null || !Number.isFinite(n) ? '—' : n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec }))
 const eur = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n, 0)} €`)
 const conSigno = (n, dec = 1) => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n, dec)}`)
+// Un precio con los decimales que pide su tamaño: las divisas, con 5 (como en el servidor)
+const decimalesPara = x => { const a = Math.abs(x ?? 0); return a >= 1000 ? 1 : a >= 100 ? 2 : a >= 10 ? 3 : 5 }
+const px = n => (n == null ? '—' : num(n, decimalesPara(n)))
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
 const fechaHora = ts => new Date(ts * 1000).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const horaEvento = iso => new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -196,9 +199,9 @@ export default function BotTortugas() {
                     <td className="bot-celda-texto">{o.sistema ? `S${o.sistema}` : '—'}</td>
                     <td className="bot-celda-texto">{o.lado === 'largo' ? 'Largo' : 'Corto'}{o.ruptura ? ` (${o.ruptura})` : ''}</td>
                     <td>{o.abierta}</td>
-                    <td>{o.unidades} · {num(o.contratos, 1)} c.</td>
-                    <td>{num(o.entradaMedia)}</td>
-                    <td>{num(o.salida)}{o.aproximado ? ' (aprox.)' : ''}</td>
+                    <td>{o.unidades} · {num(o.contratos, 2)} c.</td>
+                    <td>{px(o.entradaMedia)}</td>
+                    <td>{px(o.salida)}{o.aproximado ? ' (aprox.)' : ''}</td>
                     <td className="bot-celda-texto">{o.motivo}</td>
                     <td className={tono(o.resultadoN)}>{conSigno(o.resultadoN, 2)}</td>
                     <td className={tono(o.resultadoEur)}>{eur(o.resultadoEur)}</td>
@@ -305,9 +308,9 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
         const siguiente = pos ? pos.unidades.at(-1).entrada + dir(pos.lado) * reglas.pasoN * pos.n0 : null
         const juega = config.sistemas.includes(s)
         const entrada = !sp ? '—'
-          : pos ? (pos.unidades.length < config.maxUnidades ? `añade en ${num(siguiente)}` : 'pirámide llena')
+          : pos ? (pos.unidades.length < config.maxUnidades ? `añade en ${px(siguiente)}` : 'pirámide llena')
           : !juega ? 'no se juega'
-          : [config.lados !== 'cortos' && `> ${num(sp.entrada.largo.nivel)}`, config.lados !== 'largos' && `< ${num(sp.entrada.corto.nivel)}`].filter(Boolean).join(' · ')
+          : [config.lados !== 'cortos' && `> ${px(sp.entrada.largo.nivel)}`, config.lados !== 'largos' && `< ${px(sp.entrada.corto.nivel)}`].filter(Boolean).join(' · ')
         return (
           <tr key={s}>
             {i === 0 && <>
@@ -318,12 +321,12 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
                 </label>
               </td>
               <td className="bot-celda-texto" rowSpan={n}>{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
-              <td className="tor-num" rowSpan={n}>{hoy ? num(hoy.n) : '—'}</td>
-              <td className="tor-num" rowSpan={n}>{num(m.precio)}</td>
+              <td className="tor-num" rowSpan={n}>{hoy ? px(hoy.n) : '—'}</td>
+              <td className="tor-num" rowSpan={n}>{px(m.precio)}</td>
               <td className="bot-celda-texto" rowSpan={n}>
                 {!plan ? '—'
                   : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
-                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small></>
+                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano, 2)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small></>
                   : <><span className="bot-neg">no cabe</span><small className="tor-sub tor-motivo">{plan.unidad?.motivo}</small></>}
               </td>
             </>}
@@ -331,9 +334,9 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
             <td className="bot-celda-texto" title={sp ? `Canal de ${sp.k} sesiones${sp.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
               {entrada}{sp && !pos && juega ? <small> ({sp.k}{sp.filtro ? ', filtro' : ''})</small> : null}
             </td>
-            <td>{sp && pos ? <>{num(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></> : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>
+            <td>{sp && pos ? <>{px(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></> : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>
             <td className="bot-celda-texto">
-              {pos ? <>{pos.lado === 'largo' ? 'Largo' : 'Corto'} ×{pos.unidades.length} · {num(c.contratos)} c. a {num(c.medio)}<small className="tor-sub">stop {num(pos.stop)} · desde {pos.abierta}{pos.recuperada ? ' · recuperada' : ''}</small></>
+              {pos ? <>{pos.lado === 'largo' ? 'Largo' : 'Corto'} ×{pos.unidades.length} · {num(c.contratos, 2)} c. a {px(c.medio)}<small className="tor-sub">stop {px(pos.stop)} · desde {pos.abierta}{pos.recuperada ? ' · recuperada' : ''}</small></>
                 : m.intentos[s] ? 'mandando la orden…' : '—'}
             </td>
             <td className={`tor-num ${tono(c?.abierto)}`}>

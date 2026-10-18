@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, CONFIG_TORTUGAS_BOT } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -167,6 +167,9 @@ const MERCADOS = {
   'IX.D.NASDAQ.ICE.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.2, factorMargen: 0.05 },
   'IX.D.NASDAQ.IEC.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, factorMargen: 0.05 },
   'IX.D.NASDAQ.IFD.IP': { ticker: '^NDX',   valorPunto: 100, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, factorMargen: 0.05 },
+  // en divisas el punto de IG es el pip (0,0001): 1 $ por pip en el mini son 10.000 $ por unidad de precio
+  'CS.D.EURUSD.CECM.IP': { ticker: 'EURUSD', valorPunto: 1, valorPrecio: 10_000, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.1, factorMargen: 0.0333, decimales: 5 },
+  'CS.D.EURUSD.CEC.IP':  { ticker: 'EURUSD', valorPunto: 10, valorPrecio: 100_000, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.1, factorMargen: 0.0333, decimales: 5 },
 }
 
 // `sinPrecio`: los contratos que la cuenta no puede operar (su ficha viene sin precio)
@@ -228,7 +231,11 @@ function botDePrueba(ig, diarios, cambios = {}) {
   const pedidas = []
   const bot = crearBotTortugas({
     ig, archivo: join(dir, 'Bot Tortugas.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar: x => avisos.push(x),
-    velasDiarias: async ticker => { pedidas.push(ticker); return diarios[ticker] ?? [] },
+    velasDiarias: async ticker => {
+      pedidas.push(ticker)
+      if (diarios[ticker] instanceof Error) throw diarios[ticker]
+      return diarios[ticker] ?? []
+    },
   })
   bot.cambiarConfig({ activo: true, ...cambios })
   return { bot, dir, avisos, pedidas, enHora: x => { t = x }, archivo: join(dir, 'Bot Tortugas.json') }
@@ -524,5 +531,68 @@ test('con cortos: vende al romper el mínimo, añade ½ N más abajo y sale al r
     assert.equal(op.lado, 'corto')
     assert.equal(op.motivo, 'canal 10')
     assert.ok(Math.abs(op.resultadoEur - ((24_845 - 25_155) * 0.6 + (24_694 - 25_155) * 0.6)) < 1e-6)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ── Divisas y materias primas ──
+
+const utcS = (mes, dia, h, m = 0, sg = 0) => Date.UTC(2026, mes - 1, dia, h, m, sg) / 1000
+const solo = ticker => ({ instrumentos: Object.fromEntries(Object.keys(CONFIG_TORTUGAS_BOT.instrumentos).map(t => [t, t === ticker])), sistemas: [1] })
+
+test('las divisas tienen su día de 17:00 a 17:00 de Nueva York y las materias primas, de 18:00 a 17:00', () => {
+  // domingo 18-oct a las 18:00 de Nueva York (22:00 UTC): ya es la sesión del lunes
+  const lunes = sesionTortugas('EURUSD', utcS(10, 18, 22))
+  assert.equal(lunes.fecha, '2026-10-19')
+  assert.equal(lunes.abre, utcS(10, 18, 21))
+  assert.equal(lunes.cierra, utcS(10, 19, 21))
+  // el viernes a las 17:30 de Nueva York no queda sesión hasta el domingo
+  const viernes = utcS(10, 23, 21, 30)
+  const s = sesionTortugas('EURUSD', viernes)
+  assert.ok(!(viernes >= s.abre && viernes < s.cierra))
+  assert.equal(proximaAperturaTortugas('EURUSD', viernes), utcS(10, 25, 21))
+  // el crudo abre el domingo a las 18:00 de Nueva York
+  assert.equal(sesionTortugas('USOIL', utcS(10, 18, 23)).abre, utcS(10, 18, 22))
+  // y los índices, a la hora de su bolsa, como el bot SRS
+  assert.equal(sesionTortugas('^GDAXI', utcS(10, 19, 12)).abre, sesionDe('^GDAXI', utcS(10, 19, 12)).abre)
+})
+
+test('divisas: el plan, dos horas y media después de abrir; la unidad, por pip; el stop, con sus 5 decimales', async () => {
+  const ig = igFalso({ precios: { EURUSD: [1.12, 1.12008] } })
+  // un diario plano de 1,117 a 1,123: N = 0,006, máximo de 20 = 1,123
+  const { bot, dir, enHora } = botDePrueba(ig, { EURUSD: diarioPlano(1.12, 0.003) }, solo('EURUSD'))
+  try {
+    enHora(utcS(10, 18, 21, 10)); await bot._paso()               // domingo, 10 min después de abrir
+    assert.equal(mercado(bot, 'EURUSD').plan, null)
+    enHora(utcS(10, 18, 23, 31)); await bot._paso()               // 2 h 31 min después
+    const plan = mercado(bot, 'EURUSD').plan
+    assert.equal(plan.fecha, '2026-10-19')
+    assert.ok(Math.abs(plan.n - 0.006) < 1e-12)
+    // 1% de 20.000 € = 200 € por N; una N son 60 pips × 1 $ × 0,86 = 51,6 € por contrato mini: 3,8
+    assert.equal(plan.unidad.epic, 'CS.D.EURUSD.CECM.IP')
+    assert.equal(plan.unidad.tamano, 3.8)
+    // rompe 1,123: compra con el stop a 2 N (0,012), redondeado a 5 decimales
+    ig.precios.EURUSD = [1.12305, 1.12312]
+    vela1m('EURUSD', utcS(10, 18, 23, 40), 1.12315, 1.1229)
+    enHora(utcS(10, 18, 23, 40, 20)); await bot._paso()
+    const abrir = ig.ordenes.find(o => o.tipo === 'abrir')
+    assert.equal(abrir.tamano, 3.8)
+    assert.equal(abrir.stop, 1.11112)
+    assert.ok(bot.estado().eventos.some(e => /Compra de 3,8 a 1,12312/.test(e.texto)))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('materias primas: sin cupo de histórico de IG, el plan espera una hora en vez de insistir', async () => {
+  const ig = igFalso({})
+  const sinCupo = new Error('Agotado el cupo semanal de histórico de IG; el directo sigue funcionando')
+  const { bot, dir, enHora, pedidas, avisos } = botDePrueba(ig, { USOIL: sinCupo }, solo('USOIL'))
+  try {
+    enHora(utcS(10, 19, 0, 31)); await bot._paso()                // lunes 00:31 UTC: 2 h 31 min después de abrir
+    assert.match(mercado(bot, 'USOIL').plan.error, /IG no da el diario: Agotado el cupo/)
+    assert.equal(pedidas.filter(t => t === 'USOIL').length, 1)
+    enHora(utcS(10, 19, 1, 0)); await bot._paso()
+    assert.equal(pedidas.filter(t => t === 'USOIL').length, 1, 'no vuelve a pedirlo antes de una hora')
+    enHora(utcS(10, 19, 1, 32)); await bot._paso()
+    assert.equal(pedidas.filter(t => t === 'USOIL').length, 2)
+    assert.equal(avisos.filter(a => /Crudo WTI · IG no da el diario/.test(a)).length, 1)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

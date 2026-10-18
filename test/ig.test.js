@@ -134,8 +134,9 @@ test('entra, usa los mercados de contado comprobados, se suscribe a sus velas de
     assert.equal(ls.endpoint, 'https://demo-apd.ejemplo')
     assert.equal(ls.usuario, 'ABC123')
     assert.equal(ls.clave, 'CST-cst1|XST-xst1')
-    // una suscripción por instrumento
-    assert.equal(ls.subs.length, 10)
+    // una suscripción por instrumento (los 10 del gráfico y las divisas y materias primas del bot de las tortugas)
+    assert.equal(ls.subs.length, Object.keys(EPICS_IG).length)
+    assert.equal(ls.subs.length, 25)
     assert.deepEqual(ls.subs[0].items, ['CHART:IX.D.DAX.IFMM.IP:1MINUTE'])
 
     const utm = Date.UTC(2026, 9, 19, 8, 3, 10)

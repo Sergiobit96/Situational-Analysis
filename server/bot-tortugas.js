@@ -291,6 +291,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   const posicionesDe = sistema => Object.values(datos.posiciones).filter(p => p.sistema === sistema)
 
   // ── El plan de una sesión: niveles de Yahoo y tamaño de la unidad con la cuenta de IG ──
+  // Sin cupo de histórico de IG fallan a la vez todas las materias primas: se avisa una vez,
+  // con un solo mensaje, y no uno por mercado cada vez que se reintenta
+  let avisoSinCupo = 0
   let cuentaVista = null
   async function cuentaReciente() {
     if (!cuentaVista || ahora() - cuentaVista.t >= CUENTA_VALE_S) cuentaVista = { t: ahora(), c: await ig.operar.cuenta() }
@@ -316,16 +319,21 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const anterior = datos.planes[ticker]
     const reparto = cfg.sistemas.length || 1
     const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct, reparto }
-    const falla = (texto, espera = REINTENTO_PLAN_S) => {
+    const falla = (texto, { espera = REINTENTO_PLAN_S, aviso = !plan.provisional } = {}) => {
       Object.assign(plan, { error: texto, reintentar: ahora() + espera })
       datos.planes[ticker] = plan
-      apuntar(ticker, texto, { aviso: !plan.provisional })
+      apuntar(ticker, texto, { aviso })
     }
     const fuente = MERCADOS_TORTUGAS[ticker]?.datos?.fuente === 'ig' ? 'IG' : 'Yahoo'
     let velas
     try { velas = await velasDiarias(ticker) } catch (err) {
+      if (!/cupo/i.test(err.message)) return falla(`${fuente} no da el diario: ${err.message}`)
       // sin el cupo semanal de histórico de IG, no tiene sentido pedirlo más a menudo que cada hora
-      return falla(`${fuente} no da el diario: ${err.message}`, /cupo/i.test(err.message) ? 3600 : REINTENTO_PLAN_S)
+      if (ahora() - avisoSinCupo > 12 * 3600) {
+        avisoSinCupo = ahora()
+        avisarSinFallar('Tortugas: IG ha agotado el cupo semanal de histórico, así que las materias primas no tienen niveles hasta que se renueve. Lo reintento cada hora.')
+      }
+      return falla(`${fuente} no da el diario: ${err.message}`, { espera: 3600, aviso: false })
     }
     const nv = nivelesTortugas((velas ?? []).filter(v => v.date < ses.fecha), { stopN: STOP_N })
     if (!nv) return falla('No hay bastantes velas diarias para calcular los niveles')

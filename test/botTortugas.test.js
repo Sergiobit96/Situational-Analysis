@@ -593,6 +593,8 @@ test('materias primas: sin cupo de histórico de IG, el plan espera una hora en 
     assert.equal(pedidas.filter(t => t === 'USOIL').length, 1, 'no vuelve a pedirlo antes de una hora')
     enHora(utcS(10, 19, 1, 32)); await bot._paso()
     assert.equal(pedidas.filter(t => t === 'USOIL').length, 2)
-    assert.equal(avisos.filter(a => /Crudo WTI · IG no da el diario/.test(a)).length, 1)
+    // un solo aviso por Telegram para el cupo, no uno por mercado
+    assert.equal(avisos.filter(a => /no da el diario/.test(a)).length, 0)
+    assert.equal(avisos.filter(a => /agotado el cupo semanal de histórico/.test(a)).length, 1)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

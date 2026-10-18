@@ -12,6 +12,7 @@ import { crearIG, IG_RESOLUCION } from './ig.js'
 import { suscribir, resumenTiempoReal } from './tiempo-real.js'
 import { crearBot } from './bot-srs.js'
 import { crearClaveBot } from './clave-bot.js'
+import { crearTelegram } from './telegram.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import Anthropic from '@anthropic-ai/sdk'
@@ -2538,7 +2539,13 @@ const BOT_OPERA = process.env.BOT_OPERA === '1'
 const BOT_PATH = process.env.BOT_SRS || (process.env.NODE_ENV === 'production'
   ? join(existsSync('/data') ? '/data' : DISK_CACHE_DIR, 'bot-srs.json')
   : join(PHOTOS_ROOT, 'Bot SRS.json'))
-const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH }) : null
+// Avisos del bot por Telegram (server/telegram.js): solo los manda el servidor que opera
+const telegram = crearTelegram({
+  token:   process.env.TELEGRAM_TOKEN || '',
+  chatId:  process.env.TELEGRAM_CHAT_ID || '',
+  archivo: join(dirname(BOT_PATH), 'telegram.json'),
+})
+const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (bot && BOT_OPERA) bot.arrancar()
 if (bot) console.log(`[bot] registro en ${BOT_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
@@ -2546,7 +2553,7 @@ const sinBot = res => res.status(404).json({ error: ig ? 'El bot solo funciona c
 
 app.get('/api/bot', (req, res) => {
   if (!bot) return sinBot(res)
-  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
+  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
 })
 
 app.put('/api/bot/config', (req, res) => {
@@ -2566,6 +2573,12 @@ app.get('/api/bot/posiciones', async (req, res) => {
   if (!bot) return sinBot(res)
   try { res.json(await ig.operar.posiciones()) }
   catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Conecta los avisos por Telegram (busca el chat la primera vez) y manda un mensaje de prueba
+app.post('/api/bot/telegram', async (req, res) => {
+  try { res.json(await telegram.conectar()) }
+  catch (err) { res.status(400).json({ error: err.message }) }
 })
 
 app.post('/api/bot/ensayo', async (req, res) => {

@@ -5,18 +5,26 @@
 // se compra al romper el máximo (y en modo "ambos" se vende al romper el mínimo, mandando el
 // que se rompa antes); stop al otro lado del bracket (o a mitad, con stopPct 0,5);
 // opcionalmente a break even al recorrer beR veces el riesgo; y cierre con la sesión.
+// En modo "flip" (flip the switch), si salta el stop se da la vuelta: entra en el sentido
+// contrario con el stop al otro lado del bracket, una sola vez por sesión. Con pirámide,
+// añade una posición cada `piramide` R a favor, hasta MAX_UNIDADES abiertas, y el stop de
+// todas va a su precio medio. Las reglas son las de analizarSesion (src/segundaVelaCore.js),
+// para que lo que hace el bot se pueda comparar con el backtest.
 //
 // Cómo opera:
 //   · la entrada la decide el bot con el precio en directo: orden a mercado con el stop
 //     dentro, que guarda IG (donde IG no admite órdenes a mercado, como el DAX de fin de
-//     semana, límite que se ejecuta al momento o se anula, con tope de deslizamiento);
+//     semana, límite que se ejecuta al momento o se anula); si el precio ya se ha ido del
+//     nivel más de `deslizamientoMaxR` veces el bracket, no la manda: no persigue el precio;
 //     no deja órdenes pendientes en IG, así que no entran dos lados a la vez ni entra nada
 //     con el bot parado;
 //   · el tamaño sale del riesgo: se arriesgan `riesgoEur` euros hasta el stop, con el
 //     contrato más pequeño que la cuenta pueda operar y sin pasar de una parte del margen;
 //   · cada orden lleva una referencia propia (SRS-…): si el registro se pierde (un despliegue
 //     sin volumen), al arrancar recupera sus posiciones abiertas desde IG y las sigue;
-//   · si arranca con la sesión empezada y la rotura ya pasó, no entra tarde.
+//   · si arranca con la sesión empezada y la rotura ya pasó, no entra tarde;
+//   · todo lo que apunta (bracket, entradas, añadidos, stops, salidas, errores) lo avisa
+//     también por Telegram, si el servidor lo tiene configurado (server/telegram.js).
 // Solo opera en la demo (candado en server/ig.js) y solo donde BOT_OPERA=1 (server/index.js).
 //
 // El registro (configuración y un apunte por sesión) va a un JSON. Al cierre guarda las velas
@@ -43,20 +51,28 @@ export const SESIONES_BOT = {
 export const CONFIG_INICIAL = {
   activo:            false,
   instrumentos:      { '^N225': true, '^GDAXI': true, '^FTSE': false, '^NDX': true, '^GSPC': true, '^DJI': true, '^RUT': false },
-  modo:              'ambos', // 'largo': solo compra; 'ambos': compra o vende, la rotura que llegue antes
-  stopPct:           1,       // 1: stop al otro lado del bracket; 0,5: a mitad de vela
+  modo:              'flip',  // 'largo': solo compra; 'ambos': compra o vende, la rotura que llegue antes;
+                              // 'flip': como 'ambos', y si salta el stop da la vuelta (una vez por sesión)
+  stopPct:           1,       // 1: stop al otro lado del bracket; 0,5: a mitad de vela (sin flip)
   beR:               null,    // null, 1 o 2: stop a la entrada al recorrer esas veces el riesgo
+  piramide:          1,       // null: sin pirámide; un número: una posición más cada tantas R a favor
+  tamanoAnadido:     0.5,     // lo que mete cada añadido, en fracción de la entrada: 1 o 0,5
   riesgoEur:         400,     // lo que se arriesga por operación hasta el stop, en euros (un 2% de la demo de 20.000 €;
                               // con menos, el mínimo de IG en el Dow o el Nikkei ya arriesga más del doble y no entrarían)
-  deslizamientoMaxR: 0.25,    // solo donde IG no admite órdenes a mercado: peor precio aceptable, en fracción del bracket
+  deslizamientoMaxR: 0.25,    // no entra (ni da la vuelta, ni añade) si el precio ya se ha ido del nivel más de esta
+                              // fracción del bracket; donde IG no admite órdenes a mercado, es el límite de la orden
   rangoMaxPct:       0.8,     // si el bracket mide más (en % del precio), ese día no se opera
 }
 
 const MINUTOS_VELA = 15
 const REVISAR_CADA_MS = 30_000   // cada cuánto se mira en IG si una posición sigue abierta
+const REVISAR_YA_MS = 2_000      // con el precio al otro lado del stop y una vuelta pendiente, se mira mucho más a menudo
+const ESPERA_STOP_S = 10         // si el precio pasó el stop y IG no ha cerrado en este rato, cierra el bot
 const BUSQUEDAS_CIERRE = 4       // revisiones buscando el precio de cierre antes de dar por bueno el del stop
 const MARGEN_MAX = 0.4           // parte del disponible que puede ocupar el margen de una posición (el mínimo del Nikkei es ~36%)
 const PREFIJO = 'SRS-'           // referencia de las órdenes del bot
+export const MAX_UNIDADES = 5    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida
+const MAX_PIERNAS = 2            // flip the switch: la entrada y una única vuelta, como el backtest
 
 export const minutoMadrid = ts => Math.floor(((ts + offsetMadrid(ts)) % 86400 + 86400) % 86400 / 60)
 const horaMadrid = ts => new Date((ts + offsetMadrid(ts)) * 1000).toISOString().slice(11, 16)
@@ -87,23 +103,58 @@ export function proximaApertura(ticker, t) {
   return null
 }
 
+// ── Piernas y posiciones ──
+// Cada sesión tiene una pierna en curso (`operacion`: un sentido, con una o varias
+// posiciones de IG en `unidades`) y las que ya se cerraron antes de dar la vuelta
+// (`anteriores`).
+
+// Una pierna abierta: la operación en curso, sin salida
+export const posicionAbierta = d => !!d?.operacion && !d.operacion.salida && !d.salida
+// La sesión aún tiene algo entre manos: posiciones, una orden por confirmar o una vuelta pendiente
+const enJuego = d => posicionAbierta(d) || d?.estado === 'entrando' || d?.estado === 'esperando-vuelta'
+// Como el backtest: con flip y el stop al otro lado del bracket (justo donde entra el sentido
+// contrario) da la vuelta, y solo desde la primera pierna
+const puedeDarLaVuelta = (dia, cfg) => cfg.modo === 'flip' && cfg.stopPct === 1 && (dia.anteriores?.length ?? 0) + 1 < MAX_PIERNAS
+const nivelDe = (bracket, lado) => (lado === 'largo' ? bracket.high : bracket.low)
+const contrario = lado => (lado === 'largo' ? 'corto' : 'largo')
+// Dónde entra la posición n+1 de la pirámide: n tramos de `piramide` R desde el nivel de la
+// rotura, que es desde donde cuenta el backtest
+const nivelAnadido = (op, cfg, n) => op.nivelOrden + (op.lado === 'largo' ? 1 : -1) * n * cfg.piramide * op.riesgo
+
 // ── La decisión (pura) ──
 // Con el apunte de la sesión, la configuración, la hora, las últimas velas de 1 min en
 // directo y la sesión, dice qué toca hacer ahora. No llama a nada.
 export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
-  const abierta = dia?.operacion && !dia.salida
+  const abierta = posicionAbierta(dia)
   // una orden mandada cuya confirmación no llegó: antes de nada, ver en IG si entró
   if (dia?.estado === 'entrando') return { accion: 'reconciliar' }
   // con la sesión cerrada: cerrar lo que siga abierto y guardar las velas del día
   if (ahora >= ses.cierra) {
     if (abierta) return { accion: 'cerrar', motivo: 'cierre' }
+    if (dia?.estado === 'esperando-vuelta') return { accion: 'sin-vuelta' }
     return dia?.bracket && !dia.velas ? { accion: 'velas' } : { accion: 'nada' }
   }
+  // el precio de ahora: la última vela de 1 min, si es de hace nada
+  const ultima = velas.at(-1)
+  const precio = ultima && ultima.time + 120 > ahora ? ultima.close : null
   if (abierta) {
     const op = dia.operacion
+    const largo = op.lado === 'largo'
+    // el precio está al otro lado del stop y toca dar la vuelta: IG la cierra con su stop, y
+    // hay que verlo cuanto antes para entrar en el otro sentido cerca del nivel
+    if (puedeDarLaVuelta(dia, cfg) && !op.be && op.stop != null && precio != null && (largo ? precio <= op.stop : precio >= op.stop)) {
+      return { accion: 'revisar-ya' }
+    }
+    // pirámide: el precio llegó al nivel de la siguiente posición (una como mucho cada 5 min)
+    const n = op.unidades?.length ?? 1
+    if (cfg.activo && cfg.piramide && n < MAX_UNIDADES && !op.sinAnadidos && precio != null
+        && Math.floor(ahora / 300) !== op.ultimoCubo5 && !(op.esperaAnadir > ahora)) {
+      const nivel = nivelAnadido(op, cfg, n)
+      if (largo ? precio >= nivel : precio <= nivel) return { accion: 'anadir' }
+    }
     if (cfg.beR != null && !op.be) {
       const despues = velas.filter(v => v.time + 60 > op.hora)
-      const favor = op.lado === 'largo'
+      const favor = largo
         ? Math.max(...despues.map(v => v.high)) - op.entrada
         : op.entrada - Math.min(...despues.map(v => v.low))
       if (despues.length && favor >= cfg.beR * op.riesgo) return { accion: 'breakeven' }
@@ -112,6 +163,14 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
   }
   if (!dia || dia.estado === 'terminado' || dia.estado === 'sin-operar') return { accion: 'nada' }
   if (!cfg.activo) return { accion: 'nada' }
+  if (dia.estado === 'esperando-vuelta') {
+    // se da la vuelta con el precio al otro lado del bracket, que es donde entra el sentido
+    // contrario; si ya ha vuelto dentro, se espera a que lo rompa otra vez
+    const lado = contrario(dia.anteriores.at(-1).lado)
+    const nivel = nivelDe(dia.bracket, lado)
+    if (precio != null && !(dia.esperaVuelta > ahora) && (lado === 'largo' ? precio >= nivel : precio <= nivel)) return { accion: 'vuelta', lado }
+    return { accion: 'nada' }
+  }
   if (ahora < ses.finBracket) return { accion: 'nada' }
   if (!dia.bracket) return { accion: 'bracket' }
 
@@ -145,8 +204,32 @@ export function tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto, cambioAEur, 
   return { ok: true, tamano, riesgoEur: tamano * eurPorContrato }
 }
 
+// Los apuntes de antes de la pirámide y el flip tenían una sola posición por sesión: se
+// pasan a la forma de ahora (la pierna con su lista de posiciones) al leer el registro
+function normalizar(d) {
+  const op = d.operacion
+  if (!op || op.unidades) return
+  const salida = d.salida ? { nivel: d.salida.nivel, hora: d.salida.hora, ...(d.salida.aproximado ? { aproximado: true } : {}) } : null
+  op.unidades = [{ dealId: op.dealId, tamano: op.tamano, entrada: op.entrada, stop: op.stop, hora: op.hora, ...(salida ? { salida } : {}) }]
+  if (d.salida) Object.assign(op, { salida: d.salida, resultadoPts: d.resultadoPts ?? null, resultadoEur: d.resultadoEur ?? null })
+}
+
+// Lo que cuenta cada cambio de configuración en el aviso
+const DESCRIBIR = {
+  activo:            v => (v ? 'Bot encendido' : 'Bot apagado'),
+  modo:              v => `Operativa: ${{ largo: 'solo compras', ambos: 'compra o venta', flip: 'compra o venta, con flip the switch' }[v]}`,
+  stopPct:           v => `Stop: ${v === 1 ? 'al otro lado del bracket' : 'a mitad del bracket'}`,
+  beR:               v => `Break even: ${v == null ? 'no' : `al recorrer ${v}R`}`,
+  piramide:          v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${v}R a favor, hasta ${MAX_UNIDADES}`}`,
+  tamanoAnadido:     v => `Cada añadido: ${v === 1 ? 'una unidad entera' : 'media unidad'}`,
+  riesgoEur:         v => `Riesgo por operación: ${v} €`,
+  deslizamientoMaxR: v => `No entra si el precio se ha ido del nivel más de un ${Math.round(v * 100)}% del bracket`,
+  rangoMaxPct:       v => `Bracket máximo: ${v}% del precio`,
+}
+
 // ── El bot ──
-export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS }) {
+// `avisar(texto)` recibe lo que pasa (para Telegram); si falla, el bot sigue a lo suyo.
+export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {} }) {
   let datos = { config: { ...CONFIG_INICIAL }, dias: {} }
   try {
     const leido = JSON.parse(readFileSync(archivo, 'utf8'))
@@ -155,6 +238,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     config.instrumentos = { ...CONFIG_INICIAL.instrumentos, ...config.instrumentos }
     datos = { config, dias: leido.dias ?? {} }
   } catch { /* primera vez */ }
+  for (const d of Object.values(datos.dias)) normalizar(d)
 
   // Solo se escribe si algo cambió: el bucle pasa cada 5 s
   let guardado = JSON.stringify(datos, null, 2)
@@ -166,6 +250,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       renameSync(`${archivo}.tmp`, archivo)
       guardado = texto
     } catch (err) { log(`[bot] no se ha podido guardar: ${err.message}`) }
+  }
+
+  function avisarSinFallar(texto) {
+    try { Promise.resolve(avisar(texto)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
   }
 
   const clave = ses => `${ses.fecha} ${ses.ticker}`
@@ -182,10 +270,15 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     }
     return datos.dias[k] ?? null
   }
-  function apuntar(dia, texto) {
+  // Apunta lo que pasa en la sesión y lo avisa. Lo mismo dos veces seguidas (un error que se
+  // repite en cada paso) se apunta y se avisa una sola vez.
+  function apuntar(dia, texto, { aviso = true } = {}) {
+    if (dia.eventos.at(-1)?.texto === texto) return
     dia.eventos.push({ hora: new Date(ahora() * 1000).toISOString(), texto })
     log(`[bot] ${dia.clave} ${texto}`)
+    if (aviso) avisarSinFallar(`${SESIONES_BOT[dia.ticker]?.nombre ?? dia.ticker} · ${texto}`)
   }
+  const referenciaNueva = dia => `${PREFIJO}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
 
   // ── Las acciones ──
 
@@ -255,81 +348,242 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     apuntar(dia, `Plan: ${plan.tamano} contratos de ${plan.epic} (${plan.valorPunto} ${plan.moneda} por punto), ${Math.round(plan.riesgoEur)} € hasta el stop`)
   }
 
-  async function entrar(dia, lado) {
+  // Entra en la rotura (o, con `vuelta`, en el sentido contrario tras saltar el stop) si el
+  // precio no se ha ido del nivel más del tope
+  async function entrar(dia, lado, { vuelta = false } = {}) {
     const cfg = dia.config
-    const { plan } = dia
-    const stop = nivelStop(dia.bracket, lado, cfg.stopPct)
+    const { plan, bracket } = dia
+    const nivel = nivelDe(bracket, lado)
+    const stop = nivelStop(bracket, lado, cfg.stopPct)
+    const tope = cfg.deslizamientoMaxR * bracket.rango
     const m = await ig.operar.datosMercado(dia.ticker, plan.epic)
-    const margen = cfg.deslizamientoMaxR * dia.bracket.rango
-    const limite = m.aMercado ? null : (lado === 'largo' ? m.oferta + margen : m.bid - margen)
-    const referencia = `${PREFIJO}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
-    apuntar(dia, `Rotura ${lado === 'largo' ? 'por arriba: compra' : 'por abajo: venta'} de ${plan.tamano} con stop en ${stop.toFixed(1)}`)
+    const precio = lado === 'largo' ? m.oferta : m.bid
+    const exceso = lado === 'largo' ? precio - nivel : nivel - precio
+    const noSigue = () => { if (vuelta) finalizar(dia); else dia.estado = 'sin-operar' }
+    if (exceso > tope) {
+      apuntar(dia, `El precio (${precio}) ya está ${exceso.toFixed(1)} puntos más allá de ${nivel}, y el tope es ${tope.toFixed(1)}: ${vuelta ? 'no se da la vuelta' : 'hoy no se entra'}`)
+      noSigue()
+      return
+    }
+    if (vuelta && exceso < -tope) {
+      // ha vuelto dentro del bracket desde la última vela: se espera a que lo rompa otra vez
+      dia.esperaVuelta = ahora() + 5
+      return
+    }
+    const limite = m.aMercado ? null : (lado === 'largo' ? nivel + tope : nivel - tope)
+    const referencia = referenciaNueva(dia)
+    apuntar(dia, vuelta
+      ? `Flip the switch: ${lado === 'largo' ? 'compra' : 'venta'} de ${plan.tamano} con stop en ${stop.toFixed(1)}`
+      : `Rotura ${lado === 'largo' ? 'por arriba: compra' : 'por abajo: venta'} de ${plan.tamano} con stop en ${stop.toFixed(1)}`)
     // Se apunta ANTES de mandarla: si la confirmación no llega (un corte justo ahí), el bot
     // no la repite, sino que mira en IG si entró. Repetirla podría dejar dos posiciones.
     dia.estado = 'entrando'
-    dia.intento = { lado, tamano: plan.tamano, stop, hora: ahora(), referencia }
+    dia.intento = { tipo: vuelta ? 'vuelta' : 'entrada', lado, tamano: plan.tamano, stop, hora: ahora(), referencia }
     guardar()
     const r = await ig.operar.abrir({ ticker: dia.ticker, epic: plan.epic, lado, tamano: plan.tamano, stop, moneda: plan.moneda, limite, referencia })
     if (!r.aceptada) {
-      dia.estado = 'sin-operar'
       apuntar(dia, `IG rechaza la orden: ${r.motivo}`)
+      noSigue()
       return
     }
-    adoptar(dia, { lado, dealId: r.dealId, tamano: r.tamano ?? plan.tamano, nivel: r.nivel, stop: r.stop ?? stop })
+    adoptar(dia, { lado, dealId: r.dealId, tamano: r.tamano ?? plan.tamano, nivel: r.nivel, stop: r.stop ?? stop, referencia })
   }
 
-  function adoptar(dia, { lado, dealId, tamano, nivel, stop, hora = null }) {
-    const nivelOrden = dia.bracket ? (lado === 'largo' ? dia.bracket.high : dia.bracket.low) : nivel
+  // Una pierna nueva con su primera posición
+  function adoptar(dia, { lado, dealId, tamano, nivel, stop, referencia = null, hora = null }) {
+    const nivelOrden = dia.bracket ? nivelDe(dia.bracket, lado) : nivel
+    const h = hora ?? dia.intento?.hora ?? ahora()
+    // lo que se pagó de más (o de menos) respecto al nivel de la rotura, que es donde entra el backtest
+    const deslizamiento = lado === 'largo' ? nivel - nivelOrden : nivelOrden - nivel
     dia.operacion = {
       lado, dealId, tamano, nivelOrden, entrada: nivel, stop,
       riesgo: dia.bracket ? dia.bracket.rango * dia.config.stopPct : Math.abs(nivel - stop),
-      hora: hora ?? dia.intento?.hora ?? ahora(), be: false,
-      // lo que se pagó de más (o de menos) respecto al nivel de la rotura, que es donde entra el backtest
-      deslizamiento: lado === 'largo' ? nivel - nivelOrden : nivelOrden - nivel,
+      hora: h, be: false, deslizamiento,
+      unidades: [{ dealId, tamano, entrada: nivel, stop, hora: h, referencia, deslizamiento }],
     }
     dia.estado = 'en-posicion'
-    apuntar(dia, `Dentro a ${nivel} (${dia.operacion.deslizamiento >= 0 ? '+' : ''}${dia.operacion.deslizamiento.toFixed(1)} puntos sobre el nivel)`)
+    apuntar(dia, `Dentro a ${nivel} (${deslizamiento >= 0 ? '+' : ''}${deslizamiento.toFixed(1)} puntos sobre el nivel)`)
+  }
+
+  // Una posición más en la pierna en curso (un añadido de la pirámide)
+  function sumarUnidad(dia, { dealId, tamano, entrada, stop, referencia = null, nivel = entrada, hora = null }) {
+    const op = dia.operacion
+    const deslizamiento = op.lado === 'largo' ? entrada - nivel : nivel - entrada
+    op.unidades.push({ dealId, tamano, entrada, stop, hora: hora ?? ahora(), referencia, nivel, deslizamiento })
+    op.ultimoCubo5 = Math.floor(ahora() / 300)
+    apuntar(dia, `Añadida a ${entrada}: ${op.unidades.length} posiciones abiertas`)
   }
 
   // Tras una orden sin confirmar: si IG tiene la posición con su referencia (o una de ese
-  // mercado abierta desde el intento), es la nuestra; si no, no entró y hoy ya no se entra
+  // mercado abierta desde el intento), es la nuestra; si no, no entró
   async function reconciliar(dia) {
     const { intento } = dia
     const abiertas = await ig.operar.posiciones()
+    const conocidas = new Set((dia.operacion?.unidades ?? []).map(u => u.dealId))
     const nuestra = abiertas.find(p => p.referencia && p.referencia === intento.referencia)
-      ?? abiertas.find(p => p.ticker === dia.ticker && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
+      ?? abiertas.find(p => p.ticker === dia.ticker && !conocidas.has(p.dealId) && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
+    if (intento.tipo === 'anadido') {
+      dia.estado = 'en-posicion'
+      if (!nuestra) { apuntar(dia, 'El añadido no llegó a entrar en IG'); return }
+      apuntar(dia, 'La confirmación del añadido no llegó, pero la posición está abierta en IG: se sigue con ella')
+      sumarUnidad(dia, { dealId: nuestra.dealId, tamano: nuestra.tamano, entrada: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia, nivel: intento.nivel })
+      await ajustarStops(dia)
+      return
+    }
     if (nuestra) {
       apuntar(dia, 'La confirmación no llegó, pero la posición está abierta en IG: se sigue con ella')
-      adoptar(dia, { lado: nuestra.lado, dealId: nuestra.dealId, tamano: nuestra.tamano, nivel: nuestra.nivel, stop: nuestra.stop ?? intento.stop })
+      adoptar(dia, { lado: nuestra.lado, dealId: nuestra.dealId, tamano: nuestra.tamano, nivel: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia })
+    } else if (intento.tipo === 'vuelta') {
+      apuntar(dia, 'La orden de la vuelta no llegó a entrar en IG')
+      finalizar(dia)
     } else {
       dia.estado = 'sin-operar'
       apuntar(dia, 'La orden no llegó a entrar en IG; hoy ya no se entra')
     }
   }
 
+  // Pone el stop de todas las posiciones abiertas de la pierna en `nivel`. Devuelve lo que
+  // IG haya rechazado; la pierna solo cambia de stop si lo aceptó para todas
+  async function moverStops(dia, nivel) {
+    const op = dia.operacion
+    const fallos = []
+    for (const u of op.unidades.filter(x => !x.salida && x.stop !== nivel)) {
+      const r = await ig.operar.moverStop({ ticker: dia.ticker, dealId: u.dealId, stop: nivel })
+      if (r.aceptada) u.stop = nivel
+      else fallos.push(r.motivo)
+    }
+    if (!fallos.length) op.stop = nivel
+    return fallos
+  }
+
   async function breakeven(dia) {
     const op = dia.operacion
-    const r = await ig.operar.moverStop({ ticker: dia.ticker, dealId: op.dealId, stop: op.entrada })
     op.be = true
-    if (!r.aceptada) { apuntar(dia, `IG no deja mover el stop a break even: ${r.motivo}`); return }
-    op.stop = op.entrada
+    const fallos = await moverStops(dia, op.entrada)
+    if (fallos.length) { apuntar(dia, `IG no deja mover el stop a break even: ${fallos[0]}`); return }
     apuntar(dia, `Stop a break even (${op.entrada})`)
   }
 
-  function cerrarDia(dia, salida) {
-    const op = dia.operacion
-    dia.salida = salida
-    dia.resultadoPts = (op.lado === 'largo' ? 1 : -1) * (salida.nivel - op.entrada)
-    const plan = dia.plan
-    if (plan?.valorPunto && plan?.cambioAEur) dia.resultadoEur = dia.resultadoPts * op.tamano * plan.valorPunto * plan.cambioAEur
-    dia.estado = 'terminado'
-    apuntar(dia, `Fuera a ${salida.nivel} (${salida.motivo}): ${dia.resultadoPts >= 0 ? '+' : ''}${dia.resultadoPts.toFixed(1)} puntos`)
+  // El stop de la pierna en el precio medio de sus posiciones (contando `extra`, una que va
+  // a entrar), que es donde el conjunto sale a cero; solo se aprieta, nunca se afloja
+  function stopMedio(op, extra = null) {
+    const us = [...op.unidades.filter(u => !u.salida), ...(extra ? [extra] : [])]
+    const medio = Math.round(us.reduce((n, u) => n + u.tamano * u.entrada, 0) / us.reduce((n, u) => n + u.tamano, 0) * 10) / 10
+    return op.lado === 'largo' ? Math.max(op.stop, medio) : Math.min(op.stop, medio)
   }
 
-  // Al cierre hay que salir sí o sí: a mercado, reintentando si IG la rechaza. Donde no
-  // admite órdenes a mercado va con límite, y si el precio se escapa del margen, se
-  // reintenta con el precio nuevo y el doble de margen
-  async function cerrar(dia, motivo) {
+  async function ajustarStops(dia) {
+    const op = dia.operacion
+    const stop = stopMedio(op)
+    // con el stop en el precio medio la pierna ya no pierde: como en el backtest, cuenta como
+    // break even, y de un break even no se da la vuelta
+    op.be = true
+    const fallos = await moverStops(dia, stop)
+    if (fallos.length) apuntar(dia, `IG no deja mover el stop a ${stop}: ${fallos[0]}`)
+    else apuntar(dia, `Stop de las ${op.unidades.length} posiciones al precio medio: ${stop}`)
+  }
+
+  // Pirámide: una posición más al llegar el precio a su nivel, con el stop de todas en su
+  // precio medio. Si el precio se ha ido del nivel más del tope, espera a que vuelva cerca
+  async function anadir(dia) {
+    const cfg = dia.config
+    const { plan } = dia
+    const op = dia.operacion
+    const largo = op.lado === 'largo'
+    const tope = cfg.deslizamientoMaxR * dia.bracket.rango
+    const m = await ig.operar.datosMercado(dia.ticker, plan.epic)
+    const precio = largo ? m.oferta : m.bid
+    // el último nivel alcanzado: si el precio se saltó alguno, entra en el de ahora
+    const n = Math.floor((largo ? precio - op.nivelOrden : op.nivelOrden - precio) / (cfg.piramide * op.riesgo) + 1e-9)
+    if (n < op.unidades.length) return
+    const nivel = nivelAnadido(op, cfg, n)
+    const exceso = largo ? precio - nivel : nivel - precio
+    if (exceso > tope) {
+      op.esperaAnadir = ahora() + 5
+      if (op.avisoAnadido !== n) {
+        op.avisoAnadido = n
+        apuntar(dia, `Añadido en espera: el precio va ${exceso.toFixed(1)} puntos más allá de su nivel (${nivel.toFixed(1)}), y el tope es ${tope.toFixed(1)}`, { aviso: false })
+      }
+      return
+    }
+    const tamano = Math.max(plan.tamanoMin ?? 0.1, Math.round(plan.tamano * cfg.tamanoAnadido * 10) / 10)
+    const stop = stopMedio(op, { tamano, entrada: precio })
+    const limite = m.aMercado ? null : (largo ? nivel + tope : nivel - tope)
+    const referencia = referenciaNueva(dia)
+    apuntar(dia, `Pirámide: ${largo ? 'compra' : 'venta'} de ${tamano} más, la posición ${op.unidades.length + 1} de ${MAX_UNIDADES} como mucho`)
+    dia.estado = 'entrando'
+    dia.intento = { tipo: 'anadido', lado: op.lado, tamano, stop, hora: ahora(), referencia, nivel }
+    guardar()
+    const r = await ig.operar.abrir({ ticker: dia.ticker, epic: plan.epic, lado: op.lado, tamano, stop, moneda: plan.moneda, limite, referencia })
+    dia.estado = 'en-posicion'
+    if (!r.aceptada) {
+      // p. ej., sin margen para más: no se insiste en esta pierna
+      op.sinAnadidos = true
+      apuntar(dia, `IG rechaza el añadido (${r.motivo}): esta pierna no añade más`)
+      return
+    }
+    sumarUnidad(dia, { dealId: r.dealId, tamano: r.tamano ?? tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia, nivel })
+    await ajustarStops(dia)
+  }
+
+  // Resultado de una pierna: cada posición desde su entrada hasta su salida. En puntos cuenta
+  // en unidades de la entrada, como el backtest (un añadido de media unidad suma la mitad);
+  // en euros, con su tamaño real
+  function resultadoPierna(dia, op) {
+    const dir = op.lado === 'largo' ? 1 : -1
+    const us = op.unidades.filter(u => u.salida)
+    const pts = us.reduce((n, u) => n + (u.tamano / op.tamano) * dir * (u.salida.nivel - u.entrada), 0)
+    const plan = dia.plan
+    const eur = plan?.valorPunto && plan?.cambioAEur
+      ? us.reduce((n, u) => n + u.tamano * dir * (u.salida.nivel - u.entrada), 0) * plan.valorPunto * plan.cambioAEur
+      : null
+    return { pts, eur }
+  }
+
+  // La salida de la pierna: el precio medio al que salieron sus posiciones
+  function salidaPierna(op, motivo, hora) {
+    const volumen = op.unidades.reduce((n, u) => n + u.tamano, 0)
+    const nivel = Math.round(op.unidades.reduce((n, u) => n + u.tamano * u.salida.nivel, 0) / volumen * 10) / 10
+    const aproximado = op.unidades.some(u => u.salida.aproximado)
+    return { nivel, hora, motivo, ...(aproximado ? { aproximado: true } : {}) }
+  }
+
+  // Con todas sus posiciones fuera, la pierna termina. Si fue el stop y toca flip, se espera
+  // a dar la vuelta; si no, la sesión ya no opera más
+  function terminarPierna(dia, motivo, ses = null) {
+    const op = dia.operacion
+    op.salida = salidaPierna(op, motivo, ahora())
+    const { pts, eur } = resultadoPierna(dia, op)
+    op.resultadoPts = pts
+    op.resultadoEur = eur
+    const n = op.unidades.length
+    apuntar(dia, `Fuera a ${op.salida.nivel} (${motivo}${op.salida.aproximado ? ', precio aproximado' : ''}): ${op.resultadoPts >= 0 ? '+' : ''}${op.resultadoPts.toFixed(1)} puntos`
+      + `${n > 1 ? ` con ${n} posiciones` : ''}${op.resultadoEur != null ? ` (${op.resultadoEur >= 0 ? '+' : ''}${Math.round(op.resultadoEur)} €)` : ''}`)
+    if (motivo === 'stop' && ses && ahora() < ses.cierra && puedeDarLaVuelta(dia, dia.config)) {
+      dia.anteriores = [...(dia.anteriores ?? []), op]
+      dia.operacion = null
+      dia.estado = 'esperando-vuelta'
+      const lado = contrario(op.lado)
+      apuntar(dia, `Flip the switch: ${lado === 'largo' ? 'compra por encima de' : 'venta por debajo de'} ${nivelDe(dia.bracket, lado)}`)
+      return
+    }
+    finalizar(dia)
+  }
+
+  // La sesión ya no opera más: su salida es la de la última pierna y el resultado, la suma
+  function finalizar(dia) {
+    const piernas = [...(dia.anteriores ?? []), ...(dia.operacion ? [dia.operacion] : [])].filter(p => p.salida)
+    dia.estado = 'terminado'
+    if (!piernas.length) return
+    dia.salida = piernas.at(-1).salida
+    dia.resultadoPts = piernas.reduce((n, p) => n + p.resultadoPts, 0)
+    dia.resultadoEur = piernas.every(p => p.resultadoEur != null) ? piernas.reduce((n, p) => n + p.resultadoEur, 0) : null
+  }
+
+  // Cierra una posición a mercado, reintentando si IG la rechaza. Donde no admite órdenes a
+  // mercado va con límite, y si el precio se escapa del margen, se reintenta con el precio
+  // nuevo y el doble de margen
+  async function cerrarUnidad(dia, u) {
     const op = dia.operacion
     const epic = dia.plan?.epic ?? null
     let r
@@ -337,56 +591,133 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     for (let intento = 0; intento < 3; intento++, margen *= 2) {
       const m = await ig.operar.datosMercado(dia.ticker, epic)
       const limite = m.aMercado ? null : (op.lado === 'largo' ? m.bid - margen : m.oferta + margen)
-      r = await ig.operar.cerrar({ ticker: dia.ticker, dealId: op.dealId, lado: op.lado, tamano: op.tamano, limite })
+      r = await ig.operar.cerrar({ ticker: dia.ticker, dealId: u.dealId, lado: op.lado, tamano: u.tamano, limite })
       if (r.aceptada) break
       apuntar(dia, limite == null ? `IG no cierra a mercado (${r.motivo})` : `IG no cierra con ${margen.toFixed(1)} puntos de margen (${r.motivo})`)
     }
-    if (!r.aceptada) {
-      // puede que ya la hubiera cerrado el stop: la revisión lo aclara
-      apuntar(dia, 'Se revisa si ya estaba cerrada')
-      await revisar(dia, true)
-      return
-    }
-    cerrarDia(dia, { nivel: r.nivel, hora: ahora(), motivo })
+    return r
   }
 
-  // ¿Sigue abierta en IG? Si no, la cerró el stop (o alguien a mano): se busca a qué precio.
-  // IG tarda unos segundos en apuntar el cierre en la actividad: si aún no está, se mira en
-  // las siguientes revisiones, y solo tras unas cuantas se da por bueno el nivel del stop.
-  const ultimaRevision = new Map()
-  async function revisar(dia, forzar = false) {
-    if (!forzar && Date.now() - (ultimaRevision.get(dia.clave) ?? 0) < revisarCadaMs) return
-    ultimaRevision.set(dia.clave, Date.now())
+  // Devuelve las que IG no ha dejado cerrar
+  async function cerrarUnidades(dia, unidades) {
+    const fallidas = []
+    for (const u of unidades) {
+      const r = await cerrarUnidad(dia, u)
+      if (r.aceptada) u.salida = { nivel: r.nivel, hora: ahora() }
+      else fallidas.push(u)
+    }
+    return fallidas
+  }
+
+  // Al cierre (o a mano) hay que salir sí o sí
+  async function cerrar(dia, motivo, ses = null) {
     const op = dia.operacion
-    const abiertas = await ig.operar.posiciones()
-    if (abiertas.some(p => p.dealId === op.dealId)) return
-    const cierre = await ig.operar.cierreDe({ ticker: dia.ticker, dealId: op.dealId, lado: op.lado, desdeMs: op.hora * 1000 })
-    if (!cierre && (op.busquedasCierre = (op.busquedasCierre ?? 0) + 1) < BUSQUEDAS_CIERRE) {
-      if (op.busquedasCierre === 1) apuntar(dia, 'La posición ya no está en IG: buscando a qué precio se cerró')
+    if ((await cerrarUnidades(dia, op.unidades.filter(u => !u.salida))).length) {
+      // puede que ya las hubiera cerrado el stop: la revisión lo aclara
+      apuntar(dia, 'Se revisa si ya estaba cerrada', { aviso: false })
+      await revisar(dia, ses, { forzar: true })
       return
     }
-    cerrarDia(dia, { nivel: cierre?.nivel ?? op.stop, hora: ahora(), motivo: op.be ? 'breakeven' : 'stop', ...(cierre ? {} : { aproximado: true }) })
+    terminarPierna(dia, motivo, ses)
+  }
+
+  // ¿Siguen abiertas en IG las posiciones de la pierna? Si falta alguna, la cerró el stop (o
+  // alguien a mano) y la pierna se acaba: las demás se cierran y se busca a qué precio salió
+  // cada una. IG tarda unos segundos en apuntar el cierre en la actividad: si aún no está, se
+  // mira en las siguientes revisiones, y solo tras unas cuantas se da por bueno el nivel del
+  // stop. Con una vuelta pendiente no se espera: se apunta el stop y se afina después.
+  // Con `cruce` (el precio ya está al otro lado del stop) se mira a menudo, y si IG no la
+  // cierra en unos segundos, la cierra el bot.
+  const ultimaRevision = new Map()
+  async function revisar(dia, ses, { forzar = false, cruce = false } = {}) {
+    const cada = cruce ? Math.min(revisarCadaMs, REVISAR_YA_MS) : revisarCadaMs
+    if (!forzar && Date.now() - (ultimaRevision.get(dia.clave) ?? 0) < cada) return
+    ultimaRevision.set(dia.clave, Date.now())
+    const op = dia.operacion
+    const ids = new Set((await ig.operar.posiciones()).map(p => p.dealId))
+    const pendientes = op.unidades.filter(u => !u.salida)
+    const vivas = pendientes.filter(u => ids.has(u.dealId))
+    const idas = pendientes.filter(u => !ids.has(u.dealId))
+    if (!idas.length) {
+      if (!cruce) return
+      // el tiempo que lleva el precio al otro lado del stop sin que IG cierre
+      if (!op.cruce || ahora() - op.cruceVisto > 5) op.cruce = ahora()
+      op.cruceVisto = ahora()
+      if (ahora() - op.cruce < ESPERA_STOP_S) return
+      apuntar(dia, `El precio pasó el stop (${op.stop}) y IG no ha cerrado: se cierra a mercado`)
+      if ((await cerrarUnidades(dia, vivas)).length) return
+      terminarPierna(dia, 'stop', ses)
+      return
+    }
+    const sinEsperar = puedeDarLaVuelta(dia, dia.config) && !op.be
+    for (const u of idas) {
+      const c = await ig.operar.cierreDe({ ticker: dia.ticker, dealId: u.dealId, lado: op.lado, desdeMs: u.hora * 1000 })
+      if (c) u.salida = { nivel: c.nivel, hora: ahora() }
+    }
+    const sinPrecio = idas.filter(u => !u.salida)
+    if (sinPrecio.length && !sinEsperar && (op.busquedasCierre = (op.busquedasCierre ?? 0) + 1) < BUSQUEDAS_CIERRE) {
+      if (op.busquedasCierre === 1) apuntar(dia, 'La posición ya no está en IG: buscando a qué precio se cerró', { aviso: false })
+      return
+    }
+    for (const u of sinPrecio) u.salida = { nivel: u.stop ?? op.stop, hora: ahora(), aproximado: true }
+    if (vivas.length) {
+      apuntar(dia, `Salió ${idas.length} de ${pendientes.length} posiciones por el stop: se cierran las demás`)
+      if ((await cerrarUnidades(dia, vivas)).length) return
+    }
+    terminarPierna(dia, op.be ? 'breakeven' : 'stop', ses)
+  }
+
+  // Salidas apuntadas al precio del stop porque IG aún no las tenía en la actividad: se
+  // buscan otra vez, unas pocas, y si aparecen se corrige el resultado
+  const ultimaAfinada = new Map()
+  async function afinar(dia) {
+    const piernas = [...(dia.anteriores ?? []), ...(dia.operacion ? [dia.operacion] : [])]
+    const pendientes = piernas.flatMap(p => (p.unidades ?? []).filter(u => u.salida?.aproximado && (u.busquedas ?? 0) < BUSQUEDAS_CIERRE).map(u => [p, u]))
+    if (!pendientes.length) return
+    if (Date.now() - (ultimaAfinada.get(dia.clave) ?? 0) < revisarCadaMs) return
+    ultimaAfinada.set(dia.clave, Date.now())
+    let corregidas = 0
+    for (const [p, u] of pendientes) {
+      u.busquedas = (u.busquedas ?? 0) + 1
+      const c = await ig.operar.cierreDe({ ticker: dia.ticker, dealId: u.dealId, lado: p.lado, desdeMs: u.hora * 1000 })
+      if (c) { u.salida = { nivel: c.nivel, hora: u.salida.hora }; corregidas++ }
+    }
+    if (!corregidas) return
+    for (const p of piernas.filter(x => x.salida)) {
+      p.salida = salidaPierna(p, p.salida.motivo, p.salida.hora)
+      const { pts, eur } = resultadoPierna(dia, p)
+      Object.assign(p, { resultadoPts: pts, resultadoEur: eur })
+    }
+    if (dia.estado === 'terminado') finalizar(dia)
+    apuntar(dia, 'Precio de salida corregido con la actividad de IG', { aviso: false })
   }
 
   // Las velas de 15 min de la sesión, para comparar con el backtest en la pestaña
   async function guardarVelas(dia, ses) {
     const velas = await ig.velasEntre(dia.ticker, 'm15', ses.abre, ses.cierra)
     dia.velas = velas.map(v => [v.time, v.open, v.high, v.low, v.close])
-    apuntar(dia, `Guardadas ${velas.length} velas de 15 min de la sesión`)
+    apuntar(dia, `Guardadas ${velas.length} velas de 15 min de la sesión`, { aviso: false })
   }
 
   // Al arrancar: las posiciones del bot (por su referencia) que el registro no tiene, se
   // recuperan; las de una sesión ya cerrada se cierran en el siguiente paso
   async function recuperarPosiciones() {
-    const abiertas = (await ig.operar.posiciones()).filter(p => p.referencia?.startsWith(PREFIJO) && p.ticker)
-    for (const p of abiertas) {
-      if (Object.values(datos.dias).some(d => d.operacion?.dealId === p.dealId && !d.salida)) continue
+    const conocidas = new Set(Object.values(datos.dias).filter(posicionAbierta).flatMap(d => d.operacion.unidades.map(u => u.dealId)))
+    const nuevas = (await ig.operar.posiciones())
+      .filter(p => p.referencia?.startsWith(PREFIJO) && p.ticker && !conocidas.has(p.dealId))
+      .sort((a, b) => Date.parse(`${a.abierta}Z`) - Date.parse(`${b.abierta}Z`))
+    for (const p of nuevas) {
       const abierta = Date.parse(`${p.abierta}Z`) / 1000
       const ses = sesionDe(p.ticker, abierta)
       if (!ses) continue
       const dia = apunteDe(ses, true)
       apuntar(dia, `Recuperada de IG una posición del bot que no estaba en el registro (${p.referencia})`)
-      adoptar(dia, { lado: p.lado, dealId: p.dealId, tamano: p.tamano, nivel: p.nivel, stop: p.stop, hora: abierta })
+      if (posicionAbierta(dia)) {
+        if (dia.operacion.lado !== p.lado) { apuntar(dia, `Va en sentido contrario a la que el bot tiene abierta: revísala en IG (${p.dealId})`); continue }
+        sumarUnidad(dia, { dealId: p.dealId, tamano: p.tamano, entrada: p.nivel, stop: p.stop, referencia: p.referencia, hora: abierta })
+      } else {
+        adoptar(dia, { lado: p.lado, dealId: p.dealId, tamano: p.tamano, nivel: p.nivel, stop: p.stop, referencia: p.referencia, hora: abierta })
+      }
       dia.recuperada = true
     }
   }
@@ -411,10 +742,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     })
   }
 
-  // Los instrumentos a mirar: los encendidos y cualquiera con una posición abierta
+  // Los instrumentos a mirar: los encendidos y cualquiera con algo entre manos
   function tickersAMirar() {
     const encendidos = Object.entries(datos.config.instrumentos).filter(([, si]) => si).map(([t]) => t)
-    const abiertos = Object.values(datos.dias).filter(d => d.operacion && !d.salida).map(d => d.ticker)
+    const abiertos = Object.values(datos.dias).filter(enJuego).map(d => d.ticker)
     return [...new Set([...encendidos, ...abiertos])].filter(t => SESIONES_BOT[t])
   }
 
@@ -426,8 +757,8 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     for (const ticker of tickersAMirar()) {
       try {
         const ses = sesionDe(ticker, t)
-        // una posición abierta de una sesión que ya terminó (el bot estaba parado al cierre)
-        const viejas = Object.values(datos.dias).filter(d => d.ticker === ticker && d.operacion && !d.salida && d.cierra <= t && (!ses || d.clave !== clave(ses)))
+        // algo que quedó entre manos de una sesión que ya terminó (el bot estaba parado al cierre)
+        const viejas = Object.values(datos.dias).filter(d => d.ticker === ticker && enJuego(d) && d.cierra <= t && (!ses || d.clave !== clave(ses)))
         for (const d of viejas) await pasoDe(d, { ticker, fecha: d.fecha, abre: d.abre, cierra: d.cierra, finBracket: d.abre + 1800 }, cfg, t)
         if (!ses) continue
         const crear = cfg.activo && !!cfg.instrumentos[ticker] && t < ses.cierra
@@ -448,11 +779,16 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const p = siguientePaso({ dia, cfg: { ...dia.config, activo }, ahora: t, velas, ses })
       if (p.accion === 'bracket')     await calcularBracket(dia, ses)
       if (p.accion === 'entrar')      await entrar(dia, p.lado)
+      if (p.accion === 'vuelta')      await entrar(dia, p.lado, { vuelta: true })
+      if (p.accion === 'anadir')      await anadir(dia)
       if (p.accion === 'breakeven')   await breakeven(dia)
-      if (p.accion === 'cerrar')      await cerrar(dia, p.motivo)
-      if (p.accion === 'vigilar')     await revisar(dia)
+      if (p.accion === 'cerrar')      await cerrar(dia, p.motivo, ses)
+      if (p.accion === 'vigilar')     await revisar(dia, ses)
+      if (p.accion === 'revisar-ya')  await revisar(dia, ses, { cruce: true })
       if (p.accion === 'reconciliar') await reconciliar(dia)
       if (p.accion === 'velas')       await guardarVelas(dia, ses)
+      if (p.accion === 'sin-vuelta')  { apuntar(dia, 'La sesión cerró sin que el precio volviera a romper: no hay vuelta'); finalizar(dia) }
+      await afinar(dia)
     } catch (err) {
       apuntar(dia, `Error: ${err.message}`)
       throw err
@@ -463,12 +799,16 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   const dejarDeEscuchar = []
   function arrancar() {
     encolar(async () => {
-      try { await recuperarPosiciones() } catch (err) { log(`[bot] no se han podido revisar las posiciones al arrancar: ${err.message}`) }
+      try { await recuperarPosiciones() } catch (err) {
+        log(`[bot] no se han podido revisar las posiciones al arrancar: ${err.message}`)
+        avisarSinFallar(`No he podido revisar las posiciones de IG al arrancar: ${err.message}`)
+      }
       guardar()
     })
     reloj = setInterval(despertar, 5_000)
     for (const ticker of Object.keys(SESIONES_BOT)) dejarDeEscuchar.push(escuchar('ig', ticker, despertar))
     despertar()
+    avisarSinFallar(`Servidor arrancado: el bot está ${datos.config.activo ? 'encendido' : 'apagado'}`)
   }
   function parar() {
     clearInterval(reloj)
@@ -491,7 +831,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       }
     }
     if ('modo' in cambios) {
-      if (!['largo', 'ambos'].includes(cambios.modo)) throw new Error('Modo no válido: largo o ambos')
+      if (!['largo', 'ambos', 'flip'].includes(cambios.modo)) throw new Error('Modo no válido: largo, ambos o flip')
       c.modo = cambios.modo
     }
     if ('stopPct' in cambios) {
@@ -503,11 +843,27 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       if (![null, 1, 2].includes(be)) throw new Error('Break even no válido: ninguno, 1 o 2')
       c.beR = be
     }
+    if ('piramide' in cambios) {
+      const p = cambios.piramide === null || cambios.piramide === '' ? null : Number(cambios.piramide)
+      if (p !== null && !(p >= 0.25 && p <= 5)) throw new Error('Pirámide no válida: ninguna, o cada 0,25 a 5 R')
+      c.piramide = p
+    }
+    if ('tamanoAnadido' in cambios) {
+      if (![1, 0.5].includes(Number(cambios.tamanoAnadido))) throw new Error('Cada añadido es de 1 o de 0,5 unidades')
+      c.tamanoAnadido = Number(cambios.tamanoAnadido)
+    }
     if ('riesgoEur' in cambios) numero('riesgoEur', 1, 5000, 'Riesgo por operación entre 1 y 5.000 €')
     if ('deslizamientoMaxR' in cambios) numero('deslizamientoMaxR', 0.01, 2, 'Deslizamiento máximo entre 0,01 y 2 veces el bracket')
     if ('rangoMaxPct' in cambios) numero('rangoMaxPct', 0.01, 10, 'Rango máximo entre 0,01% y 10%')
+    if (c.modo === 'flip' && c.stopPct !== 1) throw new Error('Flip the switch necesita el stop al otro lado del bracket, que es justo donde entra el sentido contrario')
+    const antes = datos.config
     datos.config = c
     guardar()
+    const lineas = Object.entries(DESCRIBIR).filter(([k]) => antes[k] !== c[k]).map(([k, describir]) => describir(c[k]))
+    for (const t of Object.keys(SESIONES_BOT)) {
+      if (!!antes.instrumentos[t] !== !!c.instrumentos[t]) lineas.push(`${SESIONES_BOT[t].nombre}: ${c.instrumentos[t] ? 'activado' : 'desactivado'}`)
+    }
+    if (lineas.length) avisarSinFallar(lineas.join('\n'))
     despertar()
     return c
   }
@@ -517,20 +873,22 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     datos.config.activo = false
     await encolar(async () => {
       for (const d of Object.values(datos.dias)) {
-        if (d.operacion && !d.salida) await cerrar(d, 'manual')
+        if (posicionAbierta(d)) await cerrar(d, 'manual')
+        else if (d.estado === 'esperando-vuelta') { apuntar(d, 'Bot parado a mano: no hay vuelta'); finalizar(d) }
         else if (['esperando-bracket', 'esperando-rotura'].includes(d.estado)) { d.estado = 'sin-operar'; apuntar(d, 'Bot parado a mano') }
       }
     })
     guardar()
+    avisarSinFallar('Bot apagado con «Parar y cerrar todo»')
     return estado()
   }
 
   // Ensayo de órdenes en un instrumento: abre la posición mínima con stop, se lo mueve, la
-  // cierra y busca el cierre en la actividad. Solo con el mercado abierto y sin posición del
-  // bot abierta en ese instrumento.
+  // cierra y busca el cierre en la actividad. Solo con el mercado abierto y sin nada del bot
+  // entre manos en ese instrumento.
   async function ensayo(ticker = '^GDAXI') {
     if (!SESIONES_BOT[ticker]) throw new Error(`Instrumento desconocido: ${ticker}`)
-    if (Object.values(datos.dias).some(d => d.ticker === ticker && d.operacion && !d.salida)) {
+    if (Object.values(datos.dias).some(d => d.ticker === ticker && enJuego(d))) {
       throw new Error('El bot tiene una posición abierta en ese instrumento: ahora no se ensaya')
     }
     const pasos = []
@@ -570,15 +928,16 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   function estado() {
     const t = ahora()
     const dias = Object.values(datos.dias).sort((a, b) => b.abre - a.abre)
-    // "hoy": la sesión en curso o la última del día de cada instrumento, y lo que siga abierto
+    // "hoy": la sesión en curso o la última del día de cada instrumento, y lo que siga entre manos
     const actuales = new Set()
     for (const ticker of Object.keys(SESIONES_BOT)) {
       const ses = sesionDe(ticker, t)
       if (ses && datos.dias[clave(ses)]) actuales.add(clave(ses))
     }
-    for (const d of dias) if (d.operacion && !d.salida) actuales.add(d.clave)
+    for (const d of dias) if (enJuego(d)) actuales.add(d.clave)
     return {
       config: datos.config,
+      maxUnidades: MAX_UNIDADES,
       sesiones: Object.entries(SESIONES_BOT).map(([ticker, s]) => ({
         ticker, nombre: s.nombre, zona: s.zona, encendido: !!datos.config.instrumentos[ticker], proxima: proximaApertura(ticker, t),
       })),

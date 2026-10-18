@@ -12,6 +12,7 @@ const ESTADOS = {
   'esperando-rotura':  'Bracket listo: esperando la rotura',
   'entrando':          'Mandando la orden…',
   'en-posicion':       'Dentro',
+  'esperando-vuelta':  'Saltó el stop: esperando para dar la vuelta',
   'terminado':         'Terminada',
   'sin-operar':        'No opera',
 }
@@ -39,13 +40,29 @@ async function pedir(url, opciones = {}) {
   return j
 }
 
-// Lo que habría hecho el backtest esa sesión, con la configuración del día
-function backtestDe(d) {
+// Las piernas de una sesión: la primera y, si dio la vuelta, la segunda (cada una con sus posiciones)
+const piernasDe = d => [...(d.anteriores ?? []), ...(d.operacion ? [d.operacion] : [])]
+const ladoTexto = lado => (lado === 'largo' ? 'Compra' : 'Venta')
+const describirPiernas = d => piernasDe(d).map(p => `${ladoTexto(p.lado)}${p.unidades?.length > 1 ? ` ×${p.unidades.length}` : ''}`).join(' → ')
+
+// Lo que habría hecho el backtest esa sesión, con la configuración del día (y el mismo tope
+// de posiciones de la pirámide que el bot)
+function backtestDe(d, maxUnidades) {
   if (!d.velas?.length) return null
   const velas = d.velas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
-  const a = analizarSesion({ velas, ticker: d.ticker, modo: d.config.modo, stopPct: d.config.stopPct, beR: d.config.beR, piramide: 0, tpPct: null, ventana: d.ventana })
+  const c = d.config
+  const a = analizarSesion({
+    velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: c.piramide ?? 0,
+    tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades, tpPct: null, ventana: d.ventana,
+  })
   if (!a.valido) return { valido: false, motivo: a.motivo }
-  return { valido: true, lado: a.lado, entrada: a.entrada?.precio ?? null, resultadoPts: a.entrada ? a.resultadoPts : null, motivo: a.salida?.motivo ?? null }
+  if (!a.entrada) return { valido: true, resultadoPts: null }
+  const piernas = [a, ...a.piernas]
+  return {
+    valido: true,
+    resultadoPts: a.resultadoTotalPts ?? a.resultadoPts,
+    resumen: piernas.map(p => `${ladoTexto(p.lado)}${p.unidades > 1 ? ` ×${p.unidades}` : ''} (${MOTIVOS[p.salida.motivo] ?? p.salida.motivo})`).join(' → '),
+  }
 }
 
 export default function Bot() {
@@ -57,6 +74,7 @@ export default function Bot() {
   const [ocupado, setOcupado] = useState(false)
   const [ensayo, setEnsayo] = useState(null)
   const [ensayoTicker, setEnsayoTicker] = useState('^GDAXI')
+  const [avisoTelegram, setAvisoTelegram] = useState(null)
 
   const cargar = useCallback(async () => {
     try {
@@ -76,7 +94,7 @@ export default function Bot() {
     return () => { clearTimeout(primera); clearInterval(reloj) }
   }, [cargar])
 
-  const historial = useMemo(() => (datos?.historial ?? []).map(d => ({ ...d, backtest: backtestDe(d) })), [datos])
+  const historial = useMemo(() => (datos?.historial ?? []).map(d => ({ ...d, backtest: backtestDe(d, datos.maxUnidades) })), [datos])
 
   const accion = async fn => {
     setOcupado(true)
@@ -89,6 +107,11 @@ export default function Bot() {
     if (!window.confirm('¿Apagar el bot y cerrar ahora todo lo que tenga abierto?')) return
     accion(() => pedir('/api/bot/parar', { method: 'POST' }))
   }
+  const conectarTelegram = () => accion(async () => {
+    setAvisoTelegram(null)
+    await pedir('/api/bot/telegram', { method: 'POST' })
+    setAvisoTelegram('Mensaje de prueba enviado: mira Telegram.')
+  })
   const ensayar = () => {
     if (!window.confirm('El ensayo abre y cierra en la demo la posición mínima del instrumento, para comprobar que IG acepta las órdenes del bot. Se paga la horquilla (dinero de la demo). ¿Seguir?')) return
     setEnsayo({ cargando: true })
@@ -120,6 +143,7 @@ export default function Bot() {
   }
 
   const { config, hoy, sesiones, ig, opera } = datos
+  const telegram = datos.telegram ?? { token: false, conectado: false, nombre: null }
   const editando = form ?? config
   const cambiar = (campo, valor) => setForm({ ...editando, [campo]: valor })
   const nombre = t => sesiones.find(s => s.ticker === t)?.nombre ?? t
@@ -181,13 +205,13 @@ export default function Bot() {
                       <tr key={d.clave}>
                         <td>{d.fecha}</td>
                         <td className="bot-celda-texto">{nombre(d.ticker)}</td>
-                        <td className="bot-celda-texto">{d.operacion ? (d.operacion.lado === 'largo' ? 'Compra' : 'Venta') : '—'}</td>
-                        <td>{precio(d.operacion?.entrada)}</td>
-                        <td>{pts(d.operacion?.deslizamiento)}</td>
+                        <td className="bot-celda-texto">{describirPiernas(d) || '—'}</td>
+                        <td>{precio(piernasDe(d)[0]?.entrada)}</td>
+                        <td>{pts(piernasDe(d)[0]?.deslizamiento)}</td>
                         <td>{d.salida ? `${precio(d.salida.nivel)} (${MOTIVOS[d.salida.motivo] ?? d.salida.motivo}${d.salida.aproximado ? ', aprox.' : ''})` : '—'}</td>
                         <td className={tono(d.resultadoPts)}>{pts(d.resultadoPts)}</td>
                         <td className={tono(d.resultadoEur)}>{eur(d.resultadoEur)}</td>
-                        <td className={tono(bt?.resultadoPts)} title={bt?.valido === false ? bt.motivo : bt?.lado ? `${bt.lado}, ${bt.motivo}` : ''}>
+                        <td className={tono(bt?.resultadoPts)} title={bt?.valido === false ? bt.motivo : bt?.resumen ?? ''}>
                           {bt == null ? '—' : !bt.valido ? 'no calculable' : bt.resultadoPts == null ? 'sin entrada' : pts(bt.resultadoPts)}
                         </td>
                         <td className="bot-nota-celda">{d.estado === 'sin-operar' ? d.eventos?.at(-1)?.texto : ''}</td>
@@ -206,6 +230,7 @@ export default function Bot() {
         <div className="bot-form">
           <label>Operativa
             <select value={editando.modo} onChange={e => cambiar('modo', e.target.value)}>
+              <option value="flip">Con flip the switch</option>
               <option value="ambos">Compra o venta (la 1.ª rotura)</option>
               <option value="largo">Solo compras</option>
             </select>
@@ -223,8 +248,25 @@ export default function Bot() {
               <option value={2}>Al recorrer 2R</option>
             </select>
           </label>
+          <label>Pirámide
+            <select value={editando.piramide ?? ''} onChange={e => cambiar('piramide', e.target.value === '' ? null : Number(e.target.value))}>
+              <option value="">No</option>
+              <option value={0.5}>Una más cada 0,5R a favor</option>
+              <option value={1}>Una más cada 1R a favor</option>
+              <option value={2}>Una más cada 2R a favor</option>
+            </select>
+          </label>
+          <label>Cada añadido
+            <select value={editando.tamanoAnadido ?? 1} disabled={editando.piramide == null} onChange={e => cambiar('tamanoAnadido', Number(e.target.value))}>
+              <option value={1}>Del tamaño de la entrada</option>
+              <option value={0.5}>La mitad de la entrada</option>
+            </select>
+          </label>
           <label>Riesgo por operación (€)
             <input type="number" min="1" max="5000" value={editando.riesgoEur} onChange={e => cambiar('riesgoEur', e.target.value)} />
+          </label>
+          <label>No entrar si el precio se ha ido más de (% del bracket)
+            <input type="number" min="1" max="200" step="5" value={Math.round(editando.deslizamientoMaxR * 100)} onChange={e => cambiar('deslizamientoMaxR', Number(e.target.value) / 100)} />
           </label>
           <label>Bracket máximo (% del precio)
             <input type="number" min="0.01" max="10" step="0.1" value={editando.rangoMaxPct} onChange={e => cambiar('rangoMaxPct', e.target.value)} />
@@ -232,13 +274,33 @@ export default function Bot() {
         </div>
         <p className="bot-nota">
           El tamaño sale del riesgo: lo que se pierde si salta el stop. Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
-          Las órdenes van a mercado: lo que se paga de más respecto al nivel de la rotura se ve en la columna Deslizamiento.
+          Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
+          Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
+          La pirámide abre como mucho {datos.maxUnidades ?? 5} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
           Un cambio vale para las sesiones que aún no han fijado su bracket.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { modo, stopPct, beR, riesgoEur, rangoMaxPct } = form
-          guardarConfig({ modo, stopPct, beR, riesgoEur, rangoMaxPct }).then(() => setForm(null))
+          const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoEur, deslizamientoMaxR, rangoMaxPct } = form
+          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoEur, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
         }}>Guardar configuración</button>
+      </section>
+
+      <section className="bot-bloque">
+        <h3>Avisos por Telegram</h3>
+        <p className="bot-nota">
+          {telegram.conectado
+            ? `Conectado${telegram.nombre ? ` con ${telegram.nombre}` : ''}: cada entrada, añadido, salida, cambio y error llega a Telegram.`
+            : telegram.token
+              ? 'Falta conectar el chat: abre tu bot en Telegram, pulsa Iniciar y después «Conectar Telegram».'
+              : 'Sin configurar: falta la variable TELEGRAM_TOKEN en el servidor.'}
+          {!opera && ' Los avisos los manda el servidor que opera (BOT_OPERA=1).'}
+        </p>
+        <div className="bot-botones">
+          <button className="diario-boton" disabled={ocupado || !telegram.token} onClick={conectarTelegram}>
+            {telegram.conectado ? 'Mandar un mensaje de prueba' : 'Conectar Telegram'}
+          </button>
+        </div>
+        {avisoTelegram && <p className="bot-nota">{avisoTelegram}</p>}
       </section>
 
       <section className="bot-bloque">
@@ -259,7 +321,12 @@ export default function Bot() {
 }
 
 function SesionHoy({ d, nombre }) {
-  const { plan, operacion: op } = d
+  const { plan } = d
+  const piernas = piernasDe(d)
+  // la pierna en curso (o la última) y, si dio la vuelta, la de antes
+  const op = piernas.at(-1) ?? null
+  const antes = piernas.length > 1 ? piernas[0] : null
+  const n = op?.unidades?.length ?? 1
   return (
     <div className="bot-hoy">
       <div className="bot-hoy-cab">
@@ -270,10 +337,17 @@ function SesionHoy({ d, nombre }) {
         <Tile label="Estado" valor={ESTADOS[d.estado] ?? d.estado} sub={d.recuperada ? 'recuperada de IG al arrancar' : ''} />
         <Tile label="Bracket" valor={d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : '—'} sub={d.bracket ? `${precio(d.bracket.rango)} puntos` : ''} />
         <Tile label="Plan" valor={plan ? `${plan.tamano} contratos` : '—'} sub={plan ? `${plan.valorPunto} ${plan.moneda}/punto · ${Math.round(plan.riesgoEur)} € de riesgo` : ''} />
-        <Tile label="Operación" valor={op ? `${op.lado === 'largo' ? 'Compra' : 'Venta'} a ${precio(op.entrada)}` : '—'}
-          sub={op ? `stop ${precio(op.stop)}${op.be ? ' (break even)' : ''} · deslizamiento ${pts(op.deslizamiento)}` : ''} />
+        {antes && (
+          <Tile label="Primera pierna" valor={`${ladoTexto(antes.lado)} a ${precio(antes.entrada)}`}
+            sub={`salida ${precio(antes.salida?.nivel)} (${MOTIVOS[antes.salida?.motivo] ?? antes.salida?.motivo}) · ${pts(antes.resultadoPts)} · ${eur(antes.resultadoEur)}`} />
+        )}
+        <Tile label={antes ? 'La vuelta' : 'Operación'} valor={op ? `${ladoTexto(op.lado)} a ${precio(op.entrada)}` : '—'}
+          sub={!op ? ''
+            : op.salida && !d.salida ? `salida ${precio(op.salida.nivel)} (${MOTIVOS[op.salida.motivo] ?? op.salida.motivo}) · ${pts(op.resultadoPts)}`
+            : `stop ${precio(op.stop)}${op.be ? ' (break even)' : ''} · deslizamiento ${pts(op.deslizamiento)}${n > 1 ? ` · ${n} posiciones` : ''}`} />
         <Tile label="Resultado" valor={pts(d.resultadoPts)} tonoValor={tono(d.resultadoPts)}
-          sub={d.salida ? `${eur(d.resultadoEur)} · salida ${precio(d.salida.nivel)} (${MOTIVOS[d.salida.motivo] ?? d.salida.motivo})` : op ? 'abierta' : ''} />
+          sub={d.salida ? `${eur(d.resultadoEur)} · salida ${precio(d.salida.nivel)} (${MOTIVOS[d.salida.motivo] ?? d.salida.motivo})`
+            : d.estado === 'esperando-vuelta' ? 'esperando la vuelta' : op && !op.salida ? 'abierta' : ''} />
       </div>
       {d.eventos?.length > 0 && (
         <ul className="bot-eventos">

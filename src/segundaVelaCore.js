@@ -15,7 +15,7 @@ import { madridOffsetAt } from './timezone.js'
 const MAX_PIERNAS = 2
 
 // Tope de añadidos de la pirámide: a partir de aquí la posición sería absurda para el
-// tamaño de un bracket de 15 min.
+// tamaño de un bracket de 15 min. El bot de IG usa un tope más corto (`maxUnidades`).
 const MAX_ANADIDOS = 5
 
 // `piramide` admite un número —cada cuántas R se añade una unidad— o un booleano, que es
@@ -71,6 +71,8 @@ export const fmtPts = v =>
 // null la deja correr hasta el stop o el cierre de la sesión. Con una sola unidad equivale
 // a pedirle al índice ese recorrido; con la pirámide llega mucho antes, porque cada unidad
 // añadida aporta lo suyo al acumulado.
+// `maxUnidades` limita cuántas unidades puede tener abiertas la pirámide, contando la
+// entrada; por defecto, la entrada y MAX_ANADIDOS añadidos.
 // `velasFinas` (5 min) es opcional: el bracket sigue saliendo de las velas grandes, pero el
 // recorrido posterior se camina sobre ellas, que es lo que permite saber qué extremo se
 // rompió antes cuando una vela toca los dos y no se sabe si la operación ganó o perdió.
@@ -78,7 +80,7 @@ export const fmtPts = v =>
 // instrumento, pero recibiendo { open, close, minutosVela, nBracket } se puede braquetear
 // otra vela de otro tamaño en otro tramo del día — es lo que usa la Rule of 4, que coge la
 // cuarta vela de 10 min desde que sale la noticia del FOMC.
-export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null }) {
+export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -165,7 +167,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
   let ladoActual = lado
   while (true) {
     const p = simularPierna({
-      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, costePts,
+      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts,
       // una pierna abierta al saltar el stop de la anterior no puede morir en esa misma
       // vela: dentro de 15 min no se sabe el orden y encadenaría vueltas irreales
       stopDesde: piernas.length ? desde + 1 : desde,
@@ -220,7 +222,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
 // Una pierna de la operación: entra al romper su extremo y sale al tocar el contrario
 // (−1R) o, si no lo toca, al cierre de la sesión. 1R es el rango del bracket en los dos
 // sentidos, porque entrada y stop están en los extremos opuestos.
-function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, costePts = 0 }) {
+function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0 }) {
   const paso    = pasoPiramide(piramide)
   const largo   = lado === 'largo'
   const entradaPrecio = largo ? high : low
@@ -296,7 +298,7 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
     // distinto en cada una, así que sale una por vela; con velas de 1 min, una de cada
     // cinco. El precio del añadido sigue siendo su nivel (entrada + n tramos), que es donde
     // estaría puesta la orden.
-    if (paso > 0 && unidades.length <= MAX_ANADIDOS) {
+    if (paso > 0 && unidades.length < maxUnidades) {
       const cubo5 = Math.floor(v.time / 300)
       const salto = unidades.length * paso * riesgo
       if (cubo5 !== ultimoCubo5 && favor >= salto) {

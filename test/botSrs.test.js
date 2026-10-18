@@ -11,14 +11,17 @@ import { buscarCierre, crearIG } from '../server/ig.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
 
-// Hora local de una bolsa en un día de octubre de 2026 → instante UTC en segundos
-const en = zona => (dia, h, m = 0, s = 0) => {
-  const aprox = Date.UTC(2026, 9, dia, h, m, s) / 1000
+// Hora local de una bolsa en un día de octubre (o del mes que se diga) de 2026 → instante UTC en segundos
+const en = (zona, mes = 9) => (dia, h, m = 0, s = 0) => {
+  const aprox = Date.UTC(2026, mes, dia, h, m, s) / 1000
   return aprox - offsetZona(aprox - offsetZona(aprox, zona), zona)
 }
 const madrid = en('Europe/Madrid')
 const nuevaYork = en('America/New_York')
 const tokio = en('Asia/Tokyo')
+// las pruebas del flip y la pirámide van en noviembre: las velas de 1 min en directo se
+// guardan en orden y una más vieja que la última del instrumento no entraría
+const madridNov = en('Europe/Madrid', 10)
 const utc = (dia, h, m = 0) => Date.UTC(2026, 9, dia, h, m) / 1000
 
 // ── Las sesiones, en la hora de cada bolsa ──
@@ -191,11 +194,11 @@ function igFalso({ velas = {}, precios = {}, disponible = 20000, aMercado = true
   return ig
 }
 
-function botDePrueba(ig, cambios = {}) {
+function botDePrueba(ig, cambios = {}, { avisar } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-'))
   let t = 0
   ig.reloj = () => t
-  const bot = crearBot({ ig, archivo: join(dir, 'Bot SRS.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0 })
+  const bot = crearBot({ ig, archivo: join(dir, 'Bot SRS.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar })
   bot.cambiarConfig({ activo: true, ...cambios })
   return { bot, dir, enHora: x => { t = x }, archivo: join(dir, 'Bot SRS.json') }
 }
@@ -211,7 +214,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     if (i === 1) return vela15(time, 25480, 25500, 25460, 25490)
     return vela15(time, 25510, 25530, 25505, 25520)
   })
-  const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25519, 25520] } })
+  const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25502, 25503] } })
   const { bot, dir, enHora, archivo } = botDePrueba(ig, { ...soloDax, riesgoEur: 400 })
   try {
     enHora(madrid(19, 9, 30, 4)); await bot._paso()
@@ -233,7 +236,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     assert.equal(abrir.tamano, 6.2)
     assert.equal(abrir.limite, null)                      // a mercado
     assert.match(abrir.referencia, /^SRS-GDAXI-20261019-/)
-    assert.equal(hoy.operacion.deslizamiento, 20)
+    assert.equal(hoy.operacion.deslizamiento, 3)
 
     vela1m('^GDAXI', madrid(19, 9, 42), 25510, 25500)
     enHora(madrid(19, 9, 42, 10)); await bot._paso()
@@ -244,7 +247,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     assert.equal(hoy.estado, 'terminado')
     assert.equal(hoy.salida.motivo, 'cierre')
     assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, null)
-    assert.equal(hoy.resultadoPts, 25519 - 25520)
+    assert.equal(hoy.resultadoPts, 25502 - 25503)
     assert.ok(Math.abs(hoy.resultadoEur - (-1 * 6.2)) < 1e-9)
 
     enHora(madrid(19, 17, 31)); await bot._paso()
@@ -257,20 +260,20 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('donde IG no admite órdenes a mercado, entra y sale con límite: un cuarto del bracket de margen', async () => {
+test('donde IG no admite órdenes a mercado, entra con límite a un cuarto del bracket del nivel, y sale con ese margen', async () => {
   const sesion = [
     vela15(madrid(19, 9, 0), 25470, 25485, 25455, 25480),
     vela15(madrid(19, 9, 15), 25480, 25500, 25460, 25490),   // bracket de 40 puntos
   ]
-  const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25519, 25520] }, aMercado: false })
+  const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25503, 25504] }, aMercado: false })
   const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoEur: 400 })
   try {
     enHora(madrid(19, 9, 30, 4)); await bot._paso()
     vela1m('^GDAXI', madrid(19, 9, 41), 25502, 25495)
     enHora(madrid(19, 9, 41, 10)); await bot._paso()
-    assert.equal(ig.ordenes.find(o => o.tipo === 'abrir').limite, 25520 + 0.25 * 40)
+    assert.equal(ig.ordenes.find(o => o.tipo === 'abrir').limite, 25500 + 0.25 * 40)
     enHora(madrid(19, 17, 30, 3)); await bot._paso()
-    assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, 25519 - 0.25 * 40)
+    assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, 25503 - 0.25 * 40)
     assert.equal(apunte(bot, '^GDAXI').estado, 'terminado')
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
@@ -305,9 +308,9 @@ test('Tokio: el bracket es la vela de 09:15 a 09:30 de Tokio, que en Madrid es d
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('si salta el stop en IG, lo ve al revisar y lo apunta a su precio', async () => {
+test('sin flip, si salta el stop en IG, lo ve al revisar, lo apunta a su precio y la sesión termina', async () => {
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madrid(20, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25499, 25500] } })
-  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, modo: 'ambos' })
   try {
     enHora(madrid(20, 9, 30, 4)); await bot._paso()
     vela1m('^GDAXI', madrid(20, 9, 35), 25501, 25498)
@@ -380,7 +383,7 @@ test('con break even en 1R mueve el stop a la entrada una sola vez', async () =>
 
 test('si IG aún no ha apuntado el cierre, espera; si no lo apunta nunca, usa el stop y lo marca', async () => {
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madrid(27, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25499, 25500] } })
-  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, modo: 'ambos' })
   try {
     enHora(madrid(27, 9, 30, 4)); await bot._paso()
     vela1m('^GDAXI', madrid(27, 9, 33), 25501, 25498)
@@ -441,5 +444,189 @@ test('un instrumento con un error no tumba a los demás', async () => {
     await assert.rejects(bot._paso(), /Nasdaq/)
     assert.equal(apunte(bot, '^GDAXI').estado, 'esperando-rotura')
     assert.match(apunte(bot, '^NDX').eventos.at(-1).texto, /Error: IG caído para el Nasdaq/)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ── Flip the switch, pirámide, tope de deslizamiento y avisos ──
+
+test('con flip solo mira el stop con el precio de ahora: una vela que lo pasó antes de entrar no cuenta', () => {
+  const cfg = { ...CONFIG_INICIAL, activo: true }
+  const op = { lado: 'largo', entrada: 100.5, stop: 90, riesgo: 10, hora: madrid(19, 9, 41, 30), be: false, unidades: [{}] }
+  const dia = { estado: 'en-posicion', bracket: { high: 100, low: 90, rango: 10 }, operacion: op, salida: null }
+  const vela = (low, close) => [{ time: madrid(19, 9, 41), open: 95, high: 101, low, close }]
+  const ahora = madrid(19, 9, 41, 40)
+  assert.equal(siguientePaso({ dia, cfg, ahora, velas: vela(89, 100.5), ses: sesDax }).accion, 'vigilar')
+  assert.equal(siguientePaso({ dia, cfg, ahora, velas: vela(89, 89.5), ses: sesDax }).accion, 'revisar-ya')
+  // con el stop ya en break even, o sin flip, no hay vuelta que esperar
+  assert.equal(siguientePaso({ dia: { ...dia, operacion: { ...op, be: true } }, cfg, ahora, velas: vela(89, 89.5), ses: sesDax }).accion, 'vigilar')
+  assert.equal(siguientePaso({ dia, cfg: { ...cfg, modo: 'ambos' }, ahora, velas: vela(89, 89.5), ses: sesDax }).accion, 'vigilar')
+})
+
+test('flip the switch: si salta el stop de la compra, vende en el mínimo con el stop en el máximo, y una sola vez', async () => {
+  const precios = { '^GDAXI': [25501, 25502] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(2, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const avisos = []
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { avisar: t => avisos.push(t) })
+  try {
+    assert.equal(bot._datos().config.modo, 'flip')      // es lo que hace por defecto
+    enHora(madridNov(2, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(2, 9, 41), 25503, 25495, 25502)
+    enHora(madridNov(2, 9, 41, 10)); await bot._paso()
+    assert.equal(apunte(bot, '^GDAXI').operacion.lado, 'largo')
+
+    // el precio cae por debajo del mínimo; mientras IG no la cierra, el bot espera
+    vela1m('^GDAXI', madridNov(2, 9, 50), 25470, 25455, 25458)
+    enHora(madridNov(2, 9, 50, 5)); await bot._paso()
+    assert.equal(apunte(bot, '^GDAXI').estado, 'en-posicion')
+    // IG la cierra con su stop: la vuelta, en cuanto lo ve
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25459
+    precios['^GDAXI'] = [25457, 25458]
+    enHora(madridNov(2, 9, 50, 8)); await bot._paso()
+    assert.equal(apunte(bot, '^GDAXI').estado, 'esperando-vuelta')
+    enHora(madridNov(2, 9, 50, 9)); await bot._paso()
+    let hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'en-posicion')
+    const venta = ig.ordenes.filter(o => o.tipo === 'abrir')[1]
+    assert.deepEqual([venta.lado, venta.stop, venta.tamano, venta.limite], ['corto', 25500, 6.2, null])
+    assert.equal(hoy.operacion.entrada, 25457)
+    assert.equal(hoy.anteriores[0].salida.nivel, 25459)
+    assert.ok(avisos.some(t => t.startsWith('DAX · Flip the switch: venta')))
+
+    // si salta también el stop de la venta, ya no hay más vueltas
+    vela1m('^GDAXI', madridNov(2, 10, 30), 25505, 25490, 25503)
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25501
+    enHora(madridNov(2, 10, 30, 5)); await bot._paso()
+    hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'terminado')
+    assert.equal(hoy.resultadoPts, (25459 - 25502) + (25457 - 25501))
+    assert.ok(Math.abs(hoy.resultadoEur - hoy.resultadoPts * 6.2) < 1e-9)
+    enHora(madridNov(2, 10, 30, 10)); await bot._paso()
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 2)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('no da la vuelta si el precio ya se ha ido del nivel más del tope', async () => {
+  const precios = { '^GDAXI': [25501, 25502] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(3, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madridNov(3, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(3, 9, 41), 25503, 25495, 25502)
+    enHora(madridNov(3, 9, 41, 10)); await bot._paso()
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25459
+    precios['^GDAXI'] = [25440, 25441]     // 20 puntos por debajo del mínimo; el tope es 10
+    vela1m('^GDAXI', madridNov(3, 9, 52), 25462, 25438, 25441)
+    enHora(madridNov(3, 9, 52, 5)); await bot._paso()
+    enHora(madridNov(3, 9, 52, 6)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'terminado')
+    assert.match(hoy.eventos.at(-1).texto, /20\.0 puntos más allá de 25460, y el tope es 10\.0: no se da la vuelta/)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 1)
+    assert.equal(hoy.resultadoPts, 25459 - 25502)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('pirámide: una posición más por cada R a favor, como mucho una cada 5 min y hasta 5, con el stop de todas en su precio medio', async () => {
+  const precios = { '^GDAXI': [25500, 25501] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(4, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, piramide: 1, tamanoAnadido: 1 })
+  const subir = async (h, m, oferta) => {
+    precios['^GDAXI'] = [oferta - 1, oferta]
+    vela1m('^GDAXI', madridNov(4, h, m), oferta, oferta - 10, oferta - 1)
+    enHora(madridNov(4, h, m, 5)); await bot._paso()
+    return apunte(bot, '^GDAXI').operacion
+  }
+  try {
+    enHora(madridNov(4, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(4, 9, 41), 25502, 25495, 25501)
+    enHora(madridNov(4, 9, 41, 10)); await bot._paso()           // compra a 25501
+
+    let op = await subir(9, 45, 25542)                             // +1R (nivel 25540): la segunda
+    assert.equal(op.unidades.length, 2)
+    assert.equal(op.stop, 25521.5)                                 // (25501 + 25542) / 2
+    assert.deepEqual(ig.ordenes.filter(o => o.tipo === 'stop').map(o => [o.dealId, o.stop]), [['D1', 25521.5]])
+    op = await subir(9, 46, 25582)                                 // +2R, pero en el mismo tramo de 5 min
+    assert.equal(op.unidades.length, 2)
+    op = await subir(9, 50, 25582)
+    assert.equal(op.unidades.length, 3)
+    op = await subir(9, 55, 25622)
+    op = await subir(10, 0, 25662)
+    assert.equal(op.unidades.length, 5)
+    op = await subir(10, 5, 25702)                                 // +5R: ya hay 5, no añade más
+    assert.equal(op.unidades.length, 5)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 5)
+    assert.equal(op.stop, 25581.8)                                 // la media de las cinco
+
+    // salta el stop de todas en el precio medio: la pierna sale a cero y, como es un break
+    // even, no da la vuelta
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25581.8
+    enHora(madridNov(4, 10, 10, 5)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'terminado')
+    assert.equal(hoy.salida.motivo, 'breakeven')
+    assert.ok(Math.abs(hoy.resultadoPts) < 1e-6)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('no entra si al romper el precio ya se ha ido del nivel más de un cuarto del bracket', async () => {
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(5, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25514, 25515] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madridNov(5, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(5, 9, 33), 25516, 25498, 25514)
+    enHora(madridNov(5, 9, 33, 5)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'sin-operar')
+    assert.match(hoy.eventos.at(-1).texto, /15\.0 puntos más allá de 25500, y el tope es 10\.0: hoy no se entra/)
+    assert.equal(ig.ordenes.length, 0)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('avisa de lo que apunta y de los cambios de configuración, y de un error que se repite solo una vez', async () => {
+  const ig = igFalso({})
+  ig.velasEntre = async () => { throw new Error('IG caído') }
+  const avisos = []
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { avisar: t => avisos.push(t) })
+  try {
+    assert.ok(avisos[0].startsWith('Bot encendido\n'))
+    enHora(madridNov(6, 9, 30, 4))
+    await assert.rejects(bot._paso(), /IG caído/)
+    enHora(madridNov(6, 9, 30, 10))
+    await assert.rejects(bot._paso(), /IG caído/)
+    assert.equal(avisos.filter(t => t === 'DAX · Error: IG caído').length, 1)
+    bot.cambiarConfig({ piramide: 2, tamanoAnadido: 1 })
+    assert.equal(avisos.at(-1), 'Pirámide: una posición más cada 2R a favor, hasta 5\nCada añadido: una unidad entera')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('flip the switch necesita el stop al otro lado del bracket', () => {
+  const { bot, dir } = botDePrueba(igFalso({}), soloDax)
+  try {
+    assert.throws(() => bot.cambiarConfig({ stopPct: 0.5 }), /Flip the switch necesita/)
+    assert.equal(bot.cambiarConfig({ modo: 'ambos', stopPct: 0.5 }).stopPct, 0.5)
+    assert.throws(() => bot.cambiarConfig({ piramide: 9 }), /Pirámide no válida/)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('por defecto, la pirámide añade media posición cada 1R, con el mínimo de IG como suelo', async () => {
+  assert.equal(CONFIG_INICIAL.piramide, 1)
+  assert.equal(CONFIG_INICIAL.tamanoAnadido, 0.5)
+  const precios = { '^GDAXI': [25500, 25501] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(9, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madridNov(9, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(9, 9, 41), 25502, 25495, 25501)
+    enHora(madridNov(9, 9, 41, 10)); await bot._paso()
+    precios['^GDAXI'] = [25541, 25542]
+    vela1m('^GDAXI', madridNov(9, 9, 45), 25542, 25530, 25541)
+    enHora(madridNov(9, 9, 45, 5)); await bot._paso()
+    const op = apunte(bot, '^GDAXI').operacion
+    assert.deepEqual(op.unidades.map(u => u.tamano), [6.2, 3.1])
+    assert.equal(op.stop, 25514.7)                                // (6,2 × 25501 + 3,1 × 25542) / 9,3
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

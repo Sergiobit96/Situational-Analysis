@@ -36,15 +36,35 @@ function sinSesionEnCurso(info, velas) {
   return ultima && ultima.date >= fecha && minutos < hh * 60 + mm + 20 ? velas.slice(0, -1) : velas
 }
 
+// Con dos reintentos: mientras Railway cambia de despliegue, su proxy contesta a algunas
+// peticiones sin cabeceras CORS (el navegador lo ve como fallo de red) o con un 5xx
+async function pedirJson(url, signal) {
+  for (let intento = 0; ; intento++) {
+    try {
+      const r = await fetch(url, { signal })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok) return j
+      if (r.status < 500 || intento >= 2) throw new Error(j.error ?? `HTTP ${r.status}`)
+    } catch (e) {
+      if (e.name === 'AbortError' || !(e instanceof TypeError) || intento >= 2) throw e
+    }
+    await new Promise(listo => setTimeout(listo, 1500 * (intento + 1)))
+  }
+}
+
 async function bajarDiario(ticker, signal) {
   const visto = cacheDiario.get(ticker)
   if (visto && Date.now() - visto.cuando < VIGENCIA_MS) return visto.velas
   const paginas = []
   let hasta = Math.floor(Date.now() / 1000)
   for (let k = 0; k < 6 && hasta > PRIMER_DIA; k++) {
-    const r = await fetch(`${API}/api/grafico/velas?ticker=${encodeURIComponent(ticker)}&tf=d1&fuente=yahoo&hasta=${hasta}`, { signal })
-    const j = await r.json().catch(() => ({}))
-    if (!r.ok) throw new Error(`${ticker}: ${j.error ?? `HTTP ${r.status}`}`)
+    let j
+    try {
+      j = await pedirJson(`${API}/api/grafico/velas?ticker=${encodeURIComponent(ticker)}&tf=d1&fuente=yahoo&hasta=${hasta}`, signal)
+    } catch (e) {
+      if (e.name === 'AbortError') throw e
+      throw new Error(`${ticker}: ${e.message}`, { cause: e })
+    }
     if (!j.velas?.length) break
     paginas.unshift(j.velas)
     const primera = j.velas[0].time

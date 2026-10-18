@@ -61,3 +61,24 @@
 .tortugas-anio.negativo { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
 .tortugas-anio.positivo strong { color: var(--green); }
 .tortugas-anio.negativo strong { color: var(--red); }
+
+/* N de cada índice, a la vista nada más abrir los resultados */
+.tortugas-n {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.5rem;
+}
+.tortugas-n-caja {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.55rem 0.7rem;
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-variant-numeric: tabular-nums;
+}
+.tortugas-n-nombre { font-size: 0.72rem; color: var(--muted); }
+.tortugas-n-valor { font-size: 1.25rem; font-weight: 600; color: var(--accent-2); }
+.tortugas-n-valor small { font-size: 0.7rem; font-weight: 500; color: var(--muted); }
+.tortugas-n-sub { font-size: 0.68rem; color: var(--muted); }

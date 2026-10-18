@@ -44,6 +44,7 @@ test('pirámide cada ½ N con el stop común a 2 N del último añadido', () => 
   const res = backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, LIMPIO)
   assert.equal(res.operaciones.length, 1)
   const op = res.operaciones[0]
+  assert.equal(op.n, 2)
   assert.equal(op.unidades, 4)
   assert.equal(op.precioEntrada, 102.5)
   assert.equal(op.motivo, 'stop')

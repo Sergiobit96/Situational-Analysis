@@ -219,6 +219,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
   const res = useMemo(() => mercados.length ? backtestTortugas(mercados, tipos, cfg) : null, [mercados, tipos, cfg])
   const m = useMemo(() => res && metricasTortugas(res), [res])
+  const ordenes = useMemo(() => res ? ordenesManana(res, ajustes.capital) : [], [res, ajustes.capital])
 
   async function cargar() {
     abortRef.current?.abort()
@@ -417,12 +418,13 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </p>
           )}
           <Resumen m={m} res={res} />
+          <NDeHoy filas={ordenes} paso={res.cfg.paso} stopN={res.cfg.stopN} />
           <CurvaTortugas res={res} />
           <Anual res={res} />
           <PorIndice res={res} />
           <Piramide res={res} />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} />
-          <Ordenes res={res} capital={ajustes.capital} ultimoDato={ultimoDato} />
+          <Ordenes filas={ordenes} capital={ajustes.capital} ultimoDato={ultimoDato} />
           <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} />
           <p className="estr-nota">
             Velas diarias del contado (Yahoo). Las órdenes son stop y se ejecutan en su nivel, o en la apertura si la
@@ -464,6 +466,32 @@ function Resumen({ m, res }) {
             </span>
             <span className="estr-tile-valor">{t.valor}</span>
             <span className="estr-tile-sub">{t.sub}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// La volatilidad con la que se mide todo: N de cada índice al último cierre, en puntos y en %
+// del precio, con lo que sale de él (cada cuánto se añade, a qué distancia va el stop y el
+// tamaño de una unidad)
+function NDeHoy({ filas, paso, stopN }) {
+  return (
+    <div className="estr-resumen">
+      <div className="tortugas-cabecera">
+        <strong>N de cada índice</strong>
+        <span className="estr-nota">ATR de Wilder de 20 sesiones, al último cierre</span>
+      </div>
+      <div className="tortugas-n">
+        {filas.map(f => (
+          <div key={f.indice} className="tortugas-n-caja" title={`${f.nombre} · cierre ${nf(f.cierre, 2)} el ${dia(f.ultimoDia)}`}>
+            <span className="tortugas-n-nombre">{f.nombre}</span>
+            <span className="tortugas-n-valor">{nf(f.n, 1)} <small>pts</small></span>
+            <span className="tortugas-n-sub">{nf(100 * f.n / f.cierre, 2)} % del precio</span>
+            <span className="tortugas-n-sub">añade cada {nf(paso * f.n, 1)} pts</span>
+            <span className="tortugas-n-sub">stop a {nf(stopN * f.n, 1)} pts</span>
+            <span className="tortugas-n-sub">unidad {nf(f.unidad, 2)} €/pt</span>
           </div>
         ))}
       </div>
@@ -660,8 +688,7 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
   )
 }
 
-function Ordenes({ res, capital, ultimoDato }) {
-  const filas = useMemo(() => ordenesManana(res, capital), [res, capital])
+function Ordenes({ filas, capital, ultimoDato }) {
   const nivel = o => o ? `${nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
   return (
     <div className="estr-resumen">
@@ -714,7 +741,7 @@ function Operaciones({ res, mostradas, onMas }) {
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th><th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th>Unidades</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
+            <tr><th>Índice</th><th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
           </thead>
           <tbody>
             {filas.slice(0, mostradas).map((o, k) => (
@@ -724,6 +751,7 @@ function Operaciones({ res, mostradas, onMas }) {
                 <td>{dia(o.entrada)}</td>
                 <td>{o.salida ? dia(o.salida) : 'abierta'}</td>
                 <td>{o.dias ?? ''}</td>
+                <td>{nf(o.n, 1)}</td>
                 <td>{o.unidades}</td>
                 <td>{nf(o.precioEntrada, 1)}</td>
                 <td>{nf(o.precioSalida, 1)}</td>

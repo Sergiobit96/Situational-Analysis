@@ -1,5 +1,6 @@
 import { createChart, CandlestickSeries, LineSeries, CrosshairMode, LineStyle, createSeriesMarkers } from 'lightweight-charts'
 import { madridOffsetAt } from './timezone.js'
+import { pasoDeVelas, pegarAVela } from './marcasTrade.js'
 
 // Minutos desde medianoche Madrid para un timestamp ya ajustado (ts + offset)
 const madridMinOfDay = adjTs => (adjTs % 86400) / 60
@@ -237,22 +238,26 @@ export function crearGrafico(container, { velas, patrones, ticker, prevClose, op
   }
 
   // Marcas de operaciones reales (diario de trading) que caen en este día/instrumento:
-  // flecha horizontal de entrada + cruz de salida, ambas exactamente al precio de la
-  // operación y coloreadas según su dirección (azul = LONG, naranja = SHORT), unidas
-  // por una línea discontinua del mismo color.
+  // flecha horizontal de entrada + cruz de salida, sobre la vela de su hora y al precio de
+  // la operación (pegado a la vela si el feed del bróker y el de las velas difieren por
+  // poco, ver marcasTrade.js), unidas por una línea discontinua del mismo color.
   const marcasTrade = []
   const lineasTrade = []
+  const velasOrdenadas = [...velasAjustadas].sort((a, b) => a.time - b.time)
+  const paso = pasoDeVelas(velasOrdenadas)
   // Verde para los largos y rojo para los cortos, en el diario y en la estrategia: lo que
   // se quiere ver de un vistazo en el gráfico es de qué lado iba la operación.
   trades?.forEach(t => {
     const esShort = t.direccion === 'SHORT'
     const color   = esShort ? '#f85149' : '#3fb950'
-    marcasTrade.push({ time: t.openTime,  price: t.openPrice,  color, tipo: 'entrada', lado: esShort ? 'corto' : 'largo' })
-    marcasTrade.push({ time: t.closeTime, price: t.closePrice, color, tipo: 'salida' })
+    const entrada = pegarAVela(velasOrdenadas, paso, t.openTime, t.openPrice)
+    const salida  = pegarAVela(velasOrdenadas, paso, t.closeTime, t.closePrice)
+    marcasTrade.push({ ...entrada, color, tipo: 'entrada', lado: esShort ? 'corto' : 'largo' })
+    marcasTrade.push({ ...salida, color, tipo: 'salida' })
 
     if (t.closeTime !== t.openTime) lineasTrade.push({
-      desde: t.openTime,  precioDesde: t.openPrice,
-      hasta: t.closeTime, precioHasta: t.closePrice,
+      desde: entrada.time, precioDesde: entrada.price,
+      hasta: salida.time,  precioHasta: salida.price,
       color,
     })
   })

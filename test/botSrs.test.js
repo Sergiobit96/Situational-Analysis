@@ -152,7 +152,7 @@ const MERCADOS = {
 
 // Un IG que apunta lo que se le pide y contesta lo que diga cada prueba. `velas` por
 // instrumento: la del bracket (por su hora) y las de después
-function igFalso({ velas = {}, precios = {}, disponible = 20000 }) {
+function igFalso({ velas = {}, precios = {}, disponible = 20000, aMercado = true }) {
   const ordenes = []
   let abiertas = []
   let n = 0
@@ -162,7 +162,7 @@ function igFalso({ velas = {}, precios = {}, disponible = 20000 }) {
       datosMercado: async (ticker, epic) => {
         const m = MERCADOS[epic] ?? MERCADOS['IX.D.DAX.IFMM.IP']
         const [bid, oferta] = precios[ticker] ?? [25500, 25501]
-        return { epic, ...m, stopMin: 5, estado: 'TRADEABLE', bid: m.conPrecio ? bid : null, oferta: m.conPrecio ? oferta : null }
+        return { epic, ...m, stopMin: 5, estado: 'TRADEABLE', bid: m.conPrecio ? bid : null, oferta: m.conPrecio ? oferta : null, aMercado }
       },
       abrir: async o => {
         ordenes.push({ tipo: 'abrir', ...o })
@@ -231,7 +231,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     assert.equal(abrir.lado, 'largo')
     assert.equal(abrir.stop, 25460)
     assert.equal(abrir.tamano, 6.2)
-    assert.equal(abrir.limite, 25520 + 0.25 * 40)        // tope de deslizamiento: un cuarto del bracket
+    assert.equal(abrir.limite, null)                      // a mercado
     assert.match(abrir.referencia, /^SRS-GDAXI-20261019-/)
     assert.equal(hoy.operacion.deslizamiento, 20)
 
@@ -243,6 +243,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     hoy = apunte(bot, '^GDAXI')
     assert.equal(hoy.estado, 'terminado')
     assert.equal(hoy.salida.motivo, 'cierre')
+    assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, null)
     assert.equal(hoy.resultadoPts, 25519 - 25520)
     assert.ok(Math.abs(hoy.resultadoEur - (-1 * 6.2)) < 1e-9)
 
@@ -253,6 +254,24 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
 
     const guardado = JSON.parse(readFileSync(archivo, 'utf8'))
     assert.equal(guardado.dias['2026-10-19 ^GDAXI'].estado, 'terminado')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('donde IG no admite órdenes a mercado, entra y sale con límite: un cuarto del bracket de margen', async () => {
+  const sesion = [
+    vela15(madrid(19, 9, 0), 25470, 25485, 25455, 25480),
+    vela15(madrid(19, 9, 15), 25480, 25500, 25460, 25490),   // bracket de 40 puntos
+  ]
+  const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25519, 25520] }, aMercado: false })
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoEur: 400 })
+  try {
+    enHora(madrid(19, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madrid(19, 9, 41), 25502, 25495)
+    enHora(madrid(19, 9, 41, 10)); await bot._paso()
+    assert.equal(ig.ordenes.find(o => o.tipo === 'abrir').limite, 25520 + 0.25 * 40)
+    enHora(madrid(19, 17, 30, 3)); await bot._paso()
+    assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, 25519 - 0.25 * 40)
+    assert.equal(apunte(bot, '^GDAXI').estado, 'terminado')
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

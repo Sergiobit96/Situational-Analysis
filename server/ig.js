@@ -614,7 +614,8 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
 
   // Lo que hace falta para mandar una orden: moneda, tamaño mínimo, distancia mínima del
   // stop, cuánto vale un punto (y en euros, con el cambio que da IG: baseExchangeRate es lo
-  // que vale 1 € en esa moneda) y si la cuenta tiene precio, que es lo que dice si puede operarlo
+  // que vale 1 € en esa moneda), si la cuenta tiene precio, que es lo que dice si puede
+  // operarlo, y si admite órdenes a mercado (los de diario sí; el DAX de fin de semana no)
   async function datosMercado(ticker, epic = null) {
     const { json } = await pedir(`/markets/${encodeURIComponent(epicDe(ticker, epic))}`, { version: 3 })
     const reglas = json.dealingRules ?? {}
@@ -631,6 +632,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       estado:      json.snapshot?.marketStatus,
       bid, oferta,
       conPrecio:   bid != null && oferta != null,
+      aMercado:    reglas.marketOrderPreference !== 'NOT_AVAILABLE',
     }
   }
 
@@ -653,10 +655,10 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   })
 
   // Abre con el stop dentro de la misma orden: lo guarda IG, así que la posición queda
-  // protegida aunque el servidor se caiga después. No va "a mercado" (IG no lo admite en
-  // todos los mercados: market-orders.not-supported-for-epic) sino límite que se ejecuta
-  // entera al momento o se anula, con `limite` como el peor precio aceptable: es un tope
-  // al deslizamiento, y si el precio ya se ha ido más allá, no entra.
+  // protegida aunque el servidor se caiga después. Sin `limite` va a mercado. Con él, para
+  // los mercados que no admiten órdenes a mercado (market-orders.not-supported-for-epic),
+  // va con límite que se ejecuta entera al momento o se anula, con `limite` como el peor
+  // precio aceptable: si el precio ya se ha ido más allá, no entra.
   const orden = (ticker, limite) => (limite == null
     ? { orderType: 'MARKET', level: null, timeInForce: null }
     : { orderType: 'LIMIT', level: aIG(ticker, limite), timeInForce: 'FILL_OR_KILL' })

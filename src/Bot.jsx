@@ -226,20 +226,18 @@ export default function Bot() {
           <label>Riesgo por operación (€)
             <input type="number" min="1" max="5000" value={editando.riesgoEur} onChange={e => cambiar('riesgoEur', e.target.value)} />
           </label>
-          <label>Deslizamiento máximo (% del bracket)
-            <input type="number" min="1" max="200" value={Math.round(editando.deslizamientoMaxR * 100)} onChange={e => cambiar('deslizamientoMaxR', Number(e.target.value) / 100)} />
-          </label>
           <label>Bracket máximo (% del precio)
             <input type="number" min="0.01" max="10" step="0.1" value={editando.rangoMaxPct} onChange={e => cambiar('rangoMaxPct', e.target.value)} />
           </label>
         </div>
         <p className="bot-nota">
           El tamaño sale del riesgo: lo que se pierde si salta el stop. Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
+          Las órdenes van a mercado: lo que se paga de más respecto al nivel de la rotura se ve en la columna Deslizamiento.
           Un cambio vale para las sesiones que aún no han fijado su bracket.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { modo, stopPct, beR, riesgoEur, deslizamientoMaxR, rangoMaxPct } = form
-          guardarConfig({ modo, stopPct, beR, riesgoEur, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
+          const { modo, stopPct, beR, riesgoEur, rangoMaxPct } = form
+          guardarConfig({ modo, stopPct, beR, riesgoEur, rangoMaxPct }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
 

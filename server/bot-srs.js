@@ -7,8 +7,9 @@
 // opcionalmente a break even al recorrer beR veces el riesgo; y cierre con la sesión.
 //
 // Cómo opera:
-//   · la entrada la decide el bot con el precio en directo: orden límite que se ejecuta al
-//     momento o se anula (con tope de deslizamiento) y con el stop dentro, que guarda IG;
+//   · la entrada la decide el bot con el precio en directo: orden a mercado con el stop
+//     dentro, que guarda IG (donde IG no admite órdenes a mercado, como el DAX de fin de
+//     semana, límite que se ejecuta al momento o se anula, con tope de deslizamiento);
 //     no deja órdenes pendientes en IG, así que no entran dos lados a la vez ni entra nada
 //     con el bot parado;
 //   · el tamaño sale del riesgo: se arriesgan `riesgoEur` euros hasta el stop, con el
@@ -47,7 +48,7 @@ export const CONFIG_INICIAL = {
   beR:               null,    // null, 1 o 2: stop a la entrada al recorrer esas veces el riesgo
   riesgoEur:         400,     // lo que se arriesga por operación hasta el stop, en euros (un 2% de la demo de 20.000 €;
                               // con menos, el mínimo de IG en el Dow o el Nikkei ya arriesga más del doble y no entrarían)
-  deslizamientoMaxR: 0.25,    // peor precio aceptable al entrar, en fracción del bracket
+  deslizamientoMaxR: 0.25,    // solo donde IG no admite órdenes a mercado: peor precio aceptable, en fracción del bracket
   rangoMaxPct:       0.8,     // si el bracket mide más (en % del precio), ese día no se opera
 }
 
@@ -260,7 +261,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const stop = nivelStop(dia.bracket, lado, cfg.stopPct)
     const m = await ig.operar.datosMercado(dia.ticker, plan.epic)
     const margen = cfg.deslizamientoMaxR * dia.bracket.rango
-    const limite = lado === 'largo' ? m.oferta + margen : m.bid - margen
+    const limite = m.aMercado ? null : (lado === 'largo' ? m.oferta + margen : m.bid - margen)
     const referencia = `${PREFIJO}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
     apuntar(dia, `Rotura ${lado === 'largo' ? 'por arriba: compra' : 'por abajo: venta'} de ${plan.tamano} con stop en ${stop.toFixed(1)}`)
     // Se apunta ANTES de mandarla: si la confirmación no llega (un corte justo ahí), el bot
@@ -325,8 +326,9 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     apuntar(dia, `Fuera a ${salida.nivel} (${salida.motivo}): ${dia.resultadoPts >= 0 ? '+' : ''}${dia.resultadoPts.toFixed(1)} puntos`)
   }
 
-  // Al cierre hay que salir sí o sí: si el precio se escapa del margen, se reintenta con
-  // el precio nuevo y el doble de margen
+  // Al cierre hay que salir sí o sí: a mercado, reintentando si IG la rechaza. Donde no
+  // admite órdenes a mercado va con límite, y si el precio se escapa del margen, se
+  // reintenta con el precio nuevo y el doble de margen
   async function cerrar(dia, motivo) {
     const op = dia.operacion
     const epic = dia.plan?.epic ?? null
@@ -334,10 +336,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     let margen = Math.max((dia.config.deslizamientoMaxR ?? 0.25) * (dia.bracket?.rango ?? op.riesgo), 1)
     for (let intento = 0; intento < 3; intento++, margen *= 2) {
       const m = await ig.operar.datosMercado(dia.ticker, epic)
-      const limite = op.lado === 'largo' ? m.bid - margen : m.oferta + margen
+      const limite = m.aMercado ? null : (op.lado === 'largo' ? m.bid - margen : m.oferta + margen)
       r = await ig.operar.cerrar({ ticker: dia.ticker, dealId: op.dealId, lado: op.lado, tamano: op.tamano, limite })
       if (r.aceptada) break
-      apuntar(dia, `IG no cierra con ${margen.toFixed(1)} puntos de margen (${r.motivo})`)
+      apuntar(dia, limite == null ? `IG no cierra a mercado (${r.motivo})` : `IG no cierra con ${margen.toFixed(1)} puntos de margen (${r.motivo})`)
     }
     if (!r.aceptada) {
       // puede que ya la hubiera cerrado el stop: la revisión lo aclara
@@ -542,8 +544,9 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     if (m.estado !== 'TRADEABLE') throw new Error(`El mercado está ${m.estado}: el ensayo necesita el mercado abierto`)
     const distancia = Math.max(3 * (m.stopMin ?? 10), 30)
     const margen = Math.max(m.oferta - m.bid, 5)
-    const r = await ig.operar.abrir({ ticker, epic: m.epic, lado: 'largo', tamano: m.tamanoMin ?? 1, stop: m.bid - distancia, moneda: m.moneda, limite: m.oferta + margen, referencia: `${PREFIJO}ENSAYO-${Date.now().toString(36)}` })
-    pasos.push(`Abrir compra de ${r.tamano ?? m.tamanoMin} con stop en ${(m.bid - distancia).toFixed(1)}: ${r.aceptada ? `aceptada a ${r.nivel}` : 'rechazada'} (${r.motivo})`)
+    const tipo = m.aMercado ? 'a mercado' : 'con límite (este mercado no admite órdenes a mercado)'
+    const r = await ig.operar.abrir({ ticker, epic: m.epic, lado: 'largo', tamano: m.tamanoMin ?? 1, stop: m.bid - distancia, moneda: m.moneda, limite: m.aMercado ? null : m.oferta + margen, referencia: `${PREFIJO}ENSAYO-${Date.now().toString(36)}` })
+    pasos.push(`Abrir compra de ${r.tamano ?? m.tamanoMin} ${tipo} con stop en ${(m.bid - distancia).toFixed(1)}: ${r.aceptada ? `aceptada a ${r.nivel}` : 'rechazada'} (${r.motivo})`)
     if (!r.aceptada) return pasos
     try {
       const p = (await ig.operar.posiciones()).find(x => x.dealId === r.dealId)
@@ -552,7 +555,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       pasos.push(`Mover el stop 5 puntos: ${s.aceptada ? 'aceptado' : 'rechazado'} (${s.motivo})`)
     } finally {
       const m2 = await ig.operar.datosMercado(ticker, m.epic)
-      const c = await ig.operar.cerrar({ ticker, dealId: r.dealId, lado: 'largo', tamano: r.tamano ?? m.tamanoMin, limite: m2.bid - margen })
+      const c = await ig.operar.cerrar({ ticker, dealId: r.dealId, lado: 'largo', tamano: r.tamano ?? m.tamanoMin, limite: m2.aMercado ? null : m2.bid - margen })
       pasos.push(`Cerrar: ${c.aceptada ? `aceptada a ${c.nivel}` : 'rechazada'} (${c.motivo})`)
       let ci = null
       for (let i = 0; i < 5 && !ci; i++) {

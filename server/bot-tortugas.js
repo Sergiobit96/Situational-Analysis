@@ -5,27 +5,30 @@
 //   · al empezar cada sesión de un índice, con sus velas diarias de Yahoo hasta la anterior
 //     (las mismas que usa el backtest), saca la N (ATR de Wilder de 20), los canales y el
 //     filtro del Sistema 1 (server/tortugas-niveles.js);
-//   · Sistema 1: entra al romper el máximo de 20 sesiones (o el de 55, si la ruptura anterior
-//     habría ganado) y sale al romper el mínimo de 10; Sistema 2: entra en la de 55 y sale en
-//     la de 20. Por defecto, solo largos, como el backtest;
-//   · una unidad es el tamaño con el que 1 N cuesta un `riesgoPct` % del saldo (con un 20 %
-//     menos por cada 10 % de caída desde el máximo, como el backtest); el stop de todas las
-//     unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue protegida
-//     de noche, en fin de semana o con el servidor caído;
+//   · juega los dos sistemas a la vez, como las tortugas: el Sistema 1 entra al romper el
+//     máximo de 20 sesiones (o el de 55, si la ruptura anterior habría ganado) y sale al romper
+//     el mínimo de 10; el Sistema 2 entra en la de 55 y sale en la de 20. Cada uno lleva sus
+//     posiciones (un índice puede tener una de cada), con la mitad del capital: así, con los
+//     dos llenos, se arriesga lo mismo que con uno solo y todo el capital. Por defecto, solo
+//     largos, como el backtest;
+//   · una unidad es el tamaño con el que 1 N cuesta un `riesgoPct` % del capital del sistema
+//     (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest); el stop de
+//     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
+//     protegida de noche, en fin de semana o con el servidor caído;
 //   · pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`,
-//     con los límites de cartera del backtest (unidades por grupo y por sentido, y el nominal
-//     total como mucho 10 veces el saldo).
+//     con los límites de cartera del backtest dentro de cada sistema (unidades por grupo y por
+//     sentido) y, entre los dos, el nominal total como mucho 10 veces el saldo.
 // Las entradas, los añadidos y la salida por el canal los decide el bot con el precio en
 // directo de IG, solo dentro de la sesión de contado de cada índice (que es lo que ve el
 // backtest), y van a mercado. No deja órdenes pendientes en IG. El stop de 2 N sí puede saltar
 // fuera de la sesión, porque IG cotiza casi las 24 horas: el backtest solo lo vería al abrir.
 //
-// Como el bot SRS: cada orden lleva una referencia propia (TOR-…) para recuperar las
-// posiciones desde IG si se pierde el registro; una orden sin confirmar se reconcilia antes de
-// seguir; todo lo que hace lo cuenta por Telegram; solo opera en la demo (candado en
-// server/ig.js) y solo donde BOT_OPERA=1 (server/index.js). Comparte la cuenta con el bot SRS:
-// sus posiciones son aparte (cada una con su referencia), pero el saldo y el margen son los
-// mismos.
+// Como el bot SRS: cada orden lleva una referencia propia (TOR1-… o TOR2-…, según el sistema)
+// para recuperar las posiciones desde IG si se pierde el registro; una orden sin confirmar se
+// reconcilia antes de seguir; todo lo que hace lo cuenta por Telegram; solo opera en la demo
+// (candado en server/ig.js) y solo donde BOT_OPERA=1 (server/index.js). Comparte la cuenta con
+// el bot SRS: sus posiciones son aparte (cada una con su referencia), pero el saldo y el margen
+// son los mismos.
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
 import { SESIONES_BOT, sesionDe, proximaApertura, tamanoPorRiesgo } from './bot-srs.js'
@@ -38,24 +41,26 @@ import { nivelesTortugas } from './tortugas-niveles.js'
 export const GRUPOS_TORTUGAS = {
   '^N225': 'Asia', '^GDAXI': 'Europa', '^FTSE': 'Europa', '^NDX': 'EEUU', '^GSPC': 'EEUU', '^DJI': 'EEUU', '^RUT': 'EEUU',
 }
+export const SISTEMAS = [1, 2]
 
 export const CONFIG_TORTUGAS_BOT = {
   activo:       false,
   instrumentos: Object.fromEntries(Object.keys(GRUPOS_TORTUGAS).map(t => [t, true])),
-  sistema:      1,          // 1: entra en 20 (o 55 con el filtro) y sale en 10; 2: entra en 55 y sale en 20
+  sistemas:     [1, 2],     // los que juega, a la vez y con el capital a partes iguales
   lados:        'largos',   // largos | ambos | cortos
-  riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo (el backtest usa 0,2 con 8 índices; las tortugas, 1)
-  maxUnidades:  6,          // por índice, con la entrada
-  maxGrupo:     9,          // por grupo (Asia, Europa, EEUU) y sentido
-  maxSentido:   15,         // en total por sentido
+  riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo, repartido entre los sistemas
+                            // (el backtest usa 0,2 con 8 índices; las tortugas, 1)
+  maxUnidades:  6,          // por índice y sistema, con la entrada
+  maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
+  maxSentido:   15,         // por sentido y sistema
   reduccionDD:  true,       // un 20 % menos de capital por cada 10 % de caída desde el máximo
 }
 
 export const PASO_N = 0.5          // N entre añadidos
 export const STOP_N = 2            // N hasta el stop desde el último relleno
-export const APALANCAMIENTO = 10   // nominal total de las posiciones / saldo, como mucho
+export const APALANCAMIENTO = 10   // nominal total de las posiciones (de los dos sistemas) / saldo, como mucho
 const MARGEN_MAX = 0.4             // una orden no puede pedir más margen que esta parte del disponible
-const PREFIJO = 'TOR-'
+const PREFIJO = 'TOR'              // + el sistema: TOR1-…, TOR2-…
 const RECIENTE_S = 120             // las velas de 1 min que cuentan como el precio de ahora
 const REVISAR_CADA_MS = 30_000     // cada cuánto se mira en IG si las posiciones siguen abiertas
 const REVISAR_YA_MS = 2_000        // con el precio al otro lado de un stop
@@ -73,6 +78,13 @@ const dir = lado => (lado === 'largo' ? 1 : -1)
 const redondear = x => Math.round(x * 10) / 10
 const num = (x, dec = 1) => (x == null ? '—' : Number(x).toLocaleString('es-ES', { maximumFractionDigits: dec }))
 const nombreDe = ticker => SESIONES_BOT[ticker]?.nombre ?? ticker
+// Posiciones e intentos van por índice y sistema
+export const claveDe = (ticker, sistema) => `${ticker}|${sistema}`
+// El sistema de una orden del bot, por su referencia (TOR1-…, TOR2-…); null si no es suya
+export const sistemaDeReferencia = ref => {
+  const m = /^TOR([12])?-/.exec(ref ?? '')
+  return m ? Number(m[1] ?? 1) : null
+}
 
 // El capital con el que se calcula la unidad: el saldo, recortado un 20 % por cada 10 % que
 // esté por debajo de su máximo (como fijarCapital en el backtest)
@@ -85,16 +97,28 @@ export function capitalNominal(saldo, pico, reduccion = true) {
 // Dónde entra la siguiente unidad: ½ N a favor desde el último relleno
 export const siguienteAnadido = pos => pos.unidades.at(-1).entrada + dir(pos.lado) * PASO_N * pos.n0
 
+// Los niveles de un sistema con la N y los canales del día
+export function nivelesSistema(nv, sistema) {
+  const k = sistema === 2 || nv.gano ? 55 : 20
+  const kSalida = sistema === 1 ? 10 : 20
+  return {
+    k, kSalida, filtro: sistema === 1 && nv.gano,
+    entrada: { largo: { nivel: nv.alto[k], k }, corto: { nivel: nv.bajo[k], k } },
+    salida: { largo: nv.bajo[kSalida], corto: nv.alto[kSalida] },
+  }
+}
+
 // ── La decisión (pura) ──
-// `ses` es la sesión de hoy del índice (null en fin de semana) y `proxima`, la siguiente que
-// abre; `velas`, las últimas de 1 min en directo; `cfg.activo` ya dice si ese índice opera.
-export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima }) {
+// Para un índice y un sistema. `ses` es la sesión de hoy del índice (null en fin de semana) y
+// `proxima`, la siguiente que abre; `velas`, las últimas de 1 min en directo; `cfg.encendido`
+// y `cfg.activo` ya dicen si ese índice y ese sistema se juegan y si el bot está encendido.
+export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima, sistema = 1 }) {
   // una orden mandada cuya confirmación no llegó: antes de nada, ver en IG si entró
   if (intento) return { accion: 'reconciliar' }
   const enSesion = !!ses && ahora >= ses.abre && ahora < ses.cierra
-  // El plan de la sesión en curso o, fuera de ella, el de la siguiente (provisional: se
-  // rehace al abrir, con la cuenta de ese momento). Recién cerrada la sesión, se espera a
-  // que Yahoo tenga su vela diaria.
+  // El plan (de los dos sistemas) de la sesión en curso o, fuera de ella, el de la siguiente
+  // (provisional: se rehace al abrir, con la cuenta de ese momento). Recién cerrada la sesión,
+  // se espera a que Yahoo tenga su vela diaria.
   const objetivo = enSesion ? ses : proxima
   if (objetivo && (cfg.encendido || pos)) {
     const deEsa = plan?.fecha === objetivo.fecha
@@ -105,7 +129,8 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
   }
   if (!enSesion) return { accion: pos ? 'vigilar' : 'nada' }
 
-  const hoy = plan?.fecha === ses.fecha && !plan.error ? plan : null
+  const delSistema = plan?.fecha === ses.fecha && !plan.error ? plan.sistemas?.[sistema] : null
+  const hoy = delSistema ? { ...plan, ...delSistema } : null
   // el precio de ahora: las velas de 1 min de los dos últimos minutos de la sesión
   const recientes = velas.filter(v => v.time >= ses.abre && v.time + RECIENTE_S > ahora)
   if (!recientes.length) return { accion: pos ? 'vigilar' : 'nada' }
@@ -135,16 +160,20 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
   return { accion: 'nada' }
 }
 
+const describirSistemas = v => (v.length === 2
+  ? 'Sistemas 1 y 2 a la vez, con la mitad del capital cada uno'
+  : `Solo el Sistema ${v[0]}: ${v[0] === 1 ? 'entra en 20 sesiones (55 con el filtro) y sale en 10' : 'entra en 55 sesiones y sale en 20'}`)
 const DESCRIBIR = {
   activo:      v => (v ? 'Bot de las tortugas encendido' : 'Bot de las tortugas apagado'),
-  sistema:     v => `Sistema ${v}: ${v === 1 ? 'entra en 20 sesiones (55 con el filtro) y sale en 10' : 'entra en 55 sesiones y sale en 20'}`,
+  sistemas:    describirSistemas,
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
-  riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo`,
-  maxUnidades: v => `Hasta ${v} unidades por índice`,
-  maxGrupo:    v => `Hasta ${v} unidades por grupo y sentido`,
-  maxSentido:  v => `Hasta ${v} unidades por sentido`,
+  riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo, repartido entre los sistemas`,
+  maxUnidades: v => `Hasta ${v} unidades por índice y sistema`,
+  maxGrupo:    v => `Hasta ${v} unidades por grupo, sentido y sistema`,
+  maxSentido:  v => `Hasta ${v} unidades por sentido y sistema`,
   reduccionDD: v => `Reducción por drawdown: ${v ? 'sí' : 'no'}`,
 }
+const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
 // ── El bot ──
 // `velasDiarias(ticker)` da las diarias de Yahoo del índice ([{ date, open, high, low, close }],
@@ -158,6 +187,18 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     for (const k of Object.keys(CONFIG_TORTUGAS_BOT)) if (k in (leido.config ?? {})) config[k] = leido.config[k]
     config.instrumentos = { ...CONFIG_TORTUGAS_BOT.instrumentos, ...config.instrumentos }
     datos = { ...datos, ...leido, config }
+    delete datos.config.sistema
+    // Los registros de antes de jugar los dos sistemas: las posiciones e intentos iban por
+    // índice y eran del sistema elegido; los planes no traían los dos sistemas y se rehacen
+    const sistemaViejo = Number(leido.config?.sistema) || 1
+    for (const coleccion of [datos.posiciones, datos.intentos]) {
+      for (const [k, x] of Object.entries(coleccion)) {
+        if (k.includes('|')) continue
+        delete coleccion[k]
+        coleccion[claveDe(k, x.sistema ?? sistemaViejo)] = { ...x, ticker: x.ticker ?? k, sistema: x.sistema ?? sistemaViejo }
+      }
+    }
+    for (const [t, p] of Object.entries(datos.planes)) if (!p?.sistemas && !p?.error) delete datos.planes[t]
   } catch { /* primera vez */ }
 
   let guardado = JSON.stringify(datos, null, 2)
@@ -174,17 +215,18 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   function avisarSinFallar(texto) {
     try { Promise.resolve(avisar(texto)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
   }
-  // Apunta lo que pasa en un índice y lo avisa. Lo mismo dos veces seguidas en el mismo
-  // índice (un error que se repite en cada paso) se apunta una sola vez.
-  function apuntar(ticker, texto, { aviso = true } = {}) {
-    const ultimo = datos.eventos.findLast(e => e.ticker === ticker)
+  // Apunta lo que pasa en un índice (y sistema, si es cosa de uno) y lo avisa. Lo mismo dos
+  // veces seguidas (un error que se repite en cada paso) se apunta una sola vez.
+  function apuntar(ticker, texto, { aviso = true, sistema = null } = {}) {
+    const ultimo = datos.eventos.findLast(e => e.ticker === ticker && (e.sistema ?? null) === sistema)
     if (ultimo?.texto === texto) return
-    datos.eventos.push({ hora: new Date(ahora() * 1000).toISOString(), ticker, texto })
+    datos.eventos.push({ hora: new Date(ahora() * 1000).toISOString(), ticker, ...(sistema ? { sistema } : {}), texto })
     if (datos.eventos.length > MAX_EVENTOS) datos.eventos.splice(0, datos.eventos.length - MAX_EVENTOS)
-    log(`[tortugas] ${ticker} ${texto}`)
-    if (aviso) avisarSinFallar(`Tortugas · ${nombreDe(ticker)} · ${texto}`)
+    log(`[tortugas] ${ticker}${sistema ? ` S${sistema}` : ''} ${texto}`)
+    if (aviso) avisarSinFallar(`Tortugas${sistema ? ` S${sistema}` : ''} · ${nombreDe(ticker)} · ${texto}`)
   }
-  const referenciaNueva = ticker => `${PREFIJO}${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
+  const referenciaNueva = (ticker, sistema) => `${PREFIJO}${sistema}-${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
+  const posicionesDe = sistema => Object.values(datos.posiciones).filter(p => p.sistema === sistema)
 
   // ── El plan de una sesión: niveles de Yahoo y tamaño de la unidad con la cuenta de IG ──
   let cuentaVista = null
@@ -204,10 +246,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
   }
 
+  // El plan es del índice: la N, los niveles de cada sistema (de los dos siempre, para que un
+  // sistema que se deja de jugar pueda seguir sacando sus posiciones por su canal) y la unidad,
+  // que es la misma en los dos porque cada uno tiene la misma parte del capital
   async function hacerPlan(ticker, ses) {
     const cfg = datos.config
     const anterior = datos.planes[ticker]
-    const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, sistema: cfg.sistema, riesgoPct: cfg.riesgoPct }
+    const reparto = cfg.sistemas.length || 1
+    const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct, reparto }
     const falla = texto => {
       Object.assign(plan, { error: texto, reintentar: ahora() + REINTENTO_PLAN_S })
       datos.planes[ticker] = plan
@@ -220,20 +266,18 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if ((Date.parse(ses.fecha) - Date.parse(nv.ultimoDia)) / 86_400_000 > DIAS_VIEJO) {
       return falla(`La última vela diaria de Yahoo es del ${nv.ultimoDia}: sin datos al día no se opera`)
     }
-    const k = cfg.sistema === 2 || nv.gano ? 55 : 20
-    const kSalida = cfg.sistema === 1 ? 10 : 20
     Object.assign(plan, {
-      ultimoDia: nv.ultimoDia, cierre: nv.cierre, n: nv.n, filtro: cfg.sistema === 1 && nv.gano, k, kSalida,
-      entrada: { largo: { nivel: nv.alto[k], k }, corto: { nivel: nv.bajo[k], k } },
-      salida: { largo: nv.bajo[kSalida], corto: nv.alto[kSalida] },
+      ultimoDia: nv.ultimoDia, cierre: nv.cierre, n: nv.n,
+      sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s)])),
     })
 
-    // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N
+    // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N,
+    // repartido entre los sistemas que se juegan
     const cuenta = await cuentaReciente()
     if (!(cuenta?.saldo > 0)) return falla('IG no da el saldo de la cuenta: sin él no se sabe el tamaño')
     datos.picoSaldo = Math.max(datos.picoSaldo ?? cuenta.saldo, cuenta.saldo)
     const nominal = capitalNominal(cuenta.saldo, datos.picoSaldo, cfg.reduccionDD)
-    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, riesgoEurN: nominal * cfg.riesgoPct / 100 })
+    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, riesgoEurN: nominal * cfg.riesgoPct / 100 / reparto })
     const descartes = []
     for (const epic of EPICS_OPERAR[ticker] ?? [null]) {
       const m = await ig.operar.datosMercado(ticker, epic)
@@ -246,37 +290,45 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     plan.unidad ??= { ok: false, motivo: descartes.join('; ') || 'sin contrato' }
     datos.planes[ticker] = plan
 
-    const pos = datos.posiciones[ticker]
     const partes = [`N ${num(plan.n)}`]
-    if (pos) {
-      partes.push(`${pos.unidades.length} ${pos.unidades.length === 1 ? 'unidad abierta' : 'unidades abiertas'}, stop ${num(pos.stop)}, salida por el canal en ${num(plan.salida[pos.lado])}`)
-      if (pos.unidades.length < cfg.maxUnidades) partes.push(`siguiente unidad en ${num(siguienteAnadido(pos))}`)
-    } else {
-      if (cfg.lados !== 'cortos') partes.push(`compra por encima de ${num(plan.entrada.largo.nivel)} (máximo de ${k} sesiones${plan.filtro ? ': la ruptura anterior habría ganado' : ''})`)
-      if (cfg.lados !== 'largos') partes.push(`venta por debajo de ${num(plan.entrada.corto.nivel)} (mínimo de ${k})`)
+    for (const s of SISTEMAS) {
+      const pos = datos.posiciones[claveDe(ticker, s)]
+      const sp = plan.sistemas[s]
+      if (pos) {
+        const n = pos.unidades.length
+        partes.push(`S${s}: ${n} ${n === 1 ? 'unidad abierta' : 'unidades abiertas'}, stop ${num(pos.stop)}, salida por el canal en ${num(sp.salida[pos.lado])}`
+          + (n < cfg.maxUnidades ? `, siguiente unidad en ${num(siguienteAnadido(pos))}` : ''))
+      } else if (cfg.sistemas.includes(s)) {
+        const lados = []
+        if (cfg.lados !== 'cortos') lados.push(`compra por encima de ${num(sp.entrada.largo.nivel)} (máximo de ${sp.k} sesiones${sp.filtro ? ': la ruptura anterior habría ganado' : ''})`)
+        if (cfg.lados !== 'largos') lados.push(`venta por debajo de ${num(sp.entrada.corto.nivel)} (mínimo de ${sp.k})`)
+        partes.push(`S${s}: ${lados.join(', ')}`)
+      }
     }
     partes.push(plan.unidad.ok
-      ? `unidad de ${num(plan.unidad.tamano)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N)`
+      ? `unidad de ${num(plan.unidad.tamano)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N${reparto > 1 ? ' en cada sistema' : ''})`
       : `no se puede operar: ${plan.unidad.motivo}`)
     // el plan provisional (antes de abrir) no se avisa; el de la apertura, solo si cambia algo
     const texto = `${plan.provisional ? 'Próxima sesión' : 'Sesión de hoy'}: ${partes.join(' · ')}`
     const repetido = anterior && !anterior.error && anterior.fecha === plan.fecha && anterior.unidad?.ok === plan.unidad.ok
       && anterior.n === plan.n && anterior.unidad?.tamano === plan.unidad.tamano
-    apuntar(ticker, texto, { aviso: !plan.provisional && !repetido && (!!pos || plan.unidad.ok) })
+    const conPosicion = SISTEMAS.some(s => datos.posiciones[claveDe(ticker, s)])
+    apuntar(ticker, texto, { aviso: !plan.provisional && !repetido && (conPosicion || plan.unidad.ok) })
   }
 
-  // ── Límites de cartera (los del backtest) ──
+  // ── Límites de cartera (los del backtest, dentro de cada sistema; el nominal, de todo) ──
   const unidadesDe = ps => ps.reduce((s, p) => s + p.unidades.filter(u => !u.salida).length, 0)
   const nominalDe = p => p.unidades.filter(u => !u.salida).reduce((s, u) => s + u.tamano * u.entrada, 0) * p.valorPunto * p.cambioAEur
   // `cuenta`: el saldo y el disponible de ahora (el margen ya ocupado cambia con cada orden)
-  function noCabe(ticker, lado, tamano, precio, m, cuenta) {
+  function noCabe(ticker, sistema, lado, tamano, precio, m, cuenta) {
     const cfg = datos.config
-    const mismoLado = Object.values(datos.posiciones).filter(p => p.lado === lado)
+    const mismoLado = posicionesDe(sistema).filter(p => p.lado === lado)
     const grupo = GRUPOS_TORTUGAS[ticker]
-    if (unidadesDe(mismoLado.filter(p => GRUPOS_TORTUGAS[p.ticker] === grupo)) >= cfg.maxGrupo) return `ya hay ${cfg.maxGrupo} unidades ${lado === 'largo' ? 'largas' : 'cortas'} en ${grupo}`
-    if (unidadesDe(mismoLado) >= cfg.maxSentido) return `ya hay ${cfg.maxSentido} unidades ${lado === 'largo' ? 'largas' : 'cortas'}`
+    const ladoTexto = lado === 'largo' ? 'largas' : 'cortas'
+    if (unidadesDe(mismoLado.filter(p => GRUPOS_TORTUGAS[p.ticker] === grupo)) >= cfg.maxGrupo) return `el Sistema ${sistema} ya tiene ${cfg.maxGrupo} unidades ${ladoTexto} en ${grupo}`
+    if (unidadesDe(mismoLado) >= cfg.maxSentido) return `el Sistema ${sistema} ya tiene ${cfg.maxSentido} unidades ${ladoTexto}`
     const nominal = Object.values(datos.posiciones).reduce((s, p) => s + nominalDe(p), 0) + tamano * precio * m.valorPunto * m.cambioAEur
-    if (cuenta.saldo > 0 && nominal > APALANCAMIENTO * cuenta.saldo) return `el nominal pasaría de ${APALANCAMIENTO} veces el saldo`
+    if (cuenta.saldo > 0 && nominal > APALANCAMIENTO * cuenta.saldo) return `el nominal de las tortugas pasaría de ${APALANCAMIENTO} veces el saldo`
     const margen = tamano * precio * m.valorPunto * m.cambioAEur * (m.factorMargen ?? 0.05)
     if (cuenta.disponible != null && margen > MARGEN_MAX * cuenta.disponible) return `el margen (${Math.round(margen)} €) pasa del ${MARGEN_MAX * 100}% del disponible`
     return null
@@ -288,103 +340,101 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   }
 
   // ── Entradas y añadidos ──
-  async function entrar(ticker, lado, ses) {
+  async function entrar(ticker, sistema, lado, ses) {
     const plan = datos.planes[ticker]
+    const sp = plan.sistemas[sistema]
     const u = plan.unidad
     const m = await ig.operar.datosMercado(ticker, u.epic)
     const precio = lado === 'largo' ? m.oferta : m.bid
-    if (precio == null) { plan.esperaEntrar = ahora() + 60; return }
-    const nivel = plan.entrada[lado].nivel
+    if (precio == null) { sp.esperaEntrar = ahora() + 60; return }
+    const nivel = sp.entrada[lado].nivel
     // el precio ha vuelto atrás desde la vela que lo rompió: se espera a que lo rompa otra vez
-    if ((lado === 'largo' ? precio < nivel : precio > nivel) && Math.abs(precio - nivel) > 0.25 * plan.n) { plan.esperaEntrar = ahora() + 5; return }
-    const motivo = noCabe(ticker, lado, u.tamano, precio, m, await cuentaDeAhora(plan))
+    if ((lado === 'largo' ? precio < nivel : precio > nivel) && Math.abs(precio - nivel) > 0.25 * plan.n) { sp.esperaEntrar = ahora() + 5; return }
+    const motivo = noCabe(ticker, sistema, lado, u.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
-      plan.esperaEntrar = ahora() + 60
-      apuntar(ticker, `Ruptura de ${num(nivel)}, pero no entra: ${motivo}`)
+      sp.esperaEntrar = ahora() + 60
+      apuntar(ticker, `Ruptura de ${num(nivel)}, pero no entra: ${motivo}`, { sistema })
       return
     }
     const stop = redondear(precio - dir(lado) * STOP_N * plan.n)
-    const referencia = referenciaNueva(ticker)
-    apuntar(ticker, `Ruptura del ${lado === 'largo' ? 'máximo' : 'mínimo'} de ${plan.k} sesiones (${num(nivel)}): ${lado === 'largo' ? 'compra' : 'venta'} de ${num(u.tamano)} con stop en ${num(stop)}`, { aviso: false })
+    const referencia = referenciaNueva(ticker, sistema)
+    apuntar(ticker, `Ruptura del ${lado === 'largo' ? 'máximo' : 'mínimo'} de ${sp.k} sesiones (${num(nivel)}): ${lado === 'largo' ? 'compra' : 'venta'} de ${num(u.tamano)} con stop en ${num(stop)}`, { aviso: false, sistema })
     // Se apunta ANTES de mandarla: si la confirmación no llega, el bot no la repite, sino que
     // mira en IG si entró (repetirla podría dejar dos posiciones)
-    datos.intentos[ticker] = { tipo: 'entrada', lado, tamano: u.tamano, stop, hora: ahora(), referencia, nivel, k: plan.k, n: plan.n, fecha: ses.fecha }
+    const clave = claveDe(ticker, sistema)
+    datos.intentos[clave] = { ticker, sistema, tipo: 'entrada', lado, tamano: u.tamano, stop, hora: ahora(), referencia, nivel, k: sp.k, n: plan.n, fecha: ses.fecha }
     guardar()
     const limite = m.aMercado ? null : precio + dir(lado) * 0.25 * plan.n
     const r = await ig.operar.abrir({ ticker, epic: u.epic, lado, tamano: u.tamano, stop, moneda: u.moneda, limite, referencia })
-    delete datos.intentos[ticker]
+    delete datos.intentos[clave]
     if (!r.aceptada) {
-      plan.bloqueado = r.motivo
-      apuntar(ticker, `IG rechaza la orden (${r.motivo}): hoy ya no entra`)
+      sp.bloqueado = r.motivo
+      apuntar(ticker, `IG rechaza la orden (${r.motivo}): hoy ya no entra`, { sistema })
       return
     }
-    abrirPosicion(ticker, { lado, n0: plan.n, k: plan.k, fecha: ses.fecha, nivel, dealId: r.dealId, tamano: r.tamano ?? u.tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia })
+    abrirPosicion(ticker, sistema, { lado, n0: plan.n, k: sp.k, fecha: ses.fecha, nivel, dealId: r.dealId, tamano: r.tamano ?? u.tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia })
   }
 
-  function abrirPosicion(ticker, { lado, n0, k, fecha, nivel, dealId, tamano, entrada, stop, referencia, hora = null, recuperada = false }) {
+  function abrirPosicion(ticker, sistema, { lado, n0, k, fecha, nivel, dealId, tamano, entrada, stop, referencia, hora = null }) {
     const u = datos.planes[ticker]?.unidad ?? {}
     const h = hora ?? ahora()
     const deslizamiento = nivel == null ? null : dir(lado) * (entrada - nivel)
-    datos.posiciones[ticker] = {
-      ticker, lado, n0, ruptura: k, abierta: fecha, abiertaHora: h, epic: u.epic ?? null, moneda: u.moneda ?? null,
+    datos.posiciones[claveDe(ticker, sistema)] = {
+      ticker, sistema, lado, n0, ruptura: k, abierta: fecha, abiertaHora: h, epic: u.epic ?? null, moneda: u.moneda ?? null,
       valorPunto: u.valorPunto ?? 1, cambioAEur: u.cambioAEur ?? 1, stop,
       unidades: [{ dealId, tamano, entrada, stop, hora: h, referencia, nivel, deslizamiento }],
-      ...(recuperada ? { recuperada: true } : {}),
     }
-    if (!recuperada) {
-      apuntar(ticker, `${lado === 'largo' ? 'Compra' : 'Venta'} de ${num(tamano)} a ${num(entrada)} (ruptura de ${k} sesiones en ${num(nivel)}`
-        + `${deslizamiento != null ? `, ${deslizamiento >= 0 ? '+' : ''}${num(deslizamiento)} puntos` : ''}), stop en ${num(stop)} (2 N, con N ${num(n0)})`)
-    }
+    apuntar(ticker, `${lado === 'largo' ? 'Compra' : 'Venta'} de ${num(tamano)} a ${num(entrada)} (ruptura de ${k} sesiones en ${num(nivel)}`
+      + `${deslizamiento != null ? `, ${deslizamiento >= 0 ? '+' : ''}${num(deslizamiento)} puntos` : ''}), stop en ${num(stop)} (2 N, con N ${num(n0)})`, { sistema })
   }
 
-  async function anadir(ticker, ses) {
+  async function anadir(ticker, sistema, ses) {
     const plan = datos.planes[ticker]
-    const pos = datos.posiciones[ticker]
+    const pos = datos.posiciones[claveDe(ticker, sistema)]
     const largo = pos.lado === 'largo'
     const m = await ig.operar.datosMercado(ticker, pos.epic)
     const precio = largo ? m.oferta : m.bid
     const nivel = siguienteAnadido(pos)
     if (precio == null || (largo ? precio < nivel : precio > nivel)) { pos.esperaAnadir = ahora() + 5; return }
-    // la unidad de hoy (la N y el saldo de hoy), en el contrato de la posición
+    // la unidad de hoy (la N y el capital de hoy), en el contrato de la posición
     const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin })
-    if (!t.ok) { pos.sinAnadidos = ses.fecha; apuntar(ticker, `Hoy no se añade: ${t.motivo}`); return }
-    const motivo = noCabe(ticker, pos.lado, t.tamano, precio, m, await cuentaDeAhora(plan))
+    if (!t.ok) { pos.sinAnadidos = ses.fecha; apuntar(ticker, `Hoy no se añade: ${t.motivo}`, { sistema }); return }
+    const motivo = noCabe(ticker, sistema, pos.lado, t.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
       pos.esperaAnadir = ahora() + 60
-      apuntar(ticker, `La unidad ${pos.unidades.length + 1} no entra: ${motivo}`)
+      apuntar(ticker, `La unidad ${pos.unidades.length + 1} no entra: ${motivo}`, { sistema })
       return
     }
     const stop = redondear(precio - dir(pos.lado) * STOP_N * pos.n0)
-    const referencia = referenciaNueva(ticker)
-    datos.intentos[ticker] = { tipo: 'anadido', lado: pos.lado, tamano: t.tamano, stop, hora: ahora(), referencia, nivel }
+    const referencia = referenciaNueva(ticker, sistema)
+    const clave = claveDe(ticker, sistema)
+    datos.intentos[clave] = { ticker, sistema, tipo: 'anadido', lado: pos.lado, tamano: t.tamano, stop, hora: ahora(), referencia, nivel }
     guardar()
     const limite = m.aMercado ? null : precio + dir(pos.lado) * 0.25 * pos.n0
     const r = await ig.operar.abrir({ ticker, epic: pos.epic, lado: pos.lado, tamano: t.tamano, stop, moneda: pos.moneda, limite, referencia })
-    delete datos.intentos[ticker]
+    delete datos.intentos[clave]
     if (!r.aceptada) {
       pos.sinAnadidos = ses.fecha
-      apuntar(ticker, `IG rechaza la unidad ${pos.unidades.length + 1} (${r.motivo}): hoy no se añade más`)
+      apuntar(ticker, `IG rechaza la unidad ${pos.unidades.length + 1} (${r.motivo}): hoy no se añade más`, { sistema })
       return
     }
-    await sumarUnidad(ticker, { dealId: r.dealId, tamano: r.tamano ?? t.tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia, nivel })
+    await sumarUnidad(pos, { dealId: r.dealId, tamano: r.tamano ?? t.tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia, nivel })
   }
 
   // Una unidad más, con el stop de todas a 2 N de ella (solo se aprieta, nunca se afloja)
-  async function sumarUnidad(ticker, { dealId, tamano, entrada, stop, referencia, nivel = null, hora = null }) {
-    const pos = datos.posiciones[ticker]
+  async function sumarUnidad(pos, { dealId, tamano, entrada, stop, referencia, nivel = null, hora = null }) {
     pos.unidades.push({ dealId, tamano, entrada, stop, hora: hora ?? ahora(), referencia, nivel, deslizamiento: nivel == null ? null : dir(pos.lado) * (entrada - nivel) })
     const nuevo = pos.lado === 'largo' ? Math.max(pos.stop ?? -Infinity, stop) : Math.min(pos.stop ?? Infinity, stop)
-    const fallos = await moverStops(ticker, nuevo)
+    const fallos = await moverStops(pos, nuevo)
     const n = pos.unidades.filter(u => !u.salida).length
-    apuntar(ticker, `Pirámide: ${num(tamano)} más a ${num(entrada)}, ${n} de ${datos.config.maxUnidades} unidades;`
-      + (fallos.length ? ` IG no deja subir el stop de todas a ${num(nuevo)} (${fallos[0]})` : ` stop de todas en ${num(nuevo)}`))
+    apuntar(pos.ticker, `Pirámide: ${num(tamano)} más a ${num(entrada)}, ${n} de ${datos.config.maxUnidades} unidades;`
+      + (fallos.length ? ` IG no deja subir el stop de todas a ${num(nuevo)} (${fallos[0]})` : ` stop de todas en ${num(nuevo)}`), { sistema: pos.sistema })
   }
 
-  async function moverStops(ticker, nivel) {
-    const pos = datos.posiciones[ticker]
+  async function moverStops(pos, nivel) {
     const fallos = []
     for (const u of pos.unidades.filter(x => !x.salida && x.stop !== nivel)) {
-      const r = await ig.operar.moverStop({ ticker, dealId: u.dealId, stop: nivel })
+      const r = await ig.operar.moverStop({ ticker: pos.ticker, dealId: u.dealId, stop: nivel })
       if (r.aceptada) u.stop = nivel
       else fallos.push(r.motivo)
     }
@@ -392,27 +442,29 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     return fallos
   }
 
-  // Tras una orden sin confirmar: si IG tiene la posición con su referencia (o una del bot en
-  // ese mercado abierta desde el intento), es la nuestra; si no, no entró
-  async function reconciliar(ticker) {
-    const intento = datos.intentos[ticker]
+  // Tras una orden sin confirmar: si IG tiene la posición con su referencia (o una del mismo
+  // sistema en ese mercado abierta desde el intento), es la nuestra; si no, no entró
+  async function reconciliar(ticker, sistema) {
+    const clave = claveDe(ticker, sistema)
+    const intento = datos.intentos[clave]
     const abiertas = await ig.operar.posiciones()
     const conocidas = new Set(Object.values(datos.posiciones).flatMap(p => p.unidades.map(u => u.dealId)))
     const nuestra = abiertas.find(p => p.referencia && p.referencia === intento.referencia)
-      ?? abiertas.find(p => p.ticker === ticker && !conocidas.has(p.dealId) && (!p.referencia || p.referencia.startsWith(PREFIJO))
+      ?? abiertas.find(p => p.ticker === ticker && !conocidas.has(p.dealId) && (!p.referencia || sistemaDeReferencia(p.referencia) === sistema)
         && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
-    delete datos.intentos[ticker]
-    const plan = datos.planes[ticker]
+    delete datos.intentos[clave]
+    const sp = datos.planes[ticker]?.sistemas?.[sistema]
     if (!nuestra) {
-      apuntar(ticker, `La orden (${intento.tipo === 'entrada' ? 'entrada' : 'añadido'}) no llegó a entrar en IG`)
-      if (intento.tipo === 'entrada' && plan) plan.esperaEntrar = ahora() + 60
+      apuntar(ticker, `La orden (${intento.tipo === 'entrada' ? 'entrada' : 'añadido'}) no llegó a entrar en IG`, { sistema })
+      if (intento.tipo === 'entrada' && sp) sp.esperaEntrar = ahora() + 60
       return
     }
-    apuntar(ticker, 'La confirmación no llegó, pero la posición está abierta en IG: se sigue con ella')
-    if (intento.tipo === 'entrada' || !datos.posiciones[ticker]) {
-      abrirPosicion(ticker, { lado: nuestra.lado, n0: intento.n ?? plan?.n, k: intento.k, fecha: intento.fecha, nivel: intento.nivel, dealId: nuestra.dealId, tamano: nuestra.tamano, entrada: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia })
+    apuntar(ticker, 'La confirmación no llegó, pero la posición está abierta en IG: se sigue con ella', { sistema })
+    const pos = datos.posiciones[clave]
+    if (intento.tipo === 'entrada' || !pos) {
+      abrirPosicion(ticker, sistema, { lado: nuestra.lado, n0: intento.n ?? datos.planes[ticker]?.n, k: intento.k, fecha: intento.fecha, nivel: intento.nivel, dealId: nuestra.dealId, tamano: nuestra.tamano, entrada: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia })
     } else {
-      await sumarUnidad(ticker, { dealId: nuestra.dealId, tamano: nuestra.tamano, entrada: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia, nivel: intento.nivel })
+      await sumarUnidad(pos, { dealId: nuestra.dealId, tamano: nuestra.tamano, entrada: nuestra.nivel, stop: nuestra.stop ?? intento.stop, referencia: nuestra.referencia, nivel: intento.nivel })
     }
   }
 
@@ -426,7 +478,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       const limite = m.aMercado ? null : (pos.lado === 'largo' ? m.bid - margen : m.oferta + margen)
       r = await ig.operar.cerrar({ ticker: pos.ticker, dealId: u.dealId, lado: pos.lado, tamano: u.tamano, limite })
       if (r.aceptada) break
-      apuntar(pos.ticker, `IG no cierra ${limite == null ? 'a mercado' : `con ${num(margen)} puntos de margen`} (${r.motivo})`)
+      apuntar(pos.ticker, `IG no cierra ${limite == null ? 'a mercado' : `con ${num(margen)} puntos de margen`} (${r.motivo})`, { sistema: pos.sistema })
     }
     return r
   }
@@ -441,15 +493,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     return fallidas
   }
 
-  async function salir(ticker, motivo) {
-    const pos = datos.posiciones[ticker]
+  async function salir(pos, motivo) {
     if ((await cerrarUnidades(pos, pos.unidades.filter(u => !u.salida))).length) {
       // puede que ya las hubiera cerrado el stop: la revisión lo aclara
-      apuntar(ticker, 'Se revisa si ya estaba cerrada', { aviso: false })
+      apuntar(pos.ticker, 'Se revisa si ya estaba cerrada', { aviso: false, sistema: pos.sistema })
       await revisar({ forzar: true })
       return
     }
-    terminar(ticker, motivo)
+    terminar(pos, motivo)
   }
 
   // El resultado de una posición: en puntos, en unidades de la primera (como el backtest
@@ -463,14 +514,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     return { pts, n: pos.n0 > 0 ? pts / pos.n0 : null, eur }
   }
 
-  function terminar(ticker, motivo) {
-    const pos = datos.posiciones[ticker]
+  function terminar(pos, motivo) {
+    const { ticker, sistema } = pos
     const us = pos.unidades
     const volumen = us.reduce((s, u) => s + u.tamano, 0)
     const { pts, n, eur } = resultadoDe(pos)
     const zona = SESIONES_BOT[ticker]?.zona ?? 'Europe/Madrid'
     const op = {
-      ticker, lado: pos.lado, ruptura: pos.ruptura, n0: pos.n0, abierta: pos.abierta, abiertaHora: pos.abiertaHora,
+      ticker, sistema, lado: pos.lado, ruptura: pos.ruptura, n0: pos.n0, abierta: pos.abierta, abiertaHora: pos.abiertaHora,
       cerrada: fechaEnZona(ahora(), zona), cerradaHora: ahora(), motivo, unidades: us.length, contratos: volumen,
       entradaMedia: us.reduce((s, u) => s + u.tamano * u.entrada, 0) / volumen,
       salida: us.reduce((s, u) => s + u.tamano * u.salida.nivel, 0) / volumen,
@@ -482,18 +533,18 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
     datos.operaciones.unshift(op)
     if (datos.operaciones.length > MAX_OPERACIONES) datos.operaciones.length = MAX_OPERACIONES
-    delete datos.posiciones[ticker]
+    delete datos.posiciones[claveDe(ticker, sistema)]
     const dias = Math.round((op.cerradaHora - op.abiertaHora) / 86400)
     apuntar(ticker, `Fuera a ${num(op.salida)} (${motivo}${op.aproximado ? ', precio aproximado' : ''}) con ${us.length} ${us.length === 1 ? 'unidad' : 'unidades'}`
-      + `${dias >= 1 ? ` tras ${dias} ${dias === 1 ? 'día' : 'días'}` : ''}: ${eur >= 0 ? '+' : ''}${Math.round(eur)} € (${n >= 0 ? '+' : ''}${num(n, 2)} N)`)
+      + `${dias >= 1 ? ` tras ${dias} ${dias === 1 ? 'día' : 'días'}` : ''}: ${eur >= 0 ? '+' : ''}${Math.round(eur)} € (${n >= 0 ? '+' : ''}${num(n, 2)} N)`, { sistema })
   }
 
   // ¿Siguen abiertas en IG las unidades? Si falta alguna, la cerró su stop (o alguien a mano):
   // se cierran las demás y se busca a qué precio salió cada una. IG tarda unos segundos en
   // apuntar el cierre en la actividad: si aún no está, se mira en las revisiones siguientes y
-  // solo tras unas cuantas se da por bueno el nivel del stop. Con `cruces` (índices con el
+  // solo tras unas cuantas se da por bueno el nivel del stop. Con `cruces` (posiciones con el
   // precio ya al otro lado del stop) se mira a menudo, y si IG no cierra en unos segundos,
-  // cierra el bot. Una sola petición de posiciones para todos los índices.
+  // cierra el bot. Una sola petición de posiciones para todas.
   let ultimaRevision = 0
   async function revisar({ forzar = false, cruces = new Set() } = {}) {
     const abiertas = Object.values(datos.posiciones)
@@ -503,11 +554,12 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     ultimaRevision = Date.now()
     const ids = new Set((await ig.operar.posiciones()).map(p => p.dealId))
     for (const pos of abiertas) {
-      try { await revisarPosicion(pos, ids, cruces.has(pos.ticker)) } catch (err) { apuntar(pos.ticker, `Error: ${err.message}`) }
+      try { await revisarPosicion(pos, ids, cruces.has(claveDe(pos.ticker, pos.sistema))) } catch (err) { apuntar(pos.ticker, `Error: ${err.message}`, { sistema: pos.sistema }) }
     }
   }
 
   async function revisarPosicion(pos, ids, cruce) {
+    const { ticker, sistema } = pos
     const pendientes = pos.unidades.filter(u => !u.salida)
     const vivas = pendientes.filter(u => ids.has(u.dealId))
     const idas = pendientes.filter(u => !ids.has(u.dealId))
@@ -517,28 +569,28 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       if (!pos.cruce || ahora() - pos.cruceVisto > 5) pos.cruce = ahora()
       pos.cruceVisto = ahora()
       if (ahora() - pos.cruce < ESPERA_STOP_S) return
-      apuntar(pos.ticker, `El precio pasó el stop (${num(pos.stop)}) y IG no ha cerrado: se cierra a mercado`)
+      apuntar(ticker, `El precio pasó el stop (${num(pos.stop)}) y IG no ha cerrado: se cierra a mercado`, { sistema })
       if ((await cerrarUnidades(pos, vivas)).length) return
-      terminar(pos.ticker, 'stop')
+      terminar(pos, 'stop')
       return
     }
     // la actividad se busca desde poco antes de la última vez que se vio abierta
     for (const u of idas) {
       const desde = Math.max(u.hora, (pos.vista ?? u.hora) - 600)
-      const c = await ig.operar.cierreDe({ ticker: pos.ticker, dealId: u.dealId, lado: pos.lado, desdeMs: desde * 1000 })
+      const c = await ig.operar.cierreDe({ ticker, dealId: u.dealId, lado: pos.lado, desdeMs: desde * 1000 })
       if (c) u.salida = { nivel: c.nivel, hora: ahora() }
     }
     const sinPrecio = idas.filter(u => !u.salida)
     if (sinPrecio.length && (pos.busquedasCierre = (pos.busquedasCierre ?? 0) + 1) < BUSQUEDAS_CIERRE) {
-      if (pos.busquedasCierre === 1) apuntar(pos.ticker, 'La posición ya no está en IG: buscando a qué precio se cerró', { aviso: false })
+      if (pos.busquedasCierre === 1) apuntar(ticker, 'La posición ya no está en IG: buscando a qué precio se cerró', { aviso: false, sistema })
       return
     }
     for (const u of sinPrecio) u.salida = { nivel: u.stop ?? pos.stop, hora: ahora(), aproximado: true }
     if (vivas.length) {
-      apuntar(pos.ticker, `Salieron ${idas.length} de ${pendientes.length} unidades por el stop: se cierran las demás`)
+      apuntar(ticker, `Salieron ${idas.length} de ${pendientes.length} unidades por el stop: se cierran las demás`, { sistema })
       if ((await cerrarUnidades(pos, vivas)).length) return
     }
-    terminar(pos.ticker, 'stop')
+    terminar(pos, 'stop')
   }
 
   // Salidas apuntadas al precio del stop porque IG aún no las tenía en la actividad: se
@@ -562,31 +614,32 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       op.resultadoN = op.n0 > 0 ? op.resultadoPts / op.n0 : null
       op.resultadoEur = op.detalle.reduce((s, u) => s + u.tamano * d * (u.salida.nivel - u.entrada), 0) * op.valorPunto * op.cambioAEur
       if (!op.detalle.some(u => u.salida.aproximado)) delete op.aproximado
-      apuntar(op.ticker, `Precio de salida corregido con la actividad de IG: ${Math.round(op.resultadoEur)} €`, { aviso: false })
+      apuntar(op.ticker, `Precio de salida corregido con la actividad de IG: ${Math.round(op.resultadoEur)} €`, { aviso: false, sistema: op.sistema ?? null })
     }
   }
 
-  // Al arrancar: las posiciones del bot (por su referencia) que el registro no tiene se
-  // recuperan. Sin el registro no se sabe su N de entrada: se deduce de su stop (2 N).
+  // Al arrancar: las posiciones del bot (por su referencia, que dice el sistema) que el
+  // registro no tiene se recuperan. Sin el registro no se sabe su N de entrada: se deduce de
+  // su stop (2 N).
   async function recuperarPosiciones() {
     const conocidas = new Set(Object.values(datos.posiciones).flatMap(p => p.unidades.map(u => u.dealId)))
     const nuevas = (await ig.operar.posiciones())
-      .filter(p => p.referencia?.startsWith(PREFIJO) && p.ticker && GRUPOS_TORTUGAS[p.ticker] && !conocidas.has(p.dealId))
+      .filter(p => sistemaDeReferencia(p.referencia) && p.ticker && GRUPOS_TORTUGAS[p.ticker] && !conocidas.has(p.dealId))
       .sort((a, b) => Date.parse(`${a.abierta}Z`) - Date.parse(`${b.abierta}Z`))
     for (const p of nuevas) {
+      const sistema = sistemaDeReferencia(p.referencia)
       const hora = Date.parse(`${p.abierta}Z`) / 1000
-      const pos = datos.posiciones[p.ticker]
-      apuntar(p.ticker, `Recuperada de IG una posición del bot que no estaba en el registro (${p.referencia})`)
+      const pos = datos.posiciones[claveDe(p.ticker, sistema)]
+      apuntar(p.ticker, `Recuperada de IG una posición del bot que no estaba en el registro (${p.referencia})`, { sistema })
       if (pos) {
-        if (pos.lado !== p.lado) { apuntar(p.ticker, `Va en sentido contrario a la que el bot tiene abierta: revísala en IG (${p.dealId})`); continue }
+        if (pos.lado !== p.lado) { apuntar(p.ticker, `Va en sentido contrario a la que el bot tiene abierta: revísala en IG (${p.dealId})`, { sistema }); continue }
         pos.unidades.push({ dealId: p.dealId, tamano: p.tamano, entrada: p.nivel, stop: p.stop, hora, referencia: p.referencia, nivel: null, deslizamiento: null })
         continue
       }
       const m = await ig.operar.datosMercado(p.ticker, p.epic)
       const n0 = p.stop != null ? Math.abs(p.nivel - p.stop) / STOP_N : null
-      datos.planes[p.ticker] ??= null
-      datos.posiciones[p.ticker] = {
-        ticker: p.ticker, lado: p.lado, n0, ruptura: null, abierta: fechaEnZona(hora, SESIONES_BOT[p.ticker].zona), abiertaHora: hora,
+      datos.posiciones[claveDe(p.ticker, sistema)] = {
+        ticker: p.ticker, sistema, lado: p.lado, n0, ruptura: null, abierta: fechaEnZona(hora, SESIONES_BOT[p.ticker].zona), abiertaHora: hora,
         epic: p.epic, moneda: m.moneda, valorPunto: m.valorPunto ?? 1, cambioAEur: m.cambioAEur ?? 1, stop: p.stop, recuperada: true,
         unidades: [{ dealId: p.dealId, tamano: p.tamano, entrada: p.nivel, stop: p.stop, hora, referencia: p.referencia, nivel: null, deslizamiento: null }],
       }
@@ -613,29 +666,37 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     })
   }
 
-  // Un índice no tumba a los demás: su error queda en el registro y se sigue con el siguiente
+  // Un índice no tumba a los demás: su error queda en el registro y se sigue con el siguiente.
+  // En cada índice, cada sistema que se juega (o que tiene algo entre manos) decide por su cuenta.
   async function paso() {
     const cfg = datos.config
     const t = ahora()
     const cruces = new Set()
     for (const ticker of Object.keys(GRUPOS_TORTUGAS)) {
-      const pos = datos.posiciones[ticker]
-      const intento = datos.intentos[ticker]
       const encendido = !!cfg.instrumentos[ticker]
-      if (!pos && !intento && !encendido) continue
+      const sistemas = SISTEMAS.filter(s => (encendido && cfg.sistemas.includes(s))
+        || datos.posiciones[claveDe(ticker, s)] || datos.intentos[claveDe(ticker, s)])
+      if (!sistemas.length) continue
       try {
         const ses = sesionDe(ticker, t)
         const proxima = sesionDe(ticker, proximaApertura(ticker, t) ?? t)
-        const p = siguientePasoTortugas({
-          pos, plan: datos.planes[ticker], intento, ahora: t, velas: ultimasVelas('ig', ticker, 5), ses, proxima,
-          cfg: { ...cfg, encendido, activo: cfg.activo && encendido },
-        })
-        if (p.accion === 'plan')        await calcularPlan(ticker, p.ses)
-        if (p.accion === 'entrar')      await entrar(ticker, p.lado, ses)
-        if (p.accion === 'anadir')      await anadir(ticker, ses)
-        if (p.accion === 'salir')       await salir(ticker, p.motivo)
-        if (p.accion === 'reconciliar') await reconciliar(ticker)
-        if (p.accion === 'revisar-ya')  cruces.add(ticker)
+        const velas = ultimasVelas('ig', ticker, 5)
+        for (const sistema of sistemas) {
+          const clave = claveDe(ticker, sistema)
+          const juega = encendido && cfg.sistemas.includes(sistema)
+          const pos = datos.posiciones[clave]
+          const p = siguientePasoTortugas({
+            pos, plan: datos.planes[ticker], intento: datos.intentos[clave], ahora: t, velas, ses, proxima, sistema,
+            cfg: { ...cfg, encendido: juega, activo: cfg.activo && juega },
+          })
+          // el plan es del índice: hecho, este paso ya no sigue con él
+          if (p.accion === 'plan')        { await calcularPlan(ticker, p.ses); break }
+          if (p.accion === 'entrar')      await entrar(ticker, sistema, p.lado, ses)
+          if (p.accion === 'anadir')      await anadir(ticker, sistema, ses)
+          if (p.accion === 'salir')       await salir(pos, p.motivo)
+          if (p.accion === 'reconciliar') await reconciliar(ticker, sistema)
+          if (p.accion === 'revisar-ya')  cruces.add(clave)
+        }
       } catch (err) {
         apuntar(ticker, `Error: ${err.message}`)
       }
@@ -682,9 +743,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
         c.instrumentos[t] = !!si
       }
     }
-    if ('sistema' in cambios) {
-      if (![1, 2].includes(Number(cambios.sistema))) throw new Error('Sistema 1 o 2')
-      c.sistema = Number(cambios.sistema)
+    if ('sistemas' in cambios) {
+      const s = [...new Set((Array.isArray(cambios.sistemas) ? cambios.sistemas : [cambios.sistemas]).map(Number))].sort()
+      if (!s.length || !s.every(x => SISTEMAS.includes(x))) throw new Error('Sistemas: el 1, el 2 o los dos')
+      c.sistemas = s
     }
     if ('lados' in cambios) {
       if (!['largos', 'ambos', 'cortos'].includes(cambios.lados)) throw new Error('Lados: largos, ambos o cortos')
@@ -702,9 +764,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const antes = datos.config
     datos.config = c
     // lo que cambia los niveles o la unidad obliga a rehacer los planes
-    if (['sistema', 'lados', 'riesgoPct', 'reduccionDD'].some(k => antes[k] !== c[k])) datos.planes = {}
+    if (['sistemas', 'lados', 'riesgoPct', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
     guardar()
-    const lineas = Object.entries(DESCRIBIR).filter(([k]) => antes[k] !== c[k]).map(([k, describir]) => describir(c[k]))
+    const lineas = Object.entries(DESCRIBIR).filter(([k]) => !igual(antes[k], c[k])).map(([k, describir]) => describir(c[k]))
     for (const t of Object.keys(GRUPOS_TORTUGAS)) {
       if (!!antes.instrumentos[t] !== !!c.instrumentos[t]) lineas.push(`${nombreDe(t)}: ${c.instrumentos[t] ? 'activado' : 'desactivado'}`)
     }
@@ -717,8 +779,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   async function pararYCerrar() {
     datos.config.activo = false
     await encolar(async () => {
-      for (const ticker of Object.keys(datos.posiciones)) {
-        try { await salir(ticker, 'manual') } catch (err) { apuntar(ticker, `Error al cerrar: ${err.message}`) }
+      for (const pos of Object.values(datos.posiciones)) {
+        try { await salir(pos, 'manual') } catch (err) { apuntar(pos.ticker, `Error al cerrar: ${err.message}`, { sistema: pos.sistema }) }
       }
     })
     guardar()
@@ -730,7 +792,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const t = ahora()
     return {
       config: datos.config,
-      reglas: { pasoN: PASO_N, stopN: STOP_N, apalancamiento: APALANCAMIENTO },
+      reglas: { pasoN: PASO_N, stopN: STOP_N, apalancamiento: APALANCAMIENTO, sistemas: SISTEMAS },
       picoSaldo: datos.picoSaldo,
       mercados: Object.keys(GRUPOS_TORTUGAS).map(ticker => {
         const ses = sesionDe(ticker, t)
@@ -738,7 +800,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           ticker, nombre: nombreDe(ticker), grupo: GRUPOS_TORTUGAS[ticker], encendido: !!datos.config.instrumentos[ticker],
           enSesion: !!ses && t >= ses.abre && t < ses.cierra, proxima: proximaApertura(ticker, t),
           precio: ultimasVelas('ig', ticker, 1).at(-1)?.close ?? null,
-          plan: datos.planes[ticker] ?? null, posicion: datos.posiciones[ticker] ?? null, intento: datos.intentos[ticker] ?? null,
+          plan: datos.planes[ticker] ?? null,
+          posiciones: Object.fromEntries(SISTEMAS.map(s => [s, datos.posiciones[claveDe(ticker, s)] ?? null])),
+          intentos: Object.fromEntries(SISTEMAS.map(s => [s, datos.intentos[claveDe(ticker, s)] ?? null])),
         }
       }),
       operaciones: datos.operaciones.slice(0, 200),

@@ -101,21 +101,26 @@ export default function BotTortugas() {
   const nombre = t => mercados.find(m => m.ticker === t)?.nombre ?? t
   const totalEur = operaciones.reduce((s, o) => s + (o.resultadoEur ?? 0), 0)
   const ladosTexto = { largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[config.lados]
+  const dosSistemas = config.sistemas.length > 1
+  const sistemasTexto = dosSistemas ? 'Sistemas 1 y 2 a la vez' : `solo el Sistema ${config.sistemas[0]}`
 
-  // Unidades abiertas por grupo y sentido, para ver lo lejos que están los límites
-  const abiertas = mercados.filter(m => m.posicion)
-  const unidades = (filtro) => abiertas.filter(filtro).reduce((s, m) => s + m.posicion.unidades.filter(u => !u.salida).length, 0)
+  // Las posiciones abiertas de los dos sistemas, para los límites (que van por sistema) y el nominal (de todo)
+  const abiertas = mercados.flatMap(m => reglas.sistemas.map(s => m.posiciones[s] && { ...m.posiciones[s], grupo: m.grupo })).filter(Boolean)
+  const unidades = filtro => abiertas.filter(filtro).reduce((s, p) => s + p.unidades.filter(u => !u.salida).length, 0)
   const grupos = [...new Set(mercados.map(m => m.grupo))]
   const lados = config.lados === 'ambos' ? ['largo', 'corto'] : [config.lados === 'cortos' ? 'corto' : 'largo']
   const saldo = mercados.find(m => m.plan?.saldo)?.plan.saldo ?? null
-  const nominal = abiertas.reduce((s, m) => s + m.posicion.unidades.filter(u => !u.salida).reduce((x, u) => x + u.tamano * u.entrada, 0) * m.posicion.valorPunto * m.posicion.cambioAEur, 0)
+  const nominal = abiertas.reduce((s, p) => s + p.unidades.filter(u => !u.salida).reduce((x, u) => x + u.tamano * u.entrada, 0) * p.valorPunto * p.cambioAEur, 0)
+  const sistemasCartera = reglas.sistemas.filter(s => config.sistemas.includes(s) || abiertas.some(p => p.sistema === s))
 
   return (
     <div className="bot-page">
       <section className="bot-cabecera">
         <div>
           <div className={`bot-interruptor ${config.activo ? 'encendido' : ''}`}>{config.activo ? '● Encendido' : '○ Apagado'}</div>
-          <p className="bot-nota">Tortugas · Sistema {config.sistema} · {ladosTexto} · 1 N por unidad = {num(config.riesgoPct, 2)}% del saldo · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}</p>
+          <p className="bot-nota">
+            Tortugas · {sistemasTexto} · {ladosTexto} · 1 N por unidad = {num(config.riesgoPct, 2)}% del saldo{dosSistemas ? ` (${num(config.riesgoPct / 2, 2)}% en cada sistema)` : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
+          </p>
           {!opera && <p className="bot-aviso">Este servidor no opera (BOT_OPERA no es 1): el registro es el suyo, pero las órdenes las manda el servidor que tenga BOT_OPERA=1.</p>}
         </div>
         <div className="bot-botones">
@@ -131,30 +136,32 @@ export default function BotTortugas() {
         <div className="velas-tabla-wrap tor-tabla-wrap">
           <table className="velas-tabla bot-tabla tor-tabla tor-todas">
             <thead>
-              <tr><th>Índice</th><th>Sesión</th><th className="tor-num">N</th><th className="tor-num">Precio</th><th>Entrada</th><th>Salida</th><th>Unidad</th><th>Posición</th><th className="tor-num">Abierto</th></tr>
+              <tr>
+                <th>Índice</th><th>Sesión</th><th className="tor-num">N</th><th className="tor-num">Precio</th><th>Unidad</th>
+                <th>Sistema</th><th>Entrada</th><th>Salida</th><th>Posición</th><th className="tor-num">Abierto</th>
+              </tr>
             </thead>
-            <tbody>
-              {mercados.map(m => <FilaIndice key={m.ticker} m={m} config={config} ocupado={ocupado} reglas={reglas}
-                alternar={si => guardarConfig({ instrumentos: { [m.ticker]: si } })} />)}
-            </tbody>
+            {mercados.map(m => <FilasIndice key={m.ticker} m={m} config={config} ocupado={ocupado} reglas={reglas}
+              alternar={si => guardarConfig({ instrumentos: { [m.ticker]: si } })} />)}
           </table>
         </div>
         <p className="bot-nota">
           Los niveles salen del diario de Yahoo de cada índice hasta la sesión anterior, como en el backtest; el precio es el de IG (el CFD de contado, que puede ir unos puntos separado del índice).
-          Antes de abrir, el plan es provisional: al abrir se rehace con el saldo de ese momento. «Abierto» es lo que va ganando la posición; debajo, lo que dejaría si saltara el stop ahora.
+          Cada sistema lleva su posición: un índice puede tener una de cada. Antes de abrir, el plan es provisional: al abrir se rehace con el saldo de ese momento.
+          «Abierto» es lo que va ganando la posición; debajo, lo que dejaría si saltara el stop ahora.
         </p>
       </section>
 
       <section className="bot-bloque">
         <h3>Cartera</h3>
         <div className="estr-tiles">
-          {lados.map(lado => (
-            <Tile key={lado} label={`Unidades ${lado === 'largo' ? 'largas' : 'cortas'}`}
-              valor={`${unidades(m => m.posicion.lado === lado)} de ${config.maxSentido}`}
-              sub={grupos.map(g => `${g} ${unidades(m => m.grupo === g && m.posicion.lado === lado)}/${config.maxGrupo}`).join(' · ')} />
-          ))}
+          {sistemasCartera.flatMap(s => lados.map(lado => (
+            <Tile key={`${s}-${lado}`} label={`Sistema ${s} · unidades ${lado === 'largo' ? 'largas' : 'cortas'}`}
+              valor={`${unidades(p => p.sistema === s && p.lado === lado)} de ${config.maxSentido}`}
+              sub={grupos.map(g => `${g} ${unidades(p => p.sistema === s && p.grupo === g && p.lado === lado)}/${config.maxGrupo}`).join(' · ')} />
+          )))}
           <Tile label="Nominal abierto" valor={`${num(nominal / 1000, 1)} mil €`}
-            sub={saldo ? `${num(nominal / saldo, 1)} veces el saldo (máximo ${reglas.apalancamiento})` : ''} />
+            sub={saldo ? `${num(nominal / saldo, 1)} veces el saldo (máximo ${reglas.apalancamiento}, entre los dos sistemas)` : ''} />
           <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'}
             sub={datos.picoSaldo ? `máximo ${num(datos.picoSaldo, 0)} €${config.reduccionDD ? ' · −20% de unidad por cada −10%' : ''}` : ''} />
           <Tile label="Operaciones cerradas" valor={eur(operaciones.length ? totalEur : null)} tonoValor={tono(totalEur)}
@@ -168,13 +175,14 @@ export default function BotTortugas() {
           <div className="velas-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-todas">
               <thead>
-                <tr><th>Cerrada</th><th>Índice</th><th>Lado</th><th>Abierta</th><th>Unidades</th><th>Entrada media</th><th>Salida</th><th>Motivo</th><th>N</th><th>€</th></tr>
+                <tr><th>Cerrada</th><th>Índice</th><th>Sistema</th><th>Lado</th><th>Abierta</th><th>Unidades</th><th>Entrada media</th><th>Salida</th><th>Motivo</th><th>N</th><th>€</th></tr>
               </thead>
               <tbody>
                 {operaciones.map(o => (
-                  <tr key={`${o.ticker}-${o.cerradaHora}`}>
+                  <tr key={`${o.ticker}-${o.sistema}-${o.cerradaHora}`}>
                     <td>{o.cerrada}</td>
                     <td className="bot-celda-texto">{nombre(o.ticker)}</td>
+                    <td className="bot-celda-texto">{o.sistema ? `S${o.sistema}` : '—'}</td>
                     <td className="bot-celda-texto">{o.lado === 'largo' ? 'Largo' : 'Corto'}{o.ruptura ? ` (${o.ruptura})` : ''}</td>
                     <td>{o.abierta}</td>
                     <td>{o.unidades} · {num(o.contratos, 1)} c.</td>
@@ -195,7 +203,7 @@ export default function BotTortugas() {
         <h3>Registro</h3>
         {eventos.length === 0 ? <p className="bot-nota">Nada todavía.</p> : (
           <ul className="bot-eventos tor-eventos">
-            {eventos.map((e, i) => <li key={i}><span className="bot-hora">{horaEvento(e.hora)}</span><b>{nombre(e.ticker)}</b> · {e.texto}</li>)}
+            {eventos.map((e, i) => <li key={i}><span className="bot-hora">{horaEvento(e.hora)}</span><b>{nombre(e.ticker)}{e.sistema ? ` · S${e.sistema}` : ''}</b> · {e.texto}</li>)}
           </ul>
         )}
       </section>
@@ -203,10 +211,11 @@ export default function BotTortugas() {
       <section className="bot-bloque">
         <h3>Configuración</h3>
         <div className="bot-form">
-          <label>Sistema
-            <select value={editando.sistema} onChange={e => cambiar('sistema', Number(e.target.value))}>
-              <option value={1}>1: entra en 20 (55 con el filtro), sale en 10</option>
-              <option value={2}>2: entra en 55, sale en 20</option>
+          <label>Sistemas
+            <select value={editando.sistemas.join(',')} onChange={e => cambiar('sistemas', e.target.value.split(',').map(Number))}>
+              <option value="1,2">Los dos a la vez, con la mitad del capital cada uno</option>
+              <option value="1">Solo el 1: entra en 20 (55 con el filtro), sale en 10</option>
+              <option value="2">Solo el 2: entra en 55, sale en 20</option>
             </select>
           </label>
           <label>Lados
@@ -216,16 +225,16 @@ export default function BotTortugas() {
               <option value="cortos">Solo cortos</option>
             </select>
           </label>
-          <label>1 N por unidad (% del saldo)
+          <label>1 N por unidad (% del saldo, entre los sistemas)
             <input type="number" min="0.05" max="5" step="0.05" value={editando.riesgoPct} onChange={e => cambiar('riesgoPct', e.target.value)} />
           </label>
-          <label>Unidades por índice
+          <label>Unidades por índice y sistema
             <input type="number" min="1" max="10" step="1" value={editando.maxUnidades} onChange={e => cambiar('maxUnidades', e.target.value)} />
           </label>
-          <label>Unidades por grupo y sentido
+          <label>Unidades por grupo y sentido (en cada sistema)
             <input type="number" min="1" max="30" step="1" value={editando.maxGrupo} onChange={e => cambiar('maxGrupo', e.target.value)} />
           </label>
-          <label>Unidades por sentido
+          <label>Unidades por sentido (en cada sistema)
             <input type="number" min="1" max="50" step="1" value={editando.maxSentido} onChange={e => cambiar('maxSentido', e.target.value)} />
           </label>
           <label>Reducción por drawdown
@@ -236,65 +245,85 @@ export default function BotTortugas() {
           </label>
         </div>
         <p className="bot-nota">
-          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta ese % del saldo; el stop va a {reglas.stopN} N del último relleno, así que cada unidad arriesga el doble.
+          Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones (o 55, si la ruptura anterior habría ganado) y sale al romper 10; el 2 entra en 55 y sale en 20.
+          Cada uno tiene la mitad del capital y sus propias posiciones y límites, así que con los dos llenos se arriesga lo mismo que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
+          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que cada unidad arriesga el doble.
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
-          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistema, lados o riesgo rehace los planes de todos los índices.
+          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, lados o riesgo rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { sistema, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form
-          guardarConfig({ sistema, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD }).then(() => setForm(null))
+          const { sistemas, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form
+          guardarConfig({ sistemas, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
     </div>
   )
 }
 
-// Por dónde sale una posición: el canal de salida o el stop, el que esté más cerca
-function salidaDe(pos, hoy) {
-  const canal = hoy.salida[pos.lado]
+// Por dónde sale una posición: el canal de salida de su sistema o el stop, el que esté más cerca
+function salidaDe(pos, sp) {
+  const canal = sp.salida[pos.lado]
   if (pos.stop == null) return canal
   return pos.lado === 'largo' ? Math.max(canal, pos.stop) : Math.min(canal, pos.stop)
 }
 
-function FilaIndice({ m, config, ocupado, reglas, alternar }) {
-  const { plan, posicion: pos } = m
+// Un índice: lo común (sesión, N, precio, unidad) una vez, y una fila por cada sistema que se
+// juega o que tiene una posición abierta
+function FilasIndice({ m, config, ocupado, reglas, alternar }) {
+  const { plan } = m
   const hoy = plan && !plan.error ? plan : null
-  const c = pos ? cuentasDe(pos, m.precio) : null
-  const siguiente = pos ? pos.unidades.at(-1).entrada + dir(pos.lado) * reglas.pasoN * pos.n0 : null
-  const entrada = !hoy ? '—'
-    : pos ? (pos.unidades.length < config.maxUnidades ? `añade en ${num(siguiente)}` : 'pirámide llena')
-    : [config.lados !== 'cortos' && `> ${num(hoy.entrada.largo.nivel)}`, config.lados !== 'largos' && `< ${num(hoy.entrada.corto.nivel)}`].filter(Boolean).join(' · ')
+  const sistemas = reglas.sistemas.filter(s => config.sistemas.includes(s) || m.posiciones[s] || m.intentos[s])
+  const filas = sistemas.length ? sistemas : [config.sistemas[0]]
+  const n = filas.length
   return (
-    <tr className={m.encendido ? '' : 'tor-apagado'}>
-      <td className="bot-celda-texto">
-        <label className="tor-indice">
-          <input type="checkbox" checked={m.encendido} disabled={ocupado} onChange={e => alternar(e.target.checked)} />
-          <span><b>{m.nombre}</b><small className="tor-sub">{m.grupo}</small></span>
-        </label>
-      </td>
-      <td className="bot-celda-texto">{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
-      <td className="tor-num">{hoy ? num(hoy.n) : '—'}</td>
-      <td className="tor-num">{num(m.precio)}</td>
-      <td className="bot-celda-texto" title={hoy ? `Canal de ${hoy.k} sesiones${hoy.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
-        {entrada}{hoy && !pos ? <small> ({hoy.k}{hoy.filtro ? ', filtro' : ''})</small> : null}
-      </td>
-      <td>{hoy && pos ? <>{num(salidaDe(pos, hoy))}<small className="tor-sub">{salidaDe(pos, hoy) === pos.stop ? 'stop' : `canal de ${hoy.kSalida}`}</small></> : '—'}</td>
-      <td className="bot-celda-texto">
-        {!plan ? '—'
-          : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
-          : plan.unidad?.ok ? <>{num(plan.unidad.tamano)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{plan.provisional ? ' · provisional' : ''}</small></>
-          : <><span className="bot-neg">no cabe</span><small className="tor-sub tor-motivo">{plan.unidad?.motivo}</small></>}
-      </td>
-      <td className="bot-celda-texto">
-        {pos ? <>{pos.lado === 'largo' ? 'Largo' : 'Corto'} ×{pos.unidades.length} · {num(c.contratos)} c. a {num(c.medio)}<small className="tor-sub">stop {num(pos.stop)} · desde {pos.abierta}{pos.recuperada ? ' · recuperada' : ''}</small></>
-          : m.intento ? 'mandando la orden…' : '—'}
-      </td>
-      <td className={`tor-num ${tono(c?.abierto)}`}>
-        {c ? <>{eur(c.abierto)}<small className={`tor-sub ${tono(c.alStop)}`}>al stop {eur(c.alStop)}</small></> : '—'}
-      </td>
-    </tr>
+    <tbody className={`tor-indice-grupo ${m.encendido ? '' : 'tor-apagado'}`}>
+      {filas.map((s, i) => {
+        const pos = m.posiciones[s]
+        const sp = hoy?.sistemas?.[s] ?? null
+        const c = pos ? cuentasDe(pos, m.precio) : null
+        const siguiente = pos ? pos.unidades.at(-1).entrada + dir(pos.lado) * reglas.pasoN * pos.n0 : null
+        const juega = config.sistemas.includes(s)
+        const entrada = !sp ? '—'
+          : pos ? (pos.unidades.length < config.maxUnidades ? `añade en ${num(siguiente)}` : 'pirámide llena')
+          : !juega ? 'no se juega'
+          : [config.lados !== 'cortos' && `> ${num(sp.entrada.largo.nivel)}`, config.lados !== 'largos' && `< ${num(sp.entrada.corto.nivel)}`].filter(Boolean).join(' · ')
+        return (
+          <tr key={s}>
+            {i === 0 && <>
+              <td className="bot-celda-texto" rowSpan={n}>
+                <label className="tor-indice">
+                  <input type="checkbox" checked={m.encendido} disabled={ocupado} onChange={e => alternar(e.target.checked)} />
+                  <span><b>{m.nombre}</b><small className="tor-sub">{m.grupo}</small></span>
+                </label>
+              </td>
+              <td className="bot-celda-texto" rowSpan={n}>{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
+              <td className="tor-num" rowSpan={n}>{hoy ? num(hoy.n) : '—'}</td>
+              <td className="tor-num" rowSpan={n}>{num(m.precio)}</td>
+              <td className="bot-celda-texto" rowSpan={n}>
+                {!plan ? '—'
+                  : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
+                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small></>
+                  : <><span className="bot-neg">no cabe</span><small className="tor-sub tor-motivo">{plan.unidad?.motivo}</small></>}
+              </td>
+            </>}
+            <td className="bot-celda-texto"><b>S{s}</b></td>
+            <td className="bot-celda-texto" title={sp ? `Canal de ${sp.k} sesiones${sp.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
+              {entrada}{sp && !pos && juega ? <small> ({sp.k}{sp.filtro ? ', filtro' : ''})</small> : null}
+            </td>
+            <td>{sp && pos ? <>{num(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></> : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>
+            <td className="bot-celda-texto">
+              {pos ? <>{pos.lado === 'largo' ? 'Largo' : 'Corto'} ×{pos.unidades.length} · {num(c.contratos)} c. a {num(c.medio)}<small className="tor-sub">stop {num(pos.stop)} · desde {pos.abierta}{pos.recuperada ? ' · recuperada' : ''}</small></>
+                : m.intentos[s] ? 'mandando la orden…' : '—'}
+            </td>
+            <td className={`tor-num ${tono(c?.abierto)}`}>
+              {c ? <>{eur(c.abierto)}<small className={`tor-sub ${tono(c.alStop)}`}>al stop {eur(c.alStop)}</small></> : '—'}
+            </td>
+          </tr>
+        )
+      })}
+    </tbody>
   )
 }
 

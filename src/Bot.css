@@ -108,6 +108,8 @@
 .tor-tabla small.bot-neg { color: var(--red); }
 .tor-motivo { max-width: 22rem; white-space: normal; }
 .tor-apagado td { opacity: 0.55; }
+.velas-tabla.tor-tabla tbody.tor-indice-grupo tr:first-child td { border-top: 1px solid var(--border-2, var(--border)); }
+.velas-tabla.tor-tabla tbody.tor-indice-grupo tr + tr td { border-top-style: dashed; }
 .tor-indice { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; color: var(--text); }
 .tor-indice input { margin-top: 0.15rem; }
 .tor-eventos { max-height: 22rem; }

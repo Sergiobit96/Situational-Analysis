@@ -3,9 +3,11 @@ import CurvaEquity from './CurvaEquity.jsx'
 import { useTrades } from './useTrades'
 import { useExcursiones } from './useExcursiones'
 import { PRODUCTO_A_TICKER } from './parseTrades'
+import Simulador from './Simulador.jsx'
 import {
   unidadesDe, resumen, desglose, DESGLOSES, MIN_MUESTRA,
-  excursionesPorInstrumento, eficienciaDeSalida,
+  excursionesPorInstrumento, eficienciaDeSalida, claveDeExcursion,
+  contextoDeSesiones, desglosesDeContexto,
 } from './estadisticas.js'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -101,6 +103,10 @@ function BloqueExcursiones({ exc, filtradas }) {
 
   const conVelas  = filtradas.filter(t => t.ticker).length
   const medidas   = filas.reduce((n, f) => n + f.n, 0)
+  const conYahoo  = useMemo(
+    () => filtradas.filter(t => resultados[claveDeExcursion(t)]?.fuente === 'yahoo').length,
+    [filtradas, resultados],
+  )
   const sinVelas  = useMemo(
     () => Object.values(resultados).filter(r => r.sinDatos === 'sin velas en el tramo').length,
     [resultados],
@@ -123,6 +129,11 @@ function BloqueExcursiones({ exc, filtradas }) {
         <h3>MFE y MAE</h3>
         <span className="stats-cobertura">
           {fmtNum(medidas)} de {fmtNum(conVelas)} operaciones medidas
+          {conYahoo > 0 && (
+            <span title="Dukascopy no las sirvió y salen de las velas de 1 min de Yahoo: de mediana, 1-2,5 puntos de diferencia en DAX y FTSE y 5-6 en Dow y Nasdaq">
+              {' '}· {fmtNum(conYahoo)} con velas de Yahoo, menos precisas
+            </span>
+          )}
         </span>
         {activo ? (
           <span className="stats-progreso">
@@ -213,6 +224,25 @@ export default function Estadisticas() {
   const [modo,        setModo]        = useState('operacion')
   const [medidaElegida, setMedida]    = useState('eur')
 
+  // Contexto de mercado de cada día por instrumento (gap, rango de ayer, eventos), con las
+  // mismas sesiones que el Gap Filter: una petición por instrumento, diez años de golpe
+  const tickers = useMemo(
+    () => [...new Set(trades.map(t => t.ticker).filter(Boolean))].sort().join(','),
+    [trades],
+  )
+  const [contextos, setContextos] = useState({})   // ticker → fecha → contexto
+  useEffect(() => {
+    if (!tickers) return
+    let vivo = true
+    Promise.all(tickers.split(',').map(ticker =>
+      fetch(`/api/gap-filter?${new URLSearchParams({ ticker, meses: 120 })}`)
+        .then(r => r.json())
+        .then(d => [ticker, Array.isArray(d.sesiones) ? contextoDeSesiones(d.sesiones) : null])
+        .catch(() => [ticker, null]),
+    )).then(pares => { if (vivo) setContextos(Object.fromEntries(pares.filter(([, m]) => m))) })
+    return () => { vivo = false }
+  }, [tickers])
+
   // Las etiquetas del Book of Horror puestas desde la app, para el desglose por error
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -264,6 +294,11 @@ export default function Estadisticas() {
     // la de categorías no dice nada si nada está etiquetado: sale una sola fila, "sin etiqueta"
     .filter(({ d, filas }) => !(d.id === 'categoria' && filas.every(f => f.clave === 0))),
   [unidades, anio, instrumento])
+
+  const tablasContexto = useMemo(() => desglosesDeContexto(u => contextos[u.ticker]?.get(u.fecha))
+    .map(d => ({ d, filas: desglose(unidades, d.clave, d) }))
+    .filter(({ filas }) => filas.length > 0),
+  [unidades, contextos])
 
   const porCada = modo === 'sesion' ? 'por sesión' : 'por operación'
   const tiles = [
@@ -356,7 +391,36 @@ export default function Estadisticas() {
                   <TablaDesglose key={d.id} d={d} filas={filas} cuenta={cuenta} dec={dec} />
                 ))}
               </div>
+
+              <section className="stats-seccion">
+                <h3 className="stats-seccion-tit">El mercado de ese día</h3>
+                <p className="stats-nota">
+                  Cada operación con lo que hizo su instrumento ese día: el gap de apertura, dónde abrió
+                  frente al rango de ayer, lo movido que vino ayer y los eventos del calendario. Las
+                  divisas y demás del historial no entran: la app no tiene sus diarias.
+                </p>
+                {tablasContexto.length > 0 ? (
+                  <div className="stats-grid">
+                    {tablasContexto.map(({ d, filas }) => (
+                      <TablaDesglose key={d.id} d={d} filas={filas} cuenta={cuenta} dec={dec} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="fotos-placeholder">Cargando las sesiones de cada instrumento…</div>
+                )}
+              </section>
             </>
+          )}
+
+          {r.n > 0 && (
+            <Simulador
+              trades={filtradas}
+              medida={medida}
+              unidad={unidad}
+              dec={dec}
+              puntosPosibles={puntosPosibles}
+              resultados={exc.resultados}
+            />
           )}
 
           <BloqueExcursiones exc={exc} filtradas={filtradas} />

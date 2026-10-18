@@ -52,6 +52,12 @@ export const FACTOR_PRECIO = { XAGUSD: 100 }
 // resto baila unos céntimos porque el diario redondea la diferencia a un decimal).
 const MULTIPLICADOR_PNL = { 'Gold (per 0.1)': 10 }
 
+// Euros que vale un punto de una operación. Es la misma cuenta con la que se reconstruye el
+// PNL del diario y se deshace el del historial, así que sirve para los dos formatos.
+export function valorDelPunto(t) {
+  return Math.abs(t?.size ?? 0) * (MULTIPLICADOR_PNL[t?.producto] ?? 1)
+}
+
 function pnlDelDiario(producto, puntos, size) {
   if (!Number.isFinite(size) || !Number.isFinite(puntos)) return null
   return puntos * Math.abs(size) * (MULTIPLICADOR_PNL[producto] ?? 1)
@@ -238,11 +244,14 @@ function parseHojaHistorial(filas) {
     const pl = parseFloat(fila[iPL])
     if (openTime == null || closeTime == null || isNaN(openPrice) || isNaN(closePrice) || isNaN(pl)) continue
 
-    // No hay columna de dirección explícita: se infiere comparando el signo del P&L
-    // con el del movimiento de precio (mismo signo → compra, signo contrario → venta).
+    // No hay columna de dirección: la da el signo del Amount, que viene en negativo en las
+    // ventas (coincide con el lado en 4.507 de 4.507 operaciones). Sin Amount, se infiere
+    // del signo del P&L frente al del precio, que no sirve para las cerradas a cero.
     const diff = closePrice - openPrice
-    const direccion = (pl === 0 || diff === 0) ? null : ((pl > 0) === (diff > 0) ? 'Buy' : 'Sell')
     const size = iAmount !== -1 ? parseFloat(fila[iAmount]) : NaN
+    const direccion = Number.isFinite(size) && size !== 0
+      ? (size > 0 ? 'Buy' : 'Sell')
+      : (pl === 0 || diff === 0) ? null : ((pl > 0) === (diff > 0) ? 'Buy' : 'Sell')
     const producto = normalizarProducto(fila[iDesc]?.toString().trim() ?? '')
 
     trades.push({

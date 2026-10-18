@@ -39,6 +39,11 @@ test('el lado sale de la dirección del diario o del historial, y si no del resu
   assert.equal(ladoDe({ direccion: null, openPrice: 100, closePrice: 100, puntos: 0 }), null)
 })
 
+test('una operación del historial cerrada a cero saca el lado del signo del tamaño', () => {
+  assert.equal(ladoDe({ direccion: null, size: -2, openPrice: 100, closePrice: 100, puntos: 0 }), 'corto')
+  assert.equal(ladoDe({ direccion: null, size: 1.5, openPrice: 100, closePrice: 100, puntos: 0 }), 'largo')
+})
+
 test('el tramo va de la vela de la entrada a la de la salida, incluidas', () => {
   assert.deepEqual(tramoDe(largo), { tf: 'm1', desde: utc(2026, 2, 2, 8, 5), hasta: utc(2026, 2, 2, 8, 9) })
 })

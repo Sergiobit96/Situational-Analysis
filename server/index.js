@@ -8,7 +8,9 @@ import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
 } from './velas-grafico.js'
 import { limpiarDibujos, claveValida } from './dibujos.js'
-import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion } from './excursiones.js'
+import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
+import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
+import Anthropic from '@anthropic-ai/sdk'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
 import { join, dirname, relative, resolve, sep, basename, extname } from 'path'
 import { fileURLToPath } from 'url'
@@ -1588,31 +1590,81 @@ function guardarExcursiones() {
   renameSync(tmp, EXCURSIONES_PATH)
 }
 
-// Lo que falta: operaciones de un instrumento con velas en Dukascopy sin resultado de esta
-// versión. Con `reintentar`, también las que la otra vez se quedaron sin velas.
+// Lo que falta: operaciones de un instrumento con velas sin resultado de esta versión, y las
+// que se quedaron sin lado si ahora se sabe (el del Amount del historial, oct 2026). Con
+// `reintentar`, también las que se quedaron sin velas y las medidas con Yahoo, por si
+// Dukascopy ya las sirve.
 function excursionesPendientes(reintentar = false) {
   const hechas = excursionesActuales()
   return leerTradesDiario().filter(t => {
     if (!YF_TO_DUKASCOPY[t.ticker]) return false
     const r = hechas[claveExcursion(t)]
     if (r?.v !== VERSION_EXCURSION) return true
-    return reintentar && r.sinDatos === 'sin velas en el tramo'
+    if (r.sinDatos === 'sin dirección') return ladoDe(t) != null
+    return reintentar && (r.sinDatos === 'sin velas en el tramo' || r.fuente === 'yahoo')
   })
 }
 
-const excursionesEstado = { activo: false, total: 0, hechas: 0, sinDatos: 0, error: null, inicio: null, fin: null }
+// Las velas de 1 min de Yahoo que deja cada mañana recoger_yahoo.py: la reserva cuando
+// Dukascopy no sirve un día que no tiene en caché (ver server/velas-yahoo.js)
+const YAHOO_1MIN_DIR = process.env.YAHOO_1MIN_DIR || 'C:\\Users\\Sergio\\Documents\\Yahoo'
+const velasYahooCache = new Map()   // ticker → { mtime, velas }
+function velasYahooLocales(ticker) {
+  const indice = INDICE_YAHOO[ticker]
+  if (!indice) return null
+  const file = join(YAHOO_1MIN_DIR, `${indice}_1min.csv`)
+  try {
+    const mtime = statSync(file).mtimeMs
+    const visto = velasYahooCache.get(ticker)
+    if (visto?.mtime === mtime) return visto.velas
+    const velas = parsearCsvYahoo(readFileSync(file, 'utf8'))
+    velasYahooCache.set(ticker, { mtime, velas })
+    return velas
+  } catch {
+    return null
+  }
+}
 
-// Cuando el feed corta (429 o caída) se espera y se reintenta la misma operación; si sigue
-// cortado tras la última espera, se para y lo calculado hasta ahí queda guardado
-const ESPERAS_EXCURSION_MS = [30_000, 2 * 60_000, 5 * 60_000]
+// Si el fichero de 1 min de Dukascopy de ese día ya está en la caché de disco, se lee de ahí
+// aunque el feed esté cortado. Es el nombre que le pone dukascopy-node (el mes en base 0).
+function diaEnCacheDukascopy(instrument, ts) {
+  const d = new Date(ts * 1000)
+  const dos = n => String(n).padStart(2, '0')
+  const nombre = `${instrument.toUpperCase()}-${d.getUTCFullYear()}-${dos(d.getUTCMonth())}-${dos(d.getUTCDate())}-BID_candles_min_1.bi5`
+  return existsSync(join(DUKA_RAW_CACHE_DIR, nombre))
+}
+
+const excursionesEstado = {
+  activo: false, total: 0, hechas: 0, sinDatos: 0, yahoo: 0, sinFuente: 0, error: null, inicio: null, fin: null,
+}
+
+// Cuando el feed corta (429 o caída) se espera y se reintenta la misma operación. Si sigue
+// cortado, en esa pasada ya no se le pide nada que no esté en caché: sale de Yahoo, y lo
+// que Yahoo no cubre queda pendiente para otra vez.
+const ESPERAS_EXCURSION_MS = [15_000, 60_000]
 
 async function calcularExcursiones(reintentar) {
   const resultados = excursionesActuales()
+  const diario = leerTradesDiario()
   // de la más reciente a la más antigua: lo último que se ha operado es lo primero que se mira
   const pendientes = excursionesPendientes(reintentar).sort((a, b) => b.openTime - a.openTime)
   Object.assign(excursionesEstado, {
-    activo: true, total: pendientes.length, hechas: 0, sinDatos: 0, error: null, inicio: Date.now(), fin: null,
+    activo: true, total: pendientes.length, hechas: 0, sinDatos: 0, yahoo: 0, sinFuente: 0,
+    error: null, inicio: Date.now(), fin: null,
   })
+
+  // Ejecuciones (entradas y salidas, en UTC) de cada día e instrumento, para medir el
+  // desfase del CFD frente al contado de Yahoo. Las horas del diario van en hora de Madrid.
+  const ejecuciones = new Map()
+  for (const o of diario) {
+    const clave = `${o.ticker}|${Math.floor(o.openTime / 86400)}`
+    if (!ejecuciones.has(clave)) ejecuciones.set(clave, [])
+    ejecuciones.get(clave).push(
+      { time: aUtc(o.openTime), precio: o.openPrice },
+      { time: aUtc(o.closeTime), precio: o.closePrice },
+    )
+  }
+  const ejecucionesDe = t => ejecuciones.get(`${t.ticker}|${Math.floor(t.openTime / 86400)}`) ?? []
 
   // Las operaciones de un mismo día comparten fichero de Dukascopy: se lee una vez por
   // instrumento y día en vez de una vez por operación. Un día vacío no se guarda, para que
@@ -1631,31 +1683,61 @@ async function calcularExcursiones(reintentar) {
     return velas
   }
 
+  const velasDukascopy = async (instrument, tramo) => {
+    for (let intento = 0; ; intento++) {
+      try {
+        const velas = await velasDe(instrument, tramo)
+        // con el feed limitando, un tramo vacío no es "no hay datos" sino un fichero perdido
+        if (velas.length === 0 && dukascopyLimitando()) throw new Error('Dukascopy está limitando las peticiones de esta IP (429)')
+        return velas
+      } catch (err) {
+        if (intento >= ESPERAS_EXCURSION_MS.length) throw err
+        // si el 443 se ha caído a media tarea, el reintento ya irá por HTTP
+        revalidarTransporteDukascopy()
+        console.warn(`[excursiones] ${errDetalle(err)}; reintento en ${ESPERAS_EXCURSION_MS[intento] / 1000} s`)
+        await new Promise(r => setTimeout(r, ESPERAS_EXCURSION_MS[intento]))
+      }
+    }
+  }
+
+  let dukaCortado = null   // el error con el que Dukascopy dejó de servir en esta pasada
   let sinGuardar = 0
   try {
     for (const t of pendientes) {
       const instrument = YF_TO_DUKASCOPY[t.ticker]
-      let velas
-      for (let intento = 0; ; intento++) {
+      const tramo = tramoDe(t)
+      const enCache = tramo.tf === 'm1' &&
+        diaEnCacheDukascopy(instrument, tramo.desde) && diaEnCacheDukascopy(instrument, tramo.hasta - 1)
+      excursionesEstado.hechas++
+
+      let velas = null, fuente = 'dukascopy'
+      if (enCache || !dukaCortado) {
         try {
-          velas = await velasDe(instrument, tramoDe(t))
-          // con el feed limitando, un tramo vacío no es "no hay datos" sino un fichero perdido
-          if (velas.length === 0 && dukascopyLimitando()) throw new Error('Dukascopy está limitando las peticiones de esta IP (429)')
-          break
+          velas = await velasDukascopy(instrument, tramo)
         } catch (err) {
-          if (intento >= ESPERAS_EXCURSION_MS.length) throw err
-          // si el 443 se ha caído a media tarea, el reintento ya irá por HTTP
-          revalidarTransporteDukascopy()
-          console.warn(`[excursiones] ${errDetalle(err)}; reintento en ${ESPERAS_EXCURSION_MS[intento] / 1000} s`)
-          await new Promise(r => setTimeout(r, ESPERAS_EXCURSION_MS[intento]))
+          dukaCortado = err
+          console.warn(`[excursiones] Dukascopy no responde (${errDetalle(err)}); lo que no esté en caché sale de Yahoo`)
         }
       }
+      // sin Dukascopy, o sin sus velas en ese tramo: las de Yahoo, si cubren la operación entera
+      if (!velas?.length) {
+        const yahoo = velasYahooDeOperacion(velasYahooLocales(t.ticker), t, ejecucionesDe(t))
+        if (yahoo) { velas = yahoo; fuente = 'yahoo' }
+      }
+      // ni una ni otra: no se guarda nada y queda pendiente para otra pasada
+      if (!velas) { excursionesEstado.sinFuente++; continue }
 
       const r = calcularExcursion(t, velas)
-      resultados[claveExcursion(t)] = { v: VERSION_EXCURSION, ...r }
-      excursionesEstado.hechas++
+      const deYahoo = fuente === 'yahoo' && !r.sinDatos
+      resultados[claveExcursion(t)] = { v: VERSION_EXCURSION, ...r, ...(deYahoo ? { fuente } : {}) }
       if (r.sinDatos) excursionesEstado.sinDatos++
+      if (deYahoo) excursionesEstado.yahoo++
       if (++sinGuardar >= 50) { guardarExcursiones(); sinGuardar = 0 }
+    }
+    if (dukaCortado) {
+      const quedan = excursionesEstado.sinFuente
+      excursionesEstado.error = `Dukascopy no responde (${errDetalle(dukaCortado)})` +
+        (quedan ? `; ${quedan} operaciones que Yahoo no cubre quedan pendientes` : '')
     }
   } catch (err) {
     excursionesEstado.error = errDetalle(err)
@@ -1688,6 +1770,118 @@ app.post('/api/excursiones/calcular', (req, res) => {
     calcularExcursiones(req.query.reintentar === '1').catch(err => console.error('[excursiones]', err))
   }
   res.json({ ...excursionesEstado, pendientes: excursionesEstado.total - excursionesEstado.hechas })
+})
+
+// ── Revisión del día con Claude (solo local) ──
+// El navegador arma el expediente del día (expedienteDelDia en src/estadisticas.js: las
+// operaciones con su MFE/MAE, los comentarios, las etiquetas del Book of Horror y lo
+// habitual del historial) y aquí solo se le pasa a Claude y se guarda lo que escribe, para no
+// pagar dos veces la misma revisión. La clave va en ANTHROPIC_API_KEY de server/.env.
+const REVISIONES_PATH = process.env.REVISIONES_DIA || join(PHOTOS_ROOT, 'Revisiones dia.json')
+const MODELO_REVISION = 'claude-opus-5-5'
+
+// $ por millón de tokens (entrada, salida), para enseñar lo que costó cada revisión. La de
+// respaldo solo entra si Claude Opus 5.5 rechaza la petición.
+const PRECIO_POR_MTOK = { 'claude-opus-5-5': [4, 20], 'claude-opus-4-8': [5, 25] }
+
+const PROMPT_REVISION = `Eres quien revisa el diario de un trader discrecional de CFD de índices (DAX, FTSE, Dow, Nasdaq, S&P) y metales, que opera en TradeNation desde Madrid. Te paso el expediente de un día: sus operaciones con la hora de entrada y de salida (hora de Madrid), el resultado en puntos y en euros, el MFE y el MAE de cada una (lo más que llegó a ir ganando y perdiendo mientras estuvo abierta, en puntos), sus comentarios, los errores de proceso que él mismo etiquetó (las categorías de su "Book of Horror") y sus cifras habituales de todo el historial.
+
+Escribe una revisión breve del día, en español y de tú, para leerla al acabar la sesión:
+- Juzga el proceso, no el resultado: un día en verde puede estar mal operado y uno en rojo bien operado.
+- Compara con lo habitual solo cuando la diferencia sea clara, y da la cifra.
+- Cita las operaciones por instrumento y hora.
+- No inventes nada que no esté en el expediente. Si falta algo para opinar (por ejemplo, no hay comentarios), dilo en una línea.
+- El MFE y el MAE salen de otra fuente de precios y tienen 1-3 puntos de margen, más si vienen de Yahoo: no saques conclusiones de diferencias menores que eso.
+
+Texto plano, sin títulos ni negritas, en cuatro bloques cortos separados por una línea en blanco: qué pasó; qué fue distinto de lo habitual; lo mejor y lo peor del proceso, con la operación concreta; y una sola cosa a vigilar en la próxima sesión. Como mucho 220 palabras.`
+
+let clienteClaude = null
+// Se crea al primer uso: sin clave, el constructor lanza, y el resto del servidor no la necesita
+const claude = () => (clienteClaude ??= new Anthropic())
+
+function leerRevisiones() {
+  try {
+    const d = JSON.parse(readFileSync(REVISIONES_PATH, 'utf8'))
+    return d?.revisiones && typeof d.revisiones === 'object' ? d.revisiones : {}
+  } catch {
+    return {}
+  }
+}
+
+function guardarRevision(fecha, revision) {
+  const revisiones = { ...leerRevisiones(), [fecha]: revision }
+  const tmp = `${REVISIONES_PATH}.tmp`
+  writeFileSync(tmp, JSON.stringify({ revisiones }, null, 2))
+  renameSync(tmp, REVISIONES_PATH)
+}
+
+const FECHA_VALIDA = /^\d{4}-\d{2}-\d{2}$/
+
+app.get('/api/revision-dia', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const fecha = String(req.query.fecha ?? '')
+  if (!FECHA_VALIDA.test(fecha)) return res.status(400).json({ error: 'fecha con formato AAAA-MM-DD' })
+  res.json({ revision: leerRevisiones()[fecha] ?? null })
+})
+
+app.post('/api/revision-dia', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const { fecha, expediente } = req.body ?? {}
+  if (!FECHA_VALIDA.test(String(fecha ?? ''))) return res.status(400).json({ error: 'fecha con formato AAAA-MM-DD' })
+  if (!expediente || !Array.isArray(expediente.operaciones) || expediente.operaciones.length === 0) {
+    return res.status(400).json({ error: 'Ese día no tiene operaciones que revisar' })
+  }
+
+  try {
+    const respuesta = await claude().beta.messages.create({
+      model: MODELO_REVISION,
+      max_tokens: 16000,
+      // el pensamiento adaptativo va siempre activo en este modelo; el esfuerzo por defecto es
+      // medium, y para juzgar un día de operaciones compensa uno más
+      output_config: { effort: 'high' },
+      // si Claude Opus 5.5 rechaza la petición, la repite Claude Opus 4.8 en la misma llamada
+      betas: ['server-side-fallback-2026-06-01'],
+      fallbacks: [{ model: 'claude-opus-4-8' }],
+      system: PROMPT_REVISION,
+      messages: [{ role: 'user', content: `Expediente del día:\n\n${JSON.stringify(expediente, null, 2)}` }],
+    })
+
+    if (respuesta.stop_reason === 'refusal') {
+      return res.status(502).json({ error: 'Claude no ha querido hacer esta revisión' })
+    }
+    const texto = respuesta.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+    if (!texto || respuesta.stop_reason === 'max_tokens') {
+      return res.status(502).json({ error: 'La revisión llegó vacía o cortada; prueba otra vez' })
+    }
+
+    const { input_tokens: entrada = 0, output_tokens: salida = 0 } = respuesta.usage ?? {}
+    const [pe, ps] = PRECIO_POR_MTOK[respuesta.model] ?? PRECIO_POR_MTOK[MODELO_REVISION]
+    const revision = {
+      texto,
+      modelo: respuesta.model,
+      generada: new Date().toISOString(),
+      tokens: { entrada, salida },
+      usd: Math.round((entrada * pe + salida * ps) / 1e6 * 10000) / 10000,
+    }
+    guardarRevision(fecha, revision)
+    res.json({ revision })
+  } catch (err) {
+    console.error('[revision-dia]', err.message)
+    if (err instanceof Anthropic.AuthenticationError) {
+      return res.status(401).json({ error: 'La clave de Anthropic de server/.env no es válida' })
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      return res.status(429).json({ error: 'Anthropic está limitando las peticiones; prueba en un minuto' })
+    }
+    if (err instanceof Anthropic.APIConnectionError) {
+      return res.status(502).json({ error: 'No se pudo conectar con Anthropic' })
+    }
+    if (err instanceof Anthropic.APIError) {
+      return res.status(502).json({ error: `Anthropic respondió ${err.status}: ${err.message}` })
+    }
+    // sin ANTHROPIC_API_KEY el SDK lanza al crear el cliente
+    res.status(500).json({ error: process.env.ANTHROPIC_API_KEY ? err.message : 'Falta ANTHROPIC_API_KEY en server/.env' })
+  }
 })
 
 // Lo que hay escrito sobre un trade: su comentario, sus etiquetas (las 13 categorías del

@@ -3,6 +3,7 @@ import { parseTradesXLSX, parseTradesDesdeAPI, fmtFechaTS, fmtHoraTS, CATEGORIAS
 import { useTrades } from './useTrades'
 import { useExcursiones } from './useExcursiones'
 import { claveDeExcursion } from './estadisticas.js'
+import RevisionDia from './RevisionDia.jsx'
 import { intradayUrl } from './intradayApi'
 import GraficoVelas from './GraficoVelas'
 import { capturarVelasPNG } from './graficoVelasCore'
@@ -16,8 +17,10 @@ const fmtPrecio = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, max
 // lo dice la columna Dir, así que aquí se enseña en positivo.
 const fmtSize = v => Number.isFinite(v) ? Math.abs(v).toLocaleString('es-ES', { maximumFractionDigits: 2 }) : '—'
 
-// Clave para no duplicar una operación ya cargada al añadir el archivo de otro año
-const claveTrade = t => `${t.producto}|${t.openTime}|${t.closeTime}`
+// Clave para no duplicar una operación ya cargada al añadir el archivo de otro año. Lleva
+// los precios: el historial tiene piernas distintas abiertas y cerradas en el mismo segundo
+// (351 en 2021-2026), y con solo producto y horas la segunda se tiraba como repetida.
+const claveTrade = claveDeExcursion
 
 const anioDe = t => new Date(t.openTime * 1000).getUTCFullYear()
 
@@ -1006,6 +1009,16 @@ export default function Operaciones({ abrir, onAbierto }) {
               {!pantallaCompleta && visorFoto(seleccionado)}
 
               {!pantallaCompleta && editorComentario(seleccionado)}
+
+              {/* como el comentario, solo con el servidor local: ahí está la clave de Anthropic */}
+              {!pantallaCompleta && hayBooks && (
+                <RevisionDia
+                  fecha={fmtFechaTS(seleccionado.openTime)}
+                  trades={trades}
+                  anotaciones={anotaciones}
+                  resultados={excursiones}
+                />
+              )}
 
               {!seleccionado.ticker && (
                 <div className="filtro-vacio">

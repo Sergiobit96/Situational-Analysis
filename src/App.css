@@ -3815,3 +3815,78 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
 /* columnas de MFE / MAE en la tabla de Operaciones */
 .trades-tabla td.trades-exc { color: var(--muted); font-variant-numeric: tabular-nums; }
 .stats-page .velas-tabla th { white-space: nowrap; }
+
+/* ── Estadísticas: contexto de mercado y simulador ─────────────────────── */
+.stats-seccion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.stats-seccion-tit {
+  font-size: 0.95rem;
+  font-weight: 650;
+  margin-top: 0.5rem;
+}
+
+.sim-reglas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 0.75rem 1rem;
+}
+.sim-campo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.sim-campo-tit {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.sim-input {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.4rem 0.6rem;
+  outline: none;
+  color-scheme: dark;
+}
+.sim-input:focus    { border-color: var(--accent); }
+.sim-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.sim-dias {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.sim-dias .estrategia-chip { padding: 0.3rem 0.55rem; }
+.sim-horas {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.sim-resultados {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+/* ── Operaciones: revisión del día con Claude ── */
+.ops-revision-texto {
+  white-space: pre-wrap;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+.ops-revision-pie {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.5;
+}

@@ -35,12 +35,14 @@ export function aUtc(local) {
   return local - offsetMadrid(local - offsetMadrid(local))
 }
 
-// El diario dice LONG/SHORT y el historial de la cuenta Buy/Sell. Si no dice nada, el lado
-// sale del signo del resultado frente al del movimiento de precio.
+// El diario dice LONG/SHORT y el historial de la cuenta Buy/Sell. Si no dice nada, el
+// tamaño va en negativo en las ventas; y sin tamaño, el lado sale del signo del resultado
+// frente al del movimiento de precio.
 export function ladoDe(t) {
   const d = String(t.direccion ?? '').toUpperCase()
   if (d === 'LONG' || d === 'BUY') return 'largo'
   if (d === 'SHORT' || d === 'SELL') return 'corto'
+  if (Number.isFinite(t.size) && t.size !== 0) return t.size > 0 ? 'largo' : 'corto'
   const movimiento = t.closePrice - t.openPrice
   if (!Number.isFinite(t.puntos) || t.puntos === 0 || !movimiento) return null
   return (t.puntos > 0) === (movimiento > 0) ? 'largo' : 'corto'

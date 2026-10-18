@@ -1,0 +1,63 @@
+/* ═══════════════════════════════════════
+   ESTRATEGIAS · TORTUGAS (aparte de App.css para no pisarse con otros cambios)
+═══════════════════════════════════════ */
+.tortugas .estr-resultados { display: flex; flex-direction: column; gap: 1.1rem; }
+
+.tortugas .positivo { color: var(--green); }
+.tortugas .negativo { color: var(--red); }
+
+.tortugas-limites { align-items: center; }
+.tortugas-limites span { font-size: 0.75rem; color: var(--muted); }
+
+.tortugas-aviso {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.tortugas-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.9rem;
+}
+.tortugas-cabecera > strong { font-size: 0.9rem; color: var(--text); }
+.tortugas-cabecera .chip { margin-left: auto; }
+
+/* las tablas anchas se desplazan dentro de su caja, no la página */
+.tortugas-tabla-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.tortugas-tabla { white-space: nowrap; }
+.tortugas-tabla .tortugas-izq { text-align: left; }
+.tortugas-tabla tr.tortugas-actual th,
+.tortugas-tabla tr.tortugas-actual td { background: var(--accent-soft); }
+.tortugas-caducada { opacity: 0.45; }
+.tortugas-mas { align-self: center; }
+
+/* un año por casilla, en verde o en rojo */
+.tortugas-anios {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  gap: 0.3rem;
+}
+.tortugas-anio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.3rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-variant-numeric: tabular-nums;
+}
+.tortugas-anio span { font-size: 0.66rem; color: var(--muted); }
+.tortugas-anio strong { font-size: 0.85rem; }
+.tortugas-anio.positivo { border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.08); }
+.tortugas-anio.negativo { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+.tortugas-anio.positivo strong { color: var(--green); }
+.tortugas-anio.negativo strong { color: var(--red); }

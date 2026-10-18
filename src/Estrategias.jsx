@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import EstrategiaSegundaVela from './EstrategiaSegundaVela'
+import EstrategiaTortugas from './EstrategiaTortugas'
 
 // Catálogo de estrategias. Las que solo cambian qué vela se braquetea comparten panel
 // (EstrategiaSegundaVela, que recibe el id y saca de él su ventana y su tamaño de vela);
@@ -44,6 +45,31 @@ const ESTRATEGIAS = [
                  'entrada del lado contrario. Para estudiar qué pasa según cómo cierre esa primera hora ' +
                  'está el filtro de 1ª vela, blanca o negra.',
     Componente:  EstrategiaSegundaVela,
+  },
+  {
+    id:          'tortugas-1',
+    nombre:      'Tortugas S1',
+    titular:     'Tortugas · sistema 1: ruptura de 20 sesiones, salida en la de 10',
+    descripcion: 'El sistema de Richard Dennis (Market Wizards) llevado a los índices, en velas diarias y ' +
+                 'durmiendo con la posición abierta. Compra al romper el máximo de las últimas 20 sesiones ' +
+                 'y sale al romper el mínimo de las últimas 10. Si la ruptura anterior habría ganado, se la ' +
+                 'salta y espera a la de 55. Cada ½ N a favor añade una unidad, hasta 6, y el stop de todas ' +
+                 'va a 2 N de la última. N es el rango medio de 20 sesiones, y cada unidad se dimensiona para ' +
+                 'que 1 N en contra cueste un porcentaje fijo del capital. Las órdenes son stop, así que un ' +
+                 'hueco de la noche se ejecuta a la apertura. Cada noche se paga la financiación del CFD.',
+    Componente:  EstrategiaTortugas,
+  },
+  {
+    id:          'tortugas-2',
+    nombre:      'Tortugas S2',
+    titular:     'Tortugas · sistema 2: ruptura de 55 sesiones, salida en la de 20',
+    descripcion: 'El sistema largo de las tortugas: compra al romper el máximo de las últimas 55 sesiones y ' +
+                 'sale al romper el mínimo de las últimas 20, sin filtro de la ruptura anterior. Opera ' +
+                 'menos y aguanta más que el 1, con las mismas reglas de unidades, pirámide hasta 6, stop a ' +
+                 '2 N, huecos a la apertura y financiación de cada noche. Los límites por grupo y por sentido ' +
+                 'están porque todos los índices se mueven juntos. Por defecto va solo largo: en índices, ' +
+                 'los cortos pagan el dividendo y van contra la deriva alcista.',
+    Componente:  EstrategiaTortugas,
   },
 ]
 

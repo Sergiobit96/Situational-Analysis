@@ -431,6 +431,43 @@ export function porUnidades(res) {
   return [...grupos.values()].sort((a, b) => a.unidades - b.unidades)
 }
 
+// ── Riesgo hasta los stops ──────────────────────────────────────────────────
+
+// Lo que pierde una posición de k unidades si salta su stop, en N por unidad de riesgo. Cada
+// unidad entra `paso` N más allá que la anterior y el stop de todas queda a `stopN` N de la
+// última, así que la unidad i (desde 0) pierde stopN − (k − 1 − i)·paso: con 2 N y ½ N, 2 N
+// con una unidad, 3,5 con dos, 4,5 con tres, 5 con cuatro o cinco y 4,5 con seis. No cuenta
+// los huecos, que pueden pasar el stop.
+export const nHastaStop = (k, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso) =>
+  (k > 0 ? k * stopN - paso * k * (k - 1) / 2 : 0)
+
+// Lo peor que se pierde, en N por unidad de riesgo, si saltan a la vez todos los stops de un
+// sentido: las unidades repartidas como peor convenga entre los índices (`grupos` son cuántos
+// índices hay en cada grupo), con los límites por índice, por grupo y por sentido. Primero lo
+// peor de cada grupo según cuántas unidades tenga y después el reparto entre grupos, las dos
+// cosas con programación dinámica. También devuelve cuántas unidades caben como mucho.
+export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso }) {
+  const repartir = (piezas, tope) => {
+    let mejor = [0, ...new Array(tope).fill(-Infinity)]
+    for (const pieza of piezas) {
+      const sig = [...mejor]
+      for (let u = 0; u <= tope; u++) {
+        if (mejor[u] === -Infinity) continue
+        for (let k = 1; k < pieza.length && u + k <= tope; k++) {
+          if (pieza[k] > -Infinity) sig[u + k] = Math.max(sig[u + k], mejor[u] + pieza[k])
+        }
+      }
+      mejor = sig
+    }
+    return mejor
+  }
+  const indice = Array.from({ length: maxUnidades + 1 }, (_, k) => nHastaStop(k, stopN, paso))
+  const porGrupo = grupos.filter(n => n > 0).map(n => repartir(new Array(n).fill(indice), Math.min(maxGrupo, maxSentido)))
+  const total = repartir(porGrupo, maxSentido)
+  const posibles = total.reduce((u, v, k) => (v > -Infinity ? k : u), 0)
+  return { n: Math.max(0, ...total.filter(Number.isFinite)), unidades: posibles }
+}
+
 // Las órdenes stop para la próxima sesión de cada índice, a partir del estado al último
 // cierre del backtest, con el tamaño de la unidad para `capital`
 export function ordenesManana(res, capital) {

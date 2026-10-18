@@ -2,7 +2,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { prepararMercado, backtestTortugas, ordenesManana } from '../src/tortugas.js'
+import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops } from '../src/tortugas.js'
+
+test('lo que pierde una pirámide si salta su stop, que sube 2 N por debajo de la última unidad', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStop(k)), [2, 3.5, 4.5, 5, 5, 4.5])
+  assert.equal(nHastaStop(0), 0)
+  assert.equal(nHastaStop(4, 2, 1), 2)                      // añadiendo cada 1 N: 2 + 1 + 0 − 1
+})
+
+test('lo peor si saltan todos los stops: el peor reparto de las unidades entre índices y grupos', () => {
+  // 8 índices (Asia 2, Europa 2, EE. UU. 4), 6 por índice, 30 por sentido y grupos sin tope:
+  // 8 × 3 unidades (4,5 N) y 6 cuartas unidades (+0,5 N cada una) = 39 N, no 30 × 2 = 60
+  assert.deepEqual(peorHastaStops({ grupos: [2, 2, 4], maxUnidades: 6, maxGrupo: 30, maxSentido: 30 }), { n: 39, unidades: 30 })
+  // con 9 por grupo solo caben 27 unidades; lo peor: Asia y Europa 4 + 4 (10 N cada una) y
+  // EE. UU. 3 + 2 + 2 + 2 (15 N)
+  assert.deepEqual(peorHastaStops({ grupos: [2, 2, 4], maxUnidades: 6, maxGrupo: 9, maxSentido: 30 }), { n: 35, unidades: 27 })
+  // una sola unidad por índice: 2 N cada una
+  assert.deepEqual(peorHastaStops({ grupos: [3], maxUnidades: 1, maxGrupo: 10, maxSentido: 10 }), { n: 6, unidades: 3 })
+})
 
 const INFO = { id: 'X', nombre: 'X', grupo: 'G', zona: 'UTC', cierre: '16:00', desde: '1900-01-01', spread: 0, dividendo: 0 }
 // sin costes ni reducción por drawdown: las cuentas salen redondas

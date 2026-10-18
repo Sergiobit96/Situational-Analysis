@@ -3,7 +3,7 @@ import { createChart, AreaSeries, HistogramSeries, PriceScaleMode, CrosshairMode
 import { madridOffsetAt } from './timezone'
 import {
   INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, backtestTortugas,
-  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, porUnidades, ordenesManana,
+  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, porUnidades, ordenesManana, peorHastaStops,
 } from './tortugas'
 import './Tortugas.css'
 
@@ -269,6 +269,12 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   }
 
   const ultimoDato = mercados.length ? mercados.map(x => x.fechas.at(-1)).sort().at(-1) : null
+  // Lo que se pierde: 1 N en contra de todas las unidades, y hasta los stops (a 2 N de la última
+  // unidad de cada pirámide), con el peor reparto de las unidades que caben
+  const peor = peorHastaStops({
+    grupos: Object.values(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).reduce((n, i) => ({ ...n, [i.grupo]: (n[i.grupo] ?? 0) + 1 }), {})),
+    maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
+  })
 
   return (
     <div className="estrategia-panel tortugas">
@@ -299,7 +305,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Riesgo por N y unidad
             <span className="filtro-valor">
-              1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad; con {ajustes.maxSentido} unidades a la vez, {nf(ajustes.riesgo * ajustes.maxSentido, 1)} %
+              1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad ({nf(ajustes.riesgo * peor.unidades, 1)} % con las {peor.unidades} unidades que caben a la vez).
+              Hasta el stop, a {nf(CONFIG_TORTUGAS.stopN)} N, una unidad recién entrada pierde {nf(ajustes.riesgo * CONFIG_TORTUGAS.stopN, 2)} %;
+              como el stop sube con cada añadido, lo peor si saltan a la vez todos los stops es un {nf(ajustes.riesgo * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
             </span>
           </label>
           <div className="filtro-presets">

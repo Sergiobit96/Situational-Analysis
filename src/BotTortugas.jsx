@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
+import { peorHastaStops } from './tortugas'
 import './Bot.css'
 
 // Pestaña Bot Tortugas: el bot de las tortugas que opera en la demo de IG
@@ -112,6 +113,14 @@ export default function BotTortugas() {
   const saldo = mercados.find(m => m.plan?.saldo)?.plan.saldo ?? null
   const nominal = abiertas.reduce((s, p) => s + p.unidades.filter(u => !u.salida).reduce((x, u) => x + u.tamano * u.entrada, 0) * p.valorPunto * p.cambioAEur, 0)
   const sistemasCartera = reglas.sistemas.filter(s => config.sistemas.includes(s) || abiertas.some(p => p.sistema === s))
+  // Lo que se perdería ahora si saltaran todos los stops, y lo peor que permiten los límites: en
+  // cada sistema, el peor reparto de las unidades que caben (el stop de una pirámide sube con
+  // cada añadido); con los sistemas llenos, cada uno con su parte del riesgo
+  const alStop = abiertas.reduce((s, p) => s + (cuentasDe(p, null).alStop ?? 0), 0)
+  const peor = peorHastaStops({
+    grupos: Object.values(mercados.filter(m => m.encendido).reduce((n, m) => ({ ...n, [m.grupo]: (n[m.grupo] ?? 0) + 1 }), {})),
+    maxUnidades: config.maxUnidades, maxGrupo: config.maxGrupo, maxSentido: config.maxSentido, stopN: reglas.stopN, paso: reglas.pasoN,
+  })
 
   return (
     <div className="bot-page">
@@ -160,6 +169,8 @@ export default function BotTortugas() {
               valor={`${unidades(p => p.sistema === s && p.lado === lado)} de ${config.maxSentido}`}
               sub={grupos.map(g => `${g} ${unidades(p => p.sistema === s && p.grupo === g && p.lado === lado)}/${config.maxGrupo}`).join(' · ')} />
           )))}
+          <Tile label="Si saltan los stops" valor={abiertas.length ? eur(alStop) : '—'} tonoValor={tono(alStop)}
+            sub={`${saldo && abiertas.length ? `${num(100 * alStop / saldo, 1)}% del saldo · ` : ''}lo peor con estos límites: −${num(peor.n * config.riesgoPct, 1)}%`} />
           <Tile label="Nominal abierto" valor={`${num(nominal / 1000, 1)} mil €`}
             sub={saldo ? `${num(nominal / saldo, 1)} veces el saldo (máximo ${reglas.apalancamiento}, entre los dos sistemas)` : ''} />
           <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'}
@@ -253,7 +264,9 @@ export default function BotTortugas() {
         <p className="bot-nota">
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
           Cada uno tiene la mitad del capital y sus propias posiciones y límites, así que con los dos llenos se arriesga lo mismo que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
-          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que cada unidad arriesga el doble.
+          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
+          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas costaría un {num(peor.unidades * config.riesgoPct, 1)}% del saldo, y si saltaran a la vez todos los stops, hasta un {num(peor.n * config.riesgoPct, 1)}%
+          (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.

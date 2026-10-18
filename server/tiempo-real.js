@@ -15,6 +15,7 @@ const series  = new Map()         // `${fuente}|${ticker}` → { velas, actualiz
 const oyentes = new Set()         // { fuente, ticker, enviar }
 
 export function registrarVela(fuente, ticker, vela) {
+  if (!Number.isFinite(vela?.time)) return
   const clave = `${fuente}|${ticker}`
   let s = series.get(clave)
   if (!s) series.set(clave, s = { velas: [], actualizado: 0 })
@@ -32,7 +33,11 @@ export function registrarVela(fuente, ticker, vela) {
   if (velas.length > MAX_VELAS) velas.splice(0, velas.length - MAX_VELAS)
   s.actualizado = Date.now()
 
-  for (const o of oyentes) if (o.fuente === fuente && o.ticker === ticker) o.enviar([vela])
+  // un oyente que falla (el bot, un gráfico) no deja sin la vela a los demás
+  for (const o of oyentes) {
+    if (o.fuente !== fuente || o.ticker !== ticker) continue
+    try { o.enviar([vela]) } catch { /* lo suyo es suyo */ }
+  }
 }
 
 export function ultimasVelas(fuente, ticker, n = AL_CONECTAR) {
@@ -63,13 +68,20 @@ export function suscribir(res, fuente, ticker) {
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders()
 
-  const enviar = velas => res.write(`event: velas\ndata: ${JSON.stringify(velas)}\n\n`)
+  // El servidor vive 24 h con el bot dentro: escribir a un gráfico que acaba de cerrarse no
+  // puede tumbarlo. Se comprueba antes y cualquier error de la conexión se descarta.
+  res.on('error', () => {})
+  const escribir = texto => {
+    if (res.destroyed || res.writableEnded) return
+    try { res.write(texto) } catch { /* la conexión se cerró a medias */ }
+  }
+  const enviar = velas => escribir(`event: velas\ndata: ${JSON.stringify(velas)}\n\n`)
   const oyente = { fuente, ticker, enviar }
   oyentes.add(oyente)
   enviar(ultimasVelas(fuente, ticker))
 
   // un comentario cada 20 s: sin él, algún proxy da la conexión por muerta en los ratos sin precios
-  const latido = setInterval(() => res.write(': latido\n\n'), 20_000)
+  const latido = setInterval(() => escribir(': latido\n\n'), 20_000)
   return () => {
     clearInterval(latido)
     oyentes.delete(oyente)

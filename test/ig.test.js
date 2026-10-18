@@ -224,3 +224,20 @@ test('los precios que IG da en centavos se pasan a dólares', async () => {
   }
   assert.equal(escalar(v, epics['^GDAXI'].escala), v)   // los índices van tal cual
 })
+
+test('escribir a un gráfico que ya se cerró no tumba el servidor', async () => {
+  const { suscribir, registrarVela: registrar } = await import('../server/tiempo-real.js')
+  const escritos = []
+  const res = {
+    destroyed: false, writableEnded: false, oyentes: {},
+    setHeader() {}, flushHeaders() {}, on(ev, fn) { this.oyentes[ev] = fn },
+    write(t) { if (this.destroyed) throw new Error('write after end'); escritos.push(t) },
+  }
+  const desconectar = suscribir(res, 'ig', 'PRUEBA')
+  registrar('ig', 'PRUEBA', { time: 60, open: 1, high: 2, low: 0, close: 1 })
+  res.destroyed = true                                   // el navegador cerró el gráfico
+  assert.doesNotThrow(() => registrar('ig', 'PRUEBA', { time: 120, open: 1, high: 2, low: 0, close: 1 }))
+  assert.equal(typeof res.oyentes.error, 'function')     // los errores de la conexión se descartan
+  assert.equal(escritos.filter(t => t.startsWith('event: velas')).length, 2)   // la inicial y la primera
+  desconectar()
+})

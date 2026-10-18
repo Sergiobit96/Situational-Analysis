@@ -1,0 +1,94 @@
+/* ═══════════════════════════════════════
+   PESTAÑA BOT (aparte de App.css para no pisarse con otros cambios)
+═══════════════════════════════════════ */
+.bot-page { display: flex; flex-direction: column; gap: 1.25rem; }
+
+.bot-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.bot-interruptor { font-size: 1.1rem; font-weight: 650; color: var(--muted); }
+.bot-interruptor.encendido { color: var(--green); }
+.bot-botones { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.bot-peligro:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+
+.bot-bloque { display: flex; flex-direction: column; gap: 0.75rem; }
+.bot-bloque h3 { font-size: 0.95rem; font-weight: 650; }
+
+.bot-nota { font-size: 0.8rem; color: var(--muted); }
+.bot-error { font-size: 0.85rem; color: var(--red); }
+.bot-tile-valor { font-size: 1.05rem; }
+.bot-pos { color: var(--green); }
+.bot-neg { color: var(--red); }
+
+.bot-eventos {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 16rem;
+  overflow: auto;
+}
+.bot-hora { color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 0.6rem; }
+
+.bot-tabla td.bot-nota-celda { text-align: left; color: var(--muted); font-family: var(--font-sans); white-space: normal; }
+
+.bot-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.75rem;
+}
+.bot-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.75rem; color: var(--muted); }
+.bot-form select,
+.bot-form input {
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.bot-bloque > .diario-boton { align-self: flex-start; }
+
+.bot-aviso { font-size: 0.8rem; color: #f59e0b; margin-top: 0.3rem; }
+.bot-select { padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.8rem; }
+
+.bot-sesiones { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.5rem; }
+.bot-sesion {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.55rem;
+  align-items: center;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.bot-sesion input { grid-row: span 2; }
+.bot-sesion.encendida { border-color: var(--accent); }
+.bot-sesion-nombre { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+.bot-sesion-hora { font-size: 0.72rem; color: var(--muted); }
+
+.bot-hoy { display: flex; flex-direction: column; gap: 0.6rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); }
+.bot-hoy:last-child { border-bottom: none; }
+.bot-hoy-cab { display: flex; align-items: baseline; gap: 0.75rem; }
+.bot-hoy-cab strong { font-size: 0.95rem; }
+
+.bot-tabla td.bot-celda-texto { font-family: var(--font-sans); }
+.bot-clave form { display: flex; gap: 0.5rem; }
+.bot-clave input { padding: 0.4rem 0.55rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }

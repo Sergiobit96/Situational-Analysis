@@ -8,6 +8,10 @@ import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
 } from './velas-grafico.js'
 import { limpiarDibujos, claveValida } from './dibujos.js'
+import { crearIG, IG_RESOLUCION } from './ig.js'
+import { suscribir, resumenTiempoReal } from './tiempo-real.js'
+import { crearBot } from './bot-srs.js'
+import { crearClaveBot } from './clave-bot.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import Anthropic from '@anthropic-ai/sdk'
@@ -97,6 +101,11 @@ const PORT = process.env.PORT || 3001
 app.use(cors())
 // Límite ampliado: /api/export-ppt recibe un PNG en base64 por cada coincidencia exportada
 app.use(express.json({ limit: '50mb' }))
+
+// Todo lo del bot y de IG pide la clave del bot en producción (ver server/clave-bot.js)
+const claveBot = crearClaveBot({ token: process.env.BOT_TOKEN || '', produccion: process.env.NODE_ENV === 'production' })
+const claveBotValida = claveBot.valida
+app.use(['/api/bot', '/api/ig', '/api/tiempo-real'], claveBot.middleware)
 
 app.get('/healthz', (_req, res) => res.json({ status: 'ok' }))
 
@@ -2347,6 +2356,25 @@ app.get('/api/grafico/velas', async (req, res) => {
       return res.json({ ticker, tf, fuente: 'CSV DAX cash 5m', velas, hayMas })
     }
 
+    if (fuente === 'ig') {
+      // el histórico de IG gasta su cupo semanal: en producción, solo con la clave del bot
+      if (!claveBotValida(req)) return res.status(401).json({ error: 'Clave del bot incorrecta', necesitaClave: true })
+      if (!ig) return res.status(404).json({ error: `IG no está configurado: faltan ${IG_FALTAN.join(', ')} en server/.env` })
+      const { diasPagina } = IG_RESOLUCION[tf]
+      let fin = hasta
+      for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
+        const inicio = Math.floor(fin - diasPagina * 86400)
+        const velas = await ig.velasEntre(ticker, tf, inicio, fin)
+        if (velas.length > 0) {
+          const { cupo } = ig.estado()
+          const aviso = cupo && cupo.remainingAllowance < 1000 ? `quedan ${cupo.remainingAllowance} puntos de histórico de IG esta semana` : null
+          return res.json({ ticker, tf, fuente: `IG ${IG_RESOLUCION[tf].res}`, velas, hayMas: true, aviso, directo: true })
+        }
+        fin = inicio
+      }
+      return res.json({ ticker, tf, fuente: `IG ${IG_RESOLUCION[tf].res}`, velas: [], hayMas: false, directo: true })
+    }
+
     if (fuente === 'yahoo') {
       // los índices son el contado; oro, plata y petróleo, el futuro (Yahoo no da el spot)
       const simbolo  = DUKA_TO_YF_FALLBACK[YF_TO_DUKASCOPY[ticker]] ?? ticker
@@ -2387,7 +2415,7 @@ app.get('/api/grafico/velas', async (req, res) => {
     }
     res.json({ ticker, tf, fuente: `Dukascopy ${conf.duka}`, velas: [], hayMas: false })
   } catch (err) {
-    const esDuka = fuente !== 'csv' && fuente !== 'yahoo'
+    const esDuka = fuente === 'duka'
     if (esDuka) marcarDukaCaido(err)
     console.error('[grafico/velas]', errDetalle(err))
     const error = esDuka && dukascopyLimitando()
@@ -2425,6 +2453,126 @@ async function obtenerRangoYahoo(simbolo, intervalo, desde, hasta) {
   toCache(clave, velas)
   return velas
 }
+
+// ── IG: precios en tiempo real (ver server/ig.js) ──
+// Arranca solo si están las credenciales en server/.env; sin ellas la fuente "IG" del
+// gráfico dice qué falta. Al arrancar entra, busca los mercados y se suscribe a sus velas
+// de 1 min, que server/tiempo-real.js reparte a los gráficos abiertos.
+const IG_FALTAN = ['IG_API_KEY', 'IG_USUARIO', 'IG_PASSWORD'].filter(k => !process.env[k])
+const ig = IG_FALTAN.length === 0
+  ? crearIG({
+      apiKey:     process.env.IG_API_KEY,
+      usuario:    process.env.IG_USUARIO,
+      password:   process.env.IG_PASSWORD,
+      entorno:    process.env.IG_ENTORNO === 'real' ? 'real' : 'demo',
+      cuentaCfd:  process.env.IG_CUENTA || null,
+      epicsFijos: (() => { try { return JSON.parse(process.env.IG_EPICS || '{}') } catch { return {} } })(),
+      cacheDir:   join(DISK_CACHE_DIR, 'ig'),
+    })
+  : null
+ig?.iniciar()
+
+app.get('/api/ig/estado', (req, res) => {
+  if (!ig) return res.json({ configurado: false, faltan: IG_FALTAN })
+  res.json({ ...ig.estado(), directo: resumenTiempoReal().filter(s => s.fuente === 'ig') })
+})
+
+app.get('/api/ig/buscar', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.buscar(String(req.query.q ?? ''))) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/ig/mercado', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.mercado(String(req.query.epic ?? ''))) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/ig/actividad', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.actividad(Date.now() - Number(req.query.minutos ?? 60) * 60_000)) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/ig/cuentas', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.cuentas()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/ig/listas', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.listas()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/ig/rebuscar', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.rebuscarEpics()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/ig/navegar', async (req, res) => {
+  if (!ig) return res.status(404).json({ error: 'IG no está configurado' })
+  try { res.json(await ig.navegar(req.query.nodo ? String(req.query.nodo) : null)) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Velas de 1 min en directo para un gráfico abierto (SSE). Al conectarse recibe las últimas
+// cinco, para cubrir lo que haya pasado entre su histórico y este momento.
+app.get('/api/tiempo-real/stream', (req, res) => {
+  const { fuente, ticker } = req.query
+  if (!fuente || !ticker) return res.status(400).json({ error: 'fuente y ticker requeridos' })
+  const desconectar = suscribir(res, String(fuente), String(ticker))
+  req.on('close', desconectar)
+})
+
+// ── Bot SRS en la demo de IG (ver server/bot-srs.js) ──
+// Existe con IG configurado en la demo, pero solo OPERA donde BOT_OPERA=1: en la nube
+// (Railway) sí, y en local no, salvo que se pida. Dos bots con la misma cuenta entrarían dos
+// veces en cada rotura. El registro va a BOT_SRS; si no se dice, en local junto al diario en
+// Drive, y en producción en el volumen /data si existe (sin volumen, en /tmp, que se pierde
+// en cada despliegue: el bot recupera sus posiciones abiertas desde IG, pero no el historial).
+const BOT_OPERA = process.env.BOT_OPERA === '1'
+const BOT_PATH = process.env.BOT_SRS || (process.env.NODE_ENV === 'production'
+  ? join(existsSync('/data') ? '/data' : DISK_CACHE_DIR, 'bot-srs.json')
+  : join(PHOTOS_ROOT, 'Bot SRS.json'))
+const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH }) : null
+if (bot && BOT_OPERA) bot.arrancar()
+if (bot) console.log(`[bot] registro en ${BOT_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+
+const sinBot = res => res.status(404).json({ error: ig ? 'El bot solo funciona con IG en la demo (IG_ENTORNO=demo)' : 'IG no está configurado' })
+
+app.get('/api/bot', (req, res) => {
+  if (!bot) return sinBot(res)
+  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
+})
+
+app.put('/api/bot/config', (req, res) => {
+  if (!bot) return sinBot(res)
+  try { res.json(bot.cambiarConfig(req.body ?? {})) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+
+app.post('/api/bot/parar', async (req, res) => {
+  if (!bot) return sinBot(res)
+  try { res.json(await bot.pararYCerrar()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Las posiciones abiertas de la cuenta demo (las del bot y cualquier otra)
+app.get('/api/bot/posiciones', async (req, res) => {
+  if (!bot) return sinBot(res)
+  try { res.json(await ig.operar.posiciones()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/bot/ensayo', async (req, res) => {
+  if (!bot) return sinBot(res)
+  try { res.json({ pasos: await bot.ensayo(req.body?.ticker ?? '^GDAXI') }) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
 
 // ── Dibujos de la pestaña Gráfico (solo local) ──
 // Un JSON junto al diario y los comentarios, con una lista de dibujos por instrumento.

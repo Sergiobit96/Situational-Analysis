@@ -214,8 +214,14 @@ export default function BotTortugas() {
           <label>Sistemas
             <select value={editando.sistemas.join(',')} onChange={e => cambiar('sistemas', e.target.value.split(',').map(Number))}>
               <option value="1,2">Los dos a la vez, con la mitad del capital cada uno</option>
-              <option value="1">Solo el 1: entra en 20 (55 con el filtro), sale en 10</option>
+              <option value="1">Solo el 1: entra en 20, sale en 10</option>
               <option value="2">Solo el 2: entra en 55, sale en 20</option>
+            </select>
+          </label>
+          <label>Filtro del Sistema 1
+            <select value={editando.filtroS1 ? 'si' : 'no'} onChange={e => cambiar('filtroS1', e.target.value === 'si')}>
+              <option value="no">No: entra en toda ruptura de 20</option>
+              <option value="si">Sí: si la anterior habría ganado, espera a la de 55</option>
             </select>
           </label>
           <label>Lados
@@ -245,17 +251,17 @@ export default function BotTortugas() {
           </label>
         </div>
         <p className="bot-nota">
-          Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones (o 55, si la ruptura anterior habría ganado) y sale al romper 10; el 2 entra en 55 y sale en 20.
+          Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
           Cada uno tiene la mitad del capital y sus propias posiciones y límites, así que con los dos llenos se arriesga lo mismo que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
           Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que cada unidad arriesga el doble.
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
-          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, lados o riesgo rehace los planes de todos los índices.
+          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, filtro, lados o riesgo rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { sistemas, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form
-          guardarConfig({ sistemas, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD }).then(() => setForm(null))
+          const { sistemas, filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form
+          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
     </div>

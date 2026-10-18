@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, crearBotTortugas, capitalNominal, CONFIG_TORTUGAS_BOT } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, CONFIG_TORTUGAS_BOT } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -66,6 +66,20 @@ test('los niveles del bot son los del backtest: N, canales y filtro del Sistema 
     }
   }
   assert.equal(nivelesTortugas(serie(50)), null)
+})
+
+test('el Sistema 1 entra en toda ruptura de 20: el filtro de la anterior ganadora va apagado', () => {
+  assert.equal(CONFIG_TORTUGAS_BOT.filtroS1, false)
+  const nv = { gano: true, alto: { 10: 110, 20: 120, 55: 150 }, bajo: { 10: 90, 20: 80, 55: 50 } }
+  assert.equal(nivelesSistema(nv, 1).entrada.largo.nivel, 120)
+  assert.equal(nivelesSistema(nv, 1).filtro, false)
+  // con el filtro encendido, la anterior ganadora lo manda a la de 55
+  assert.equal(nivelesSistema(nv, 1, true).entrada.largo.nivel, 150)
+  assert.equal(nivelesSistema(nv, 1, true).filtro, true)
+  assert.equal(nivelesSistema({ ...nv, gano: false }, 1, true).entrada.largo.nivel, 120)
+  // al Sistema 2 no le afecta
+  assert.equal(nivelesSistema(nv, 2).entrada.largo.nivel, 150)
+  assert.equal(nivelesSistema(nv, 2, true).salida.largo, 80)
 })
 
 test('el capital de la unidad baja un 20% por cada 10% de caída desde el máximo', () => {

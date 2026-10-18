@@ -3,11 +3,12 @@
 // los mismos índices y horas que el bot SRS (SESIONES_BOT), pero con las posiciones abiertas
 // de un día para otro:
 //   · al empezar cada sesión de un índice, con sus velas diarias de Yahoo hasta la anterior
-//     (las mismas que usa el backtest), saca la N (ATR de Wilder de 20), los canales y el
-//     filtro del Sistema 1 (server/tortugas-niveles.js);
+//     (las mismas que usa el backtest), saca la N (ATR de Wilder de 20) y los canales
+//     (server/tortugas-niveles.js);
 //   · juega los dos sistemas a la vez, como las tortugas: el Sistema 1 entra al romper el
-//     máximo de 20 sesiones (o el de 55, si la ruptura anterior habría ganado) y sale al romper
-//     el mínimo de 10; el Sistema 2 entra en la de 55 y sale en la de 20. Cada uno lleva sus
+//     máximo de 20 sesiones y sale al romper el mínimo de 10; el Sistema 2 entra en la de 55 y
+//     sale en la de 20. El filtro del Sistema 1 de las tortugas (saltarse la ruptura si la
+//     anterior habría ganado y esperar a la de 55) está, pero apagado: el usuario lo quiso así. Cada uno lleva sus
 //     posiciones (un índice puede tener una de cada), con la mitad del capital: así, con los
 //     dos llenos, se arriesga lo mismo que con uno solo y todo el capital. Por defecto, solo
 //     largos, como el backtest;
@@ -47,6 +48,7 @@ export const CONFIG_TORTUGAS_BOT = {
   activo:       false,
   instrumentos: Object.fromEntries(Object.keys(GRUPOS_TORTUGAS).map(t => [t, true])),
   sistemas:     [1, 2],     // los que juega, a la vez y con el capital a partes iguales
+  filtroS1:     false,      // true: el Sistema 1 se salta la ruptura de 20 si la anterior habría ganado y entra en la de 55
   lados:        'largos',   // largos | ambos | cortos
   riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo, repartido entre los sistemas
                             // (el backtest usa 0,2 con 8 índices; las tortugas, 1)
@@ -97,12 +99,14 @@ export function capitalNominal(saldo, pico, reduccion = true) {
 // Dónde entra la siguiente unidad: ½ N a favor desde el último relleno
 export const siguienteAnadido = pos => pos.unidades.at(-1).entrada + dir(pos.lado) * PASO_N * pos.n0
 
-// Los niveles de un sistema con la N y los canales del día
-export function nivelesSistema(nv, sistema) {
-  const k = sistema === 2 || nv.gano ? 55 : 20
+// Los niveles de un sistema con la N y los canales del día. Con `filtroS1`, el Sistema 1
+// espera a la ruptura de 55 si la anterior de 20 habría ganado
+export function nivelesSistema(nv, sistema, filtroS1 = false) {
+  const filtro = sistema === 1 && filtroS1 && nv.gano
+  const k = sistema === 2 || filtro ? 55 : 20
   const kSalida = sistema === 1 ? 10 : 20
   return {
-    k, kSalida, filtro: sistema === 1 && nv.gano,
+    k, kSalida, filtro,
     entrada: { largo: { nivel: nv.alto[k], k }, corto: { nivel: nv.bajo[k], k } },
     salida: { largo: nv.bajo[kSalida], corto: nv.alto[kSalida] },
   }
@@ -162,10 +166,11 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
 
 const describirSistemas = v => (v.length === 2
   ? 'Sistemas 1 y 2 a la vez, con la mitad del capital cada uno'
-  : `Solo el Sistema ${v[0]}: ${v[0] === 1 ? 'entra en 20 sesiones (55 con el filtro) y sale en 10' : 'entra en 55 sesiones y sale en 20'}`)
+  : `Solo el Sistema ${v[0]}: ${v[0] === 1 ? 'entra en 20 sesiones y sale en 10' : 'entra en 55 sesiones y sale en 20'}`)
 const DESCRIBIR = {
   activo:      v => (v ? 'Bot de las tortugas encendido' : 'Bot de las tortugas apagado'),
   sistemas:    describirSistemas,
+  filtroS1:    v => (v ? 'Filtro del Sistema 1: si la ruptura anterior habría ganado, espera a la de 55' : 'Sistema 1 sin filtro: entra en toda ruptura de 20'),
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
   riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo, repartido entre los sistemas`,
   maxUnidades: v => `Hasta ${v} unidades por índice y sistema`,
@@ -268,7 +273,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
     Object.assign(plan, {
       ultimoDia: nv.ultimoDia, cierre: nv.cierre, n: nv.n,
-      sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s)])),
+      sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s, cfg.filtroS1)])),
     })
 
     // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N,
@@ -761,10 +766,11 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if ('maxGrupo' in cambios) entero('maxGrupo', 1, 30, 'Unidades por grupo: de 1 a 30')
     if ('maxSentido' in cambios) entero('maxSentido', 1, 50, 'Unidades por sentido: de 1 a 50')
     if ('reduccionDD' in cambios) c.reduccionDD = !!cambios.reduccionDD
+    if ('filtroS1' in cambios) c.filtroS1 = !!cambios.filtroS1
     const antes = datos.config
     datos.config = c
     // lo que cambia los niveles o la unidad obliga a rehacer los planes
-    if (['sistemas', 'lados', 'riesgoPct', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
+    if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
     guardar()
     const lineas = Object.entries(DESCRIBIR).filter(([k]) => !igual(antes[k], c[k])).map(([k, describir]) => describir(c[k]))
     for (const t of Object.keys(GRUPOS_TORTUGAS)) {

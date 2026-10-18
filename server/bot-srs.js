@@ -75,9 +75,29 @@ const MARGEN_MAX = 0.4           // parte del disponible que puede ocupar el mar
 const PREFIJO = 'SRS-'           // referencia de las órdenes del bot
 export const MAX_UNIDADES = 5    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida
 const MAX_PIERNAS = 2            // flip the switch: la entrada y una única vuelta, como el backtest
+const MIN_EN_VELA = 12           // de las 15 velas de 1 min, las que tiene que haber para dar por buena una de 15 hecha con el directo
+const ESPERA_HISTORICO_S = 300   // si el histórico de IG falla (sin cupo semanal, p. ej.), no se le vuelve a pedir hasta pasado este rato
+const INTENTOS_VELAS = 3         // al cierre, las veces que se pide el histórico antes de guardar lo que haya del directo
 
 export const minutoMadrid = ts => Math.floor(((ts + offsetMadrid(ts)) % 86400 + 86400) % 86400 / 60)
 const horaMadrid = ts => new Date((ts + offsetMadrid(ts)) * 1000).toISOString().slice(11, 16)
+
+// Velas de `minutos` hechas con las de 1 min del directo entre `desde` y `hasta`, alineadas a
+// `desde`, con cuántas de 1 min lleva cada una (`n`). Son las mismas que da el histórico de IG
+// (las dos a precio medio) y no gastan su cupo semanal, que se agota con el Gráfico.
+export function agruparDirecto(velas1, desde, hasta, minutos = MINUTOS_VELA) {
+  const tramo = minutos * 60
+  const porTramo = new Map()
+  for (const v of velas1) {
+    if (v.time < desde || v.time >= hasta) continue
+    const t = desde + Math.floor((v.time - desde) / tramo) * tramo
+    const a = porTramo.get(t)
+    porTramo.set(t, a
+      ? { ...a, high: Math.max(a.high, v.high), low: Math.min(a.low, v.low), close: v.close, n: a.n + 1 }
+      : { time: t, open: v.open, high: v.high, low: v.low, close: v.close, n: 1 })
+  }
+  return [...porTramo.values()].sort((a, b) => a.time - b.time)
+}
 
 // La sesión de un instrumento en curso en `t` (o la de ese día, si ya cerró), en su bolsa.
 // null en fin de semana.
@@ -134,7 +154,7 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
   if (ahora >= ses.cierra) {
     if (abierta) return { accion: 'cerrar', motivo: 'cierre' }
     if (dia?.estado === 'esperando-vuelta') return { accion: 'sin-vuelta' }
-    return dia?.bracket && !dia.velas ? { accion: 'velas' } : { accion: 'nada' }
+    return dia?.bracket && !dia.velas && !(dia.esperaVelas > ahora) ? { accion: 'velas' } : { accion: 'nada' }
   }
   // el precio de ahora: la última vela de 1 min, si es de hace nada
   const ultima = velas.at(-1)
@@ -174,7 +194,8 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
     return { accion: 'nada' }
   }
   if (ahora < ses.finBracket) return { accion: 'nada' }
-  if (!dia.bracket) return { accion: 'bracket' }
+  // sin bracket, o con él pero sin plan porque falló algo a medias: se intenta (otra vez) al rato
+  if (!dia.bracket || (!dia.plan && dia.estado === 'esperando-bracket')) return dia.esperaBracket > ahora ? { accion: 'nada' } : { accion: 'bracket' }
 
   const { high, low } = dia.bracket
   for (const v of velas.filter(x => x.time >= ses.finBracket)) {
@@ -285,27 +306,78 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   }
   const referenciaNueva = dia => `${PREFIJO}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
 
+  // ── Las velas: primero las del directo, y el histórico de IG solo si faltan ──
+  const directo = ticker => ultimasVelas('ig', ticker, 3 * 1440)
+  // El histórico de IG gasta un cupo semanal: si falla, no se le vuelve a pedir en un rato
+  // (sin esto, una sesión sin cupo lo pediría en cada paso, cada 5 s)
+  let historicoHasta = 0
+  async function historico(ticker, desde, hasta) {
+    if (ahora() < historicoHasta) throw new Error('el histórico de IG ha fallado hace poco; se vuelve a pedir en unos minutos')
+    try { return await ig.velasEntre(ticker, 'm15', desde, hasta) } catch (err) {
+      historicoHasta = ahora() + ESPERA_HISTORICO_S
+      throw err
+    }
+  }
+
   // ── Las acciones ──
 
-  // El bracket y el plan del día: qué contrato, cuántos y si cabe en el margen
+  // El bracket y el plan del día. Si algo falla a medias (el saldo o la ficha del mercado), la
+  // sesión se queda esperando con el bracket y sin plan, sin poder entrar, y el plan se vuelve
+  // a intentar al rato
   async function calcularBracket(dia, ses) {
-    const cfg = dia.config
-    const velas = await ig.velasEntre(dia.ticker, 'm15', ses.velaBracket, ses.finBracket)
-    const v = velas.find(x => x.time === ses.velaBracket)
-    if (!v) { dia.estado = 'sin-operar'; apuntar(dia, 'IG no da la vela del bracket (¿festivo?): hoy no se opera'); return }
-    const rango = v.high - v.low
-    dia.bracket = { high: v.high, low: v.low, rango, vela: ses.velaBracket }
-    const pct = rango / v.close * 100
-    apuntar(dia, `Bracket ${v.low.toFixed(1)} – ${v.high.toFixed(1)} (${rango.toFixed(1)} puntos, ${pct.toFixed(2)}%)`)
-    if (!(rango > 0) || pct > cfg.rangoMaxPct) {
-      dia.estado = 'sin-operar'
-      apuntar(dia, `Rango fuera del límite (${cfg.rangoMaxPct}% del precio): hoy no se opera`)
-      return
+    try { await bracketYPlan(dia, ses) } catch (err) {
+      if (!dia.plan && dia.estado === 'esperando-bracket') dia.esperaBracket = ahora() + 30
+      throw err
     }
+  }
+
+  // El bracket y el plan del día: qué contrato, cuántos y si cabe en el margen
+  async function bracketYPlan(dia, ses) {
+    const cfg = dia.config
+    let v
+    if (dia.bracket) {
+      // ya estaba: solo falta el plan, que falló la otra vez
+      v = { high: dia.bracket.high, low: dia.bracket.low, close: dia.cierreBracket ?? dia.bracket.high }
+    } else {
+      // la vela del bracket, hecha con el directo si lo tiene casi entero (el servidor estaba en marcha)
+      v = agruparDirecto(directo(dia.ticker), ses.velaBracket, ses.finBracket).find(x => x.time === ses.velaBracket && x.n >= MIN_EN_VELA)
+      if (!v) {
+        let velas
+        try { velas = await historico(dia.ticker, ses.velaBracket, ses.finBracket) } catch (err) {
+          dia.esperaBracket = ahora() + 60
+          apuntar(dia, `Sin la vela del bracket: el directo no la tiene entera y el histórico de IG falla (${err.message}). Se sigue intentando`)
+          return
+        }
+        v = velas.find(x => x.time === ses.velaBracket)
+      }
+      if (!v) { dia.estado = 'sin-operar'; apuntar(dia, 'IG no da la vela del bracket (¿festivo?): hoy no se opera'); return }
+      const rango = v.high - v.low
+      dia.bracket = { high: v.high, low: v.low, rango, vela: ses.velaBracket }
+      dia.cierreBracket = v.close
+      const pct = rango / v.close * 100
+      apuntar(dia, `Bracket ${v.low.toFixed(1)} – ${v.high.toFixed(1)} (${rango.toFixed(1)} puntos, ${pct.toFixed(2)}%)`)
+      if (!(rango > 0) || pct > cfg.rangoMaxPct) {
+        dia.estado = 'sin-operar'
+        apuntar(dia, `Rango fuera del límite (${cfg.rangoMaxPct}% del precio): hoy no se opera`)
+        return
+      }
+    }
+    const { rango } = dia.bracket
 
     // si el bot arranca tarde, la rotura pudo pasar con él parado: no se entra tarde
     if (ahora() > ses.finBracket + 120) {
-      const despues = await ig.velasEntre(dia.ticker, 'm15', ses.finBracket, ahora())
+      // si el directo estaba vivo al acabar el bracket (tiene velas de sus últimos minutos), con
+      // él; si no, con el histórico de IG, y sin ninguno de los dos no se sabe si ya rompió: no se entra
+      const d = directo(dia.ticker)
+      let despues
+      if (d.some(x => x.time >= ses.finBracket - 300 && x.time < ses.finBracket)) despues = d.filter(x => x.time >= ses.finBracket)
+      else {
+        try { despues = await historico(dia.ticker, ses.finBracket, ahora()) } catch (err) {
+          dia.estado = 'sin-operar'
+          apuntar(dia, `El bot arrancó con la sesión empezada y sin el histórico de IG (${err.message}) no se sabe si ya rompió: hoy no se entra`)
+          return
+        }
+      }
       const rota = despues.find(x => x.high > v.high || (cfg.modo !== 'largo' && x.low < v.low))
       if (rota) {
         dia.estado = 'sin-operar'
@@ -707,11 +779,23 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     apuntar(dia, 'Precio de salida corregido con la actividad de IG', { aviso: false })
   }
 
-  // Las velas de 15 min de la sesión, para comparar con el backtest en la pestaña
+  // Las velas de 15 min de la sesión, para comparar con el backtest en la pestaña: las del
+  // directo si están todas; si no, las del histórico de IG; y si este falla unas cuantas veces,
+  // las que haya del directo (el backtest de ese día puede salir incompleto)
   async function guardarVelas(dia, ses) {
-    const velas = await ig.velasEntre(dia.ticker, 'm15', ses.abre, ses.cierra)
-    dia.velas = velas.map(v => [v.time, v.open, v.high, v.low, v.close])
-    apuntar(dia, `Guardadas ${velas.length} velas de 15 min de la sesión`, { aviso: false })
+    const propias = agruparDirecto(directo(dia.ticker), ses.abre, ses.cierra)
+    const esperadas = Math.round((ses.cierra - ses.abre) / (MINUTOS_VELA * 60))
+    const guardarlas = (velas, de) => {
+      dia.velas = velas.map(v => [v.time, v.open, v.high, v.low, v.close])
+      apuntar(dia, `Guardadas ${velas.length} velas de 15 min de la sesión (${de})`, { aviso: false })
+    }
+    if (propias.length >= esperadas - 1 && propias[0]?.time === ses.abre) return guardarlas(propias, 'del directo')
+    try { return guardarlas(await historico(dia.ticker, ses.abre, ses.cierra), 'del histórico de IG') } catch (err) {
+      dia.intentosVelas = (dia.intentosVelas ?? 0) + 1
+      if (dia.intentosVelas >= INTENTOS_VELAS) return guardarlas(propias, `del directo, ${propias.length} de ${esperadas}: el histórico de IG falla`)
+      dia.esperaVelas = ahora() + 600
+      apuntar(dia, `No se pueden guardar aún las velas de la sesión: ${err.message}`, { aviso: false })
+    }
   }
 
   // Al arrancar: las posiciones del bot (por su referencia) que el registro no tiene, se

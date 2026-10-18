@@ -612,6 +612,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       margen: i.marginFactor != null ? `${i.marginFactor}${i.marginFactorUnit === 'PERCENTAGE' ? '%' : ` ${i.marginFactorUnit}`}` : null,
       tamanoMin: r.minDealSize?.value, stopMin: r.minNormalStopOrLimitDistance?.value,
       ordenesMercado: r.marketOrderPreference, streaming: i.streamingPricesAvailable,
+      factorEscala: json.snapshot?.scalingFactor, horario: i.openingHours?.marketTimes ?? null,
       monedas: i.currencies,
     }
   }

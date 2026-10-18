@@ -2470,7 +2470,9 @@ const ig = IG_FALTAN.length === 0
       entorno:    process.env.IG_ENTORNO === 'real' ? 'real' : 'demo',
       cuentaCfd:  process.env.IG_CUENTA || null,
       epicsFijos: (() => { try { return JSON.parse(process.env.IG_EPICS || '{}') } catch { return {} } })(),
-      cacheDir:   join(DISK_CACHE_DIR, 'ig'),
+      // en producción, en el volumen: el histórico de IG gasta un cupo semanal y en /tmp se
+      // perdería (y se volvería a pedir) en cada despliegue
+      cacheDir:   process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/ig-cache' : join(DISK_CACHE_DIR, 'ig'),
     })
   : null
 ig?.iniciar()

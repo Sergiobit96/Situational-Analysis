@@ -63,18 +63,21 @@ export const EPICS_IG = {
   'USOIL':  { epic: 'CC.D.CL.UEC.IP',        nombre: 'Crudo - Crudo EE.UU. (1$)', escala: 0.01 },
 }
 
-// Los contratos con los que opera el bot, por orden de preferencia: primero el pequeño (1 €
-// o 1 $ por punto), que deja ajustar el tamaño al riesgo; si la cuenta no puede operarlo,
-// el grande (es el que tiene streaming en la demo, pero en el Nasdaq y el S&P su margen pasa
-// del saldo de una demo de 20.000 €). Todos cotizan igual que el de EPICS_IG.
+// Los contratos con los que operan los bots (SRS y tortugas), por orden de preferencia: primero
+// el pequeño (1 € o 1 $ por punto), que deja ajustar el tamaño al riesgo, y si la cuenta no
+// tiene precio en él, el grande. En EE. UU., el de 1 € (ICE) antes que el de 1 $ (IEC), porque
+// no lleva cambio de divisa. Comprobado el 18-oct-2026 buscándolos con la cuenta demo de CFD:
+// los pequeños que había antes (NASDAQ.IFMM, SPTRD.IFMM, DOW.IFE, RUSSELL.IFMM) salen siempre
+// sin precio; ICE, IEC y el Nikkei de 1 $ (IFM) sí lo tienen. Todos cotizan igual que el de
+// EPICS_IG: cambia el tamaño del contrato, no el precio.
 export const EPICS_OPERAR = {
   '^GDAXI': ['IX.D.DAX.IFMM.IP'],
   '^FTSE':  ['IX.D.FTSE.IFE.IP'],
-  '^NDX':   ['IX.D.NASDAQ.IFMM.IP', 'IX.D.NASDAQ.IFD.IP'],
-  '^GSPC':  ['IX.D.SPTRD.IFMM.IP', 'IX.D.SPTRD.IFD.IP'],
-  '^DJI':   ['IX.D.DOW.IFE.IP', 'IX.D.DOW.IFD.IP'],
-  '^RUT':   ['IX.D.RUSSELL.IFMM.IP', 'IX.D.RUSSELL.IFD.IP'],
-  '^N225':  ['IX.D.NIKKEI.IFD.IP'],
+  '^NDX':   ['IX.D.NASDAQ.ICE.IP', 'IX.D.NASDAQ.IEC.IP', 'IX.D.NASDAQ.IFD.IP'],
+  '^GSPC':  ['IX.D.SPTRD.ICE.IP', 'IX.D.SPTRD.IEC.IP', 'IX.D.SPTRD.IFD.IP'],
+  '^DJI':   ['IX.D.DOW.ICE.IP', 'IX.D.DOW.IEC.IP', 'IX.D.DOW.IFD.IP'],
+  '^RUT':   ['IX.D.RUSSELL.ICE.IP', 'IX.D.RUSSELL.IEC.IP', 'IX.D.RUSSELL.IFD.IP'],
+  '^N225':  ['IX.D.NIKKEI.IFM.IP', 'IX.D.NIKKEI.IFD.IP'],
 }
 
 // Una vela con los precios multiplicados por `escala` (si la hay)

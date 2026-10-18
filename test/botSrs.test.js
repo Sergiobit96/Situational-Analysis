@@ -65,8 +65,9 @@ test('el tamaño sale del riesgo en euros, y se respeta el mínimo de IG sin arr
   assert.equal(tamanoPorRiesgo({ riesgoEur: 400, riesgoPts: 0, valorPunto: 1, cambioAEur: 1 }).ok, false)
 })
 
-test('lo que se arriesga es un % del saldo de la cuenta, un 2,5% si no se dice otra cosa', () => {
-  assert.equal(CONFIG_INICIAL.riesgoPct, 2.5)
+test('lo que se arriesga es un % del saldo de la cuenta, un 1% si no se dice otra cosa', () => {
+  assert.equal(CONFIG_INICIAL.riesgoPct, 1)
+  assert.equal(riesgoDeCuenta(20000, 1), 200)
   assert.equal(riesgoDeCuenta(20000, 2.5), 500)
   assert.equal(riesgoDeCuenta(18400, 2), 368)
   assert.equal(riesgoDeCuenta(null, 2.5), null)
@@ -156,14 +157,17 @@ test('el candado: fuera de la demo no se manda ninguna orden', async () => {
 // Mercados de mentira: precio, valor del punto y si la cuenta tiene precio (= puede operarlo)
 const MERCADOS = {
   'IX.D.DAX.IFMM.IP':    { ticker: '^GDAXI', valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.5, conPrecio: true },
-  'IX.D.NASDAQ.IFMM.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'USD', cambioAEur: 0.89, tamanoMin: 0.2, conPrecio: false },
+  'IX.D.NASDAQ.ICE.IP':  { ticker: '^NDX',   valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.2, conPrecio: true },
+  'IX.D.NASDAQ.IEC.IP':  { ticker: '^NDX',   valorPunto: 1,   moneda: 'USD', cambioAEur: 0.89, tamanoMin: 0.2, conPrecio: true },
   'IX.D.NASDAQ.IFD.IP':  { ticker: '^NDX',   valorPunto: 100, moneda: 'USD', cambioAEur: 0.89, tamanoMin: 0.2, conPrecio: true },
+  'IX.D.NIKKEI.IFM.IP':  { ticker: '^N225',  valorPunto: 1,   moneda: 'USD', cambioAEur: 0.89, tamanoMin: 0.5, conPrecio: true },
   'IX.D.NIKKEI.IFD.IP':  { ticker: '^N225',  valorPunto: 5,   moneda: 'USD', cambioAEur: 0.89, tamanoMin: 0.5, conPrecio: true },
 }
 
 // Un IG que apunta lo que se le pide y contesta lo que diga cada prueba. `velas` por
-// instrumento: la del bracket (por su hora) y las de después
-function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, aMercado = true }) {
+// instrumento: la del bracket (por su hora) y las de después; `sinPrecio`, los contratos que la
+// cuenta no puede operar (su ficha viene sin precio)
+function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, aMercado = true, sinPrecio = [] }) {
   const ordenes = []
   let abiertas = []
   let n = 0
@@ -171,9 +175,12 @@ function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, 
     velasEntre: async (ticker, tf, desde, hasta) => (velas[ticker] ?? []).filter(v => v.time >= desde && v.time < hasta),
     operar: {
       datosMercado: async (ticker, epic) => {
-        const m = MERCADOS[epic] ?? MERCADOS['IX.D.DAX.IFMM.IP']
+        // sin epic (una posición recuperada sin plan), el de IG_EPICS, que en la prueba es el del DAX
+        const m = MERCADOS[epic ?? 'IX.D.DAX.IFMM.IP']
+        if (!m) throw new Error(`mercado desconocido en la prueba: ${epic}`)
+        const conPrecio = m.conPrecio && !sinPrecio.includes(epic)
         const [bid, oferta] = precios[ticker] ?? [25500, 25501]
-        return { epic, ...m, stopMin: 5, estado: 'TRADEABLE', bid: m.conPrecio ? bid : null, oferta: m.conPrecio ? oferta : null, aMercado }
+        return { epic, ...m, conPrecio, stopMin: 5, estado: 'TRADEABLE', bid: conPrecio ? bid : null, oferta: conPrecio ? oferta : null, aMercado }
       },
       abrir: async o => {
         ordenes.push({ tipo: 'abrir', ...o })
@@ -268,19 +275,19 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('el plan arriesga el 2,5% del saldo entre los puntos hasta el stop, y sin saldo no se opera', async () => {
+test('el plan arriesga el 1% del saldo entre los puntos hasta el stop, y sin saldo no se opera', async () => {
   const bracket = [vela15(madrid(30, 9, 0), 25470, 25485, 25455, 25480), vela15(madrid(30, 9, 15), 25480, 25500, 25460, 25490)]   // 40 puntos
-  // con margen de sobra: 2,5% de 20.000 € = 500 € / 40 puntos a 1 €/punto = 12,5 contratos
+  // con margen de sobra: 1% de 20.000 € = 200 € / 40 puntos a 1 €/punto = 5 contratos
   const ig = igFalso({ velas: { '^GDAXI': bracket }, saldo: 20000, disponible: 100000 })
   const { bot, dir, enHora } = botDePrueba(ig, soloDax)
   try {
     enHora(madrid(30, 9, 30, 4)); await bot._paso()
     const hoy = apunte(bot, '^GDAXI')
-    assert.equal(hoy.config.riesgoPct, 2.5)
-    assert.equal(hoy.plan.tamano, 12.5)
-    assert.equal(hoy.plan.riesgoEur, 500)
+    assert.equal(hoy.config.riesgoPct, 1)
+    assert.equal(hoy.plan.tamano, 5)
+    assert.equal(hoy.plan.riesgoEur, 200)
     assert.equal(hoy.plan.saldo, 20000)
-    assert.ok(hoy.eventos.some(e => /el 2,5% de 20\.000 € son 500 €/.test(e.texto)))
+    assert.ok(hoy.eventos.some(e => /el 1% de 20\.000 € son 200 €/.test(e.texto)))
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 
   const sinSaldo = igFalso({ velas: { '^GDAXI': bracket }, saldo: null })
@@ -321,15 +328,29 @@ test('donde IG no admite órdenes a mercado, entra con límite a un cuarto del b
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('en Nueva York, si el contrato pequeño no tiene precio para la cuenta, prueba el grande, y si no cabe en el riesgo no entra', async () => {
+test('en Nueva York opera el contrato de 1 €', async () => {
   const bracket = vela15(nuevaYork(20, 9, 45), 29200, 29230, 29170, 29210)   // 60 puntos
   const ig = igFalso({ velas: { '^NDX': [bracket] }, precios: { '^NDX': [29230, 29231] } })
   const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': false, '^GDAXI': false, '^NDX': true, '^GSPC': false, '^DJI': false }, riesgoPct: 2 })
   try {
     enHora(nuevaYork(20, 10, 0, 5)); await bot._paso()
     const hoy = apunte(bot, '^NDX')
+    assert.equal(hoy.estado, 'esperando-rotura')
+    assert.equal(hoy.plan.epic, 'IX.D.NASDAQ.ICE.IP')
+    // 400 € / 60 puntos = 6,6 contratos, pero el margen (6,6 × 29.210 × 5%) pasa del 40% de 20.000 €: 5,4
+    assert.equal(hoy.plan.tamano, 5.4)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('en Nueva York, si los contratos pequeños no tienen precio para la cuenta, prueba el grande, y si no cabe en el riesgo no entra', async () => {
+  const bracket = vela15(nuevaYork(21, 9, 45), 29200, 29230, 29170, 29210)   // 60 puntos
+  const ig = igFalso({ velas: { '^NDX': [bracket] }, precios: { '^NDX': [29230, 29231] }, sinPrecio: ['IX.D.NASDAQ.ICE.IP', 'IX.D.NASDAQ.IEC.IP'] })
+  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': false, '^GDAXI': false, '^NDX': true, '^GSPC': false, '^DJI': false }, riesgoPct: 2 })
+  try {
+    enHora(nuevaYork(21, 10, 0, 5)); await bot._paso()
+    const hoy = apunte(bot, '^NDX')
     assert.equal(hoy.estado, 'sin-operar')
-    assert.match(hoy.eventos.at(-1).texto, /IX\.D\.NASDAQ\.IFMM\.IP sin precio.*IX\.D\.NASDAQ\.IFD\.IP: el mínimo de IG \(0\.2\) arriesgaría 1068 €/)
+    assert.match(hoy.eventos.at(-1).texto, /IX\.D\.NASDAQ\.ICE\.IP sin precio.*IX\.D\.NASDAQ\.IEC\.IP sin precio.*IX\.D\.NASDAQ\.IFD\.IP: el mínimo de IG \(0\.2\) arriesgaría 1068 €/)
     assert.equal(ig.ordenes.length, 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
@@ -343,8 +364,9 @@ test('Tokio: el bracket es la vela de 09:15 a 09:30 de Tokio, que en Madrid es d
     const hoy = apunte(bot, '^N225')
     assert.equal(hoy.fecha, '2026-10-21')
     assert.equal(hoy.estado, 'esperando-rotura')
-    // 400 € / (200 puntos × 5 $ × 0,89) = 0,449 → por debajo del mínimo 0,5, que arriesga 445 € (menos del doble)
-    assert.equal(hoy.plan.tamano, 0.5)
+    // con el contrato de 1 $: 400 € / (200 puntos × 1 $ × 0,89) = 2,2 contratos
+    assert.equal(hoy.plan.epic, 'IX.D.NIKKEI.IFM.IP')
+    assert.equal(hoy.plan.tamano, 2.2)
     vela1m('^N225', tokio(21, 9, 40), 63501, 63490)
     enHora(tokio(21, 9, 40, 5)); await bot._paso()
     assert.equal(apunte(bot, '^N225').estado, 'en-posicion')
@@ -509,7 +531,8 @@ test('flip the switch: si salta el stop de la compra, vende en el mínimo con el
   const precios = { '^GDAXI': [25501, 25502] }
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(2, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
   const avisos = []
-  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { avisar: t => avisos.push(t) })
+  // con el 2,5% de antes, para que el tamaño lo recorte el margen (6,2)
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoPct: 2.5 }, { avisar: t => avisos.push(t) })
   try {
     assert.equal(bot._datos().config.modo, 'flip')      // es lo que hace por defecto
     enHora(madridNov(2, 9, 30, 4)); await bot._paso()
@@ -660,7 +683,7 @@ test('por defecto, la pirámide añade media posición cada 1R, con el mínimo d
   assert.equal(CONFIG_INICIAL.tamanoAnadido, 0.5)
   const precios = { '^GDAXI': [25500, 25501] }
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(9, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
-  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoPct: 2.5 })
   try {
     enHora(madridNov(9, 9, 30, 4)); await bot._paso()
     vela1m('^GDAXI', madridNov(9, 9, 41), 25502, 25495, 25501)

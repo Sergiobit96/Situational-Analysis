@@ -62,6 +62,8 @@ const REVISAR_YA_MS = 2_000        // con el precio al otro lado de un stop
 const ESPERA_STOP_S = 10           // si el precio pasó el stop y IG no ha cerrado en este rato, cierra el bot
 const BUSQUEDAS_CIERRE = 4
 const REINTENTO_PLAN_S = 600       // si no se pudo hacer el plan, se intenta de nuevo pasado este rato
+const REINTENTO_IG_S = 120         // si fue IG (p. ej., porque limita las peticiones), algo antes; nunca en cada paso
+const CUENTA_VALE_S = 30           // el saldo se pide una vez para todos los planes de una ronda
 const ESPERA_TRAS_CIERRE_S = 3600  // Yahoo tarda en dejar la vela del día: el plan de mañana, una hora después del cierre
 const DIAS_VIEJO = 6               // una vela diaria más vieja que esto (días naturales) es que Yahoo no está al día
 const MAX_EVENTOS = 1000
@@ -185,7 +187,24 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   const referenciaNueva = ticker => `${PREFIJO}${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
 
   // ── El plan de una sesión: niveles de Yahoo y tamaño de la unidad con la cuenta de IG ──
+  let cuentaVista = null
+  async function cuentaReciente() {
+    if (!cuentaVista || ahora() - cuentaVista.t >= CUENTA_VALE_S) cuentaVista = { t: ahora(), c: await ig.operar.cuenta() }
+    return cuentaVista.c
+  }
+
+  // Un error de IG a mitad del plan lo deja con error y fecha de reintento: si no, se
+  // repetiría en cada paso, y con IG limitando las peticiones eso las agotaría (también las
+  // del bot SRS, que usa la misma clave)
   async function calcularPlan(ticker, ses) {
+    try { await hacerPlan(ticker, ses) } catch (err) {
+      const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, error: `IG: ${err.message}`, reintentar: ahora() + REINTENTO_IG_S }
+      datos.planes[ticker] = plan
+      apuntar(ticker, `Sin plan: ${err.message}`, { aviso: !plan.provisional })
+    }
+  }
+
+  async function hacerPlan(ticker, ses) {
     const cfg = datos.config
     const anterior = datos.planes[ticker]
     const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, sistema: cfg.sistema, riesgoPct: cfg.riesgoPct }
@@ -210,7 +229,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     })
 
     // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N
-    const cuenta = await ig.operar.cuenta()
+    const cuenta = await cuentaReciente()
     if (!(cuenta?.saldo > 0)) return falla('IG no da el saldo de la cuenta: sin él no se sabe el tamaño')
     datos.picoSaldo = Math.max(datos.picoSaldo ?? cuenta.saldo, cuenta.saldo)
     const nominal = capitalNominal(cuenta.saldo, datos.picoSaldo, cfg.reduccionDD)
@@ -628,6 +647,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   let reloj = null
   const dejarDeEscuchar = []
   function arrancar() {
+    // los planes provisionales (los de la próxima sesión) se rehacen: puede haber cambiado el código
+    for (const [t, p] of Object.entries(datos.planes)) if (p?.provisional) delete datos.planes[t]
     encolar(async () => {
       try { await recuperarPosiciones() } catch (err) {
         log(`[tortugas] no se han podido revisar las posiciones al arrancar: ${err.message}`)

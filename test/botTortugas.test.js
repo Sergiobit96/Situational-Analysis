@@ -141,13 +141,15 @@ test('con posición: añade cada ½ N, sale por el canal y vigila el stop', () =
 // ── El bot entero, con un IG de mentira ──
 
 const MERCADOS = {
-  'IX.D.DAX.IFMM.IP':    { ticker: '^GDAXI', valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,   tamanoMin: 0.5, conPrecio: true, factorMargen: 0.05 },
-  'IX.D.FTSE.IFE.IP':    { ticker: '^FTSE',  valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,   tamanoMin: 0.5, conPrecio: true, factorMargen: 0.05 },
-  'IX.D.NASDAQ.IFMM.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, conPrecio: false },
-  'IX.D.NASDAQ.IFD.IP':  { ticker: '^NDX',   valorPunto: 100, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, conPrecio: true },
+  'IX.D.DAX.IFMM.IP':   { ticker: '^GDAXI', valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.5, factorMargen: 0.05 },
+  'IX.D.FTSE.IFE.IP':   { ticker: '^FTSE',  valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.5, factorMargen: 0.05 },
+  'IX.D.NASDAQ.ICE.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'EUR', cambioAEur: 1,    tamanoMin: 0.2, factorMargen: 0.05 },
+  'IX.D.NASDAQ.IEC.IP': { ticker: '^NDX',   valorPunto: 1,   moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, factorMargen: 0.05 },
+  'IX.D.NASDAQ.IFD.IP': { ticker: '^NDX',   valorPunto: 100, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.2, factorMargen: 0.05 },
 }
 
-function igFalso({ precios = {}, saldo = 20_000, disponible = 20_000 } = {}) {
+// `sinPrecio`: los contratos que la cuenta no puede operar (su ficha viene sin precio)
+function igFalso({ precios = {}, saldo = 20_000, disponible = 20_000, sinPrecio = [] } = {}) {
   const ordenes = []
   let abiertas = []
   let n = 0
@@ -155,9 +157,11 @@ function igFalso({ precios = {}, saldo = 20_000, disponible = 20_000 } = {}) {
     precios,
     operar: {
       datosMercado: async (ticker, epic) => {
-        const m = MERCADOS[epic] ?? MERCADOS['IX.D.DAX.IFMM.IP']
+        const m = MERCADOS[epic]
+        if (!m) throw new Error(`mercado desconocido en la prueba: ${epic}`)
+        const conPrecio = !sinPrecio.includes(epic)
         const [bid, oferta] = ig.precios[ticker] ?? [25_000, 25_001]
-        return { epic, ...m, stopMin: 8, estado: 'TRADEABLE', bid: m.conPrecio ? bid : null, oferta: m.conPrecio ? oferta : null, aMercado: true }
+        return { epic, ...m, stopMin: 8, estado: 'TRADEABLE', conPrecio, bid: conPrecio ? bid : null, oferta: conPrecio ? oferta : null, aMercado: true }
       },
       abrir: async o => {
         ordenes.push({ tipo: 'abrir', ...o })
@@ -324,18 +328,29 @@ test('los límites de cartera: con el grupo lleno no entra otro índice del mism
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('elige el contrato pequeño si tiene precio y, si no, el grande; si el mínimo arriesga más del doble, no opera', async () => {
-  const ig = igFalso({ precios: { '^NDX': [29_000, 29_002] } })
+test('en EE. UU. usa el contrato de 1 € (o el de 1 $) y, sin ellos, el grande, que no cabe', async () => {
   const instrumentos = { ...soloDax.instrumentos, '^GDAXI': false, '^NDX': true }
-  const { bot, dir, enHora } = botDePrueba(ig, { '^NDX': diarioPlano(29_000, 200, '2026-11-06') }, { instrumentos })
-  try {
-    enHora(fra(11, 9, 16)); await bot._paso()                  // 10:00 en Nueva York
-    const m = mercado(bot, '^NDX')
-    // el de 1 $ no tiene precio; el de 100 $: 0,2 contratos × 400 × 100 $ × 0,86 = 6.880 € por N, frente a 200
-    assert.equal(m.plan.unidad.ok, false)
-    assert.match(m.plan.unidad.motivo, /IX\.D\.NASDAQ\.IFMM\.IP sin precio/)
-    assert.match(m.plan.unidad.motivo, /costaría 6880 € por N/)
-  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+  const diarios = { '^NDX': diarioPlano(29_000, 200, '2026-11-06') }
+  const planDe = async sinPrecio => {
+    const { bot, dir, enHora } = botDePrueba(igFalso({ precios: { '^NDX': [29_000, 29_002] }, sinPrecio }), diarios, { instrumentos })
+    try {
+      enHora(fra(11, 9, 16)); await bot._paso()                // 10:00 en Nueva York
+      return mercado(bot, '^NDX').plan
+    } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+  }
+  // 1% de 20.000 € = 200 € por N / 400 puntos a 1 €/punto = 0,5 contratos de 1 €
+  let plan = await planDe([])
+  assert.equal(plan.unidad.epic, 'IX.D.NASDAQ.ICE.IP')
+  assert.equal(plan.unidad.tamano, 0.5)
+  // sin el de 1 €, el de 1 $: 200 / (400 × 0,86) = 0,58 → 0,5
+  plan = await planDe(['IX.D.NASDAQ.ICE.IP'])
+  assert.equal(plan.unidad.epic, 'IX.D.NASDAQ.IEC.IP')
+  assert.equal(plan.unidad.tamano, 0.5)
+  // sin ninguno de los dos, el de 100 $: 0,2 contratos × 400 × 100 $ × 0,86 = 6.880 € por N, frente a 200
+  plan = await planDe(['IX.D.NASDAQ.ICE.IP', 'IX.D.NASDAQ.IEC.IP'])
+  assert.equal(plan.unidad.ok, false)
+  assert.match(plan.unidad.motivo, /IX\.D\.NASDAQ\.ICE\.IP sin precio/)
+  assert.match(plan.unidad.motivo, /costaría 6880 € por N/)
 })
 
 test('al arrancar recupera de IG las posiciones del bot y deja las de otros (SRS)', async () => {
@@ -351,6 +366,29 @@ test('al arrancar recupera de IG las posiciones del bot y deja las de otros (SRS
     assert.equal(pos.unidades[0].dealId, 'X1')
     assert.equal(pos.n0, 300)                                  // su stop está a 2 N
     assert.equal(pos.recuperada, true)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG falla a mitad del plan, no lo reintenta en cada paso, y el saldo se pide una vez por ronda', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001], '^FTSE': [10_000, 10_001] } })
+  let cuentas = 0, fallar = true
+  const cuenta = ig.operar.cuenta
+  ig.operar.cuenta = async () => { cuentas++; if (fallar) throw new Error('IG limita las peticiones de esta clave: espera un minuto'); return cuenta() }
+  const instrumentos = { ...soloDax.instrumentos, '^FTSE': true }
+  const { bot, dir, enHora, avisos } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-11-13'), '^FTSE': diarioPlano(10_000, 50, '2026-11-13') }, { instrumentos })
+  try {
+    enHora(fra(11, 16, 9, 0, 5)); await bot._paso()
+    assert.match(mercado(bot, '^GDAXI').plan.error, /limita las peticiones/)
+    assert.ok(avisos.some(a => /DAX · Sin plan: IG limita/.test(a)))
+    const tras = cuentas
+    enHora(fra(11, 16, 9, 0, 10)); await bot._paso()
+    enHora(fra(11, 16, 9, 1, 0)); await bot._paso()
+    assert.equal(cuentas, tras, 'ni a los 5 s ni al minuto')
+    fallar = false
+    enHora(fra(11, 16, 9, 2, 10)); await bot._paso()
+    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 0.6)
+    assert.equal(mercado(bot, '^FTSE').plan.unidad.tamano, 2)
+    assert.equal(cuentas, tras + 1, 'un saldo para los dos planes')
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

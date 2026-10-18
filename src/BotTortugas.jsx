@@ -240,7 +240,7 @@ export default function BotTortugas() {
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
-          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña). Un cambio de sistema, lados o riesgo rehace los planes de todos los índices.
+          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistema, lados o riesgo rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
           const { sistema, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form

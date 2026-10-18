@@ -58,8 +58,9 @@ export const CONFIG_INICIAL = {
   beR:               null,    // null, 1 o 2: stop a la entrada al recorrer esas veces el riesgo
   piramide:          1,       // null: sin pirámide; un número: una posición más cada tantas R a favor
   tamanoAnadido:     0.5,     // lo que mete cada añadido, en fracción de la entrada: 1 o 0,5
-  riesgoPct:         2.5,     // lo que se arriesga por operación hasta el stop, en % del saldo de la cuenta: el tamaño es
-                              // saldo × riesgoPct / (puntos hasta el stop × valor del punto); 500 € en la demo de 20.000 €
+  riesgoPct:         1,       // lo que se arriesga por operación hasta el stop, en % del saldo de la cuenta: el tamaño es
+                              // saldo × riesgoPct / (puntos hasta el stop × valor del punto); 200 € en la demo de 20.000 €
+                              // (era un 2,5%; el usuario lo bajó al 1% el 18-oct-2026, al añadir los índices de EE. UU.)
   deslizamientoMaxR: 0.25,    // no entra (ni da la vuelta, ni añade) si el precio ya se ha ido del nivel más de esta
                               // fracción del bracket; donde IG no admite órdenes a mercado, es el límite de la orden
   rangoMaxPct:       0.8,     // si el bracket mide más (en % del precio), ese día no se opera
@@ -899,7 +900,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
 
   // Ensayo de órdenes en un instrumento: abre la posición mínima con stop, se lo mueve, la
   // cierra y busca el cierre en la actividad. Solo con el mercado abierto y sin nada del bot
-  // entre manos en ese instrumento.
+  // entre manos en ese instrumento. Prueba los mismos contratos que usa el bot de las tortugas.
   async function ensayo(ticker = '^GDAXI') {
     if (!SESIONES_BOT[ticker]) throw new Error(`Instrumento desconocido: ${ticker}`)
     if (Object.values(datos.dias).some(d => d.ticker === ticker && enJuego(d))) {

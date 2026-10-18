@@ -261,7 +261,7 @@ export default function Bot() {
             </select>
           </label>
           <label>Riesgo por operación (% de la cuenta)
-            <input type="number" min="0.1" max="10" step="0.1" value={editando.riesgoPct ?? 2.5} onChange={e => cambiar('riesgoPct', e.target.value)} />
+            <input type="number" min="0.1" max="10" step="0.1" value={editando.riesgoPct ?? 1} onChange={e => cambiar('riesgoPct', e.target.value)} />
           </label>
           <label>No entrar si el precio se ha ido más de (% del bracket)
             <input type="number" min="1" max="200" step="5" value={Math.round(editando.deslizamientoMaxR * 100)} onChange={e => cambiar('deslizamientoMaxR', Number(e.target.value) / 100)} />

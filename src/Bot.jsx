@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { analizarSesion } from './segundaVelaCore'
+import { conClaveBot, guardarClaveBot } from './claveBot'
 import './Bot.css'
 
 // Pestaña Bot: el bot SRS que opera en la demo de IG (server/bot-srs.js) en varias sesiones
@@ -17,7 +18,6 @@ const ESTADOS = {
   'sin-operar':        'No opera',
 }
 const MOTIVOS = { stop: 'stop', breakeven: 'break even', cierre: 'cierre', manual: 'a mano', objetivo: 'objetivo', bracket: 'stop' }
-const CLAVE = 'sa.bot.token'
 
 const num = (n, dec = 1) => n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 const pts = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n)}`)
@@ -27,10 +27,8 @@ const hora = iso => new Date(iso).toLocaleTimeString('es-ES', { timeZone: 'Europ
 const fechaHora = ts => new Date(ts * 1000).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
 
-function leerClave() { try { return localStorage.getItem(CLAVE) ?? '' } catch { return '' } }
-
 async function pedir(url, opciones = {}) {
-  const r = await fetch(url, { ...opciones, headers: { ...opciones.headers, 'X-Bot-Token': leerClave() } })
+  const r = await fetch(url, { ...opciones, headers: conClaveBot(opciones.headers) })
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
   if (!r.ok || j.error) {
     const err = new Error(j.error ?? `HTTP ${r.status}`)
@@ -128,9 +126,9 @@ export default function Bot() {
       <div className="bot-page">
         <section className="bot-bloque bot-clave">
           <h3>Clave del bot</h3>
-          <p className="bot-nota">El servidor de producción pide la clave del bot (la variable BOT_TOKEN de Railway). Se guarda en este navegador.</p>
+          <p className="bot-nota">El servidor de producción pide la clave del bot (la variable BOT_TOKEN de Railway). Se guarda en este navegador, y con ella el Gráfico también tiene IG.</p>
           {error && <p className="bot-error">{error}</p>}
-          <form onSubmit={e => { e.preventDefault(); try { localStorage.setItem(CLAVE, clave) } catch { /* sin almacenamiento */ } cargar() }}>
+          <form onSubmit={e => { e.preventDefault(); guardarClaveBot(clave); cargar() }}>
             <input type="password" value={clave} onChange={e => setClave(e.target.value)} placeholder="Clave" autoComplete="current-password" />
             <button className="diario-boton" type="submit">Entrar</button>
           </form>

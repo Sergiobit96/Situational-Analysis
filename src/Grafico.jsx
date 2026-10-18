@@ -3,6 +3,7 @@ import { HERRAMIENTAS_DIBUJO } from './chartDrawingTools'
 import { INSTRUMENTOS } from './intradayApi'
 import PanelGrafico from './PanelGrafico'
 import BuscadorIg from './BuscadorIg'
+import { hayIg } from './claveBot'
 import {
   TEMPORALIDADES, fuentesDe, configDe, claveDibujosDe, nombreDe,
   esMercadoIg, mercadosIgGuardados, recordarMercadoIg, olvidarMercadoIg,
@@ -24,9 +25,6 @@ const MAX_PANELES = 6
 
 // Lo que sale en los paneles nuevos: los índices que se operan, y el oro
 const POR_DEFECTO = ['^GDAXI', '^NDX', '^DJI', '^FTSE', '^GSPC', 'XAUUSD']
-
-// La fuente IG la abre el servidor local: fuera de local no hay mercados de IG que buscar
-const CON_IG = fuentesDe('^GDAXI').some(f => f.id === 'ig')
 
 const VISTA = 'sa.grafico.vista'
 const PREFS_DE_UNO = 'sa.grafico'   // las de cuando la pestaña tenía un solo gráfico
@@ -92,6 +90,8 @@ export default function Grafico() {
   const { ticker, tf, fuente } = configDe(vista.paneles[activo])
   const disponibles = fuentesDe(ticker)
   const varios = disp.n > 1
+  // IG: en local, o en producción con la clave del bot guardada en la pestaña Bot
+  const conIg = hayIg()
 
   const cambiarPanel = (i, cambio) =>
     guardar(v => ({ ...v, paneles: v.paneles.map((p, j) => (j === i ? { ...p, ...cambio } : p)) }))
@@ -146,14 +146,14 @@ export default function Grafico() {
             aria-label="Instrumento"
           >
             {INSTRUMENTOS.map(i => <option key={i.value} value={i.value}>{i.label}</option>)}
-            {CON_IG && (mercadosIg.length > 0 || esMercadoIg(ticker)) && (
+            {conIg && (mercadosIg.length > 0 || esMercadoIg(ticker)) && (
               <optgroup label="Mercados de IG">
                 {mercadosIg.map(m => <option key={m.ticker} value={m.ticker}>{m.nombre}</option>)}
                 {esMercadoIg(ticker) && !mercadosIg.some(m => m.ticker === ticker) && <option value={ticker}>{nombreDe(ticker)}</option>}
               </optgroup>
             )}
           </select>
-          {CON_IG && (
+          {conIg && (
             <button
               className={`dibujo-btn ${buscandoIg ? 'activo' : ''}`}
               title="Abrir en este gráfico cualquier mercado de IG: divisas, bonos, acciones, cripto… o los de tus listas"

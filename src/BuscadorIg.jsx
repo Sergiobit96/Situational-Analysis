@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PREFIJO_IG } from './graficoConfig'
+import { conClaveBot } from './claveBot'
 
 // Buscador de mercados de IG para la pestaña Gráfico: cualquier mercado que dé la cuenta
 // (divisas, bonos, acciones, cripto…) o los de las listas de seguimiento de IG. Al elegir
@@ -13,7 +14,7 @@ const ordenar = mercados => [...mercados].sort((a, b) =>
   (esOpcion(a) - esOpcion(b)) || ((a.bid == null) - (b.bid == null)))
 
 async function pedir(url) {
-  const r = await fetch(url)
+  const r = await fetch(url, { headers: conClaveBot() })
   const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
   if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`)
   return j

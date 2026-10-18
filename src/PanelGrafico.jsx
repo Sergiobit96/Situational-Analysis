@@ -4,6 +4,7 @@ import { crearHerramientasDibujo } from './chartDrawingTools'
 import { madridOffsetAt } from './timezone'
 import { leerDibujos, guardarDibujos } from './dibujosApi'
 import { meterVelaEnDirecto } from './velaEnDirecto'
+import { conClaveBot, urlConClaveBot } from './claveBot'
 import { TEMPORALIDADES, claveDibujosDe, configDe, nombreDe, fuentesDe, esMercadoIg, decimalesDe } from './graficoConfig'
 
 // Un gráfico de la pestaña Gráfico: instrumento, temporalidad y fuente propios, que va
@@ -151,7 +152,8 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
       try {
         const qs = new URLSearchParams({ ticker, tf, fuente })
         if (hasta) qs.set('hasta', hasta)
-        const r = await fetch(`/api/grafico/velas?${qs}`, { signal: abortar.signal })
+        // lo de IG, en producción, va con la clave del bot
+        const r = await fetch(`/api/grafico/velas?${qs}`, { signal: abortar.signal, headers: fuente === 'ig' ? conClaveBot() : {} })
         const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
         if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`)
 
@@ -193,7 +195,7 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
     setVivo(null)
     function abrirDirecto() {
       if (directo) return
-      directo = new EventSource(`/api/tiempo-real/stream?${new URLSearchParams({ fuente, ticker })}`)
+      directo = new EventSource(urlConClaveBot(`/api/tiempo-real/stream?${new URLSearchParams({ fuente, ticker })}`))
       directo.addEventListener('velas', e => {
         let ultima = null
         for (const v of JSON.parse(e.data)) {

@@ -3,6 +3,7 @@
 // Va aparte porque un archivo de componentes solo debe exportar componentes (recarga en
 // caliente de Vite).
 import { INSTRUMENTOS } from './intradayApi'
+import { hayIg } from './claveBot'
 
 export const TEMPORALIDADES = [
   { id: 'm1',  label: '1m',  minutos: 1 },
@@ -22,7 +23,7 @@ export const FUENTES = [
 ]
 
 // Un mercado cualquiera de IG, abierto buscándolo: su ticker es `ig:` + su epic
-// (ig:CS.D.EURUSD.CEC.IP) y solo se ve con la fuente IG, que es local. Los que se abren se
+// (ig:CS.D.EURUSD.CEC.IP) y solo se ve con la fuente IG. Los que se abren se
 // guardan con su nombre para tenerlos a mano en el selector.
 export const PREFIJO_IG = 'ig:'
 export const esMercadoIg = ticker => typeof ticker === 'string' && ticker.startsWith(PREFIJO_IG)
@@ -51,8 +52,6 @@ export const olvidarMercadoIg = ticker => escribirMercadosIg(mercadosIgGuardados
 // que hagan falta en las divisas (EUR/USD 1,12388; USD/JPY 150,123)
 export const decimalesDe = precio => (!(precio > 0) || precio >= 200 ? 2 : precio >= 20 ? 3 : precio >= 2 ? 4 : 5)
 
-// Las que solo existen en local: el CSV está en tu disco y la conexión con IG la abre tu servidor
-const SOLO_LOCAL = new Set(['csv', 'ig'])
 
 // Yahoo no da el spot de estos: los sirve con el futuro (GC=F, SI=F y CL=F en el servidor)
 const CON_FUTURO_EN_YAHOO = new Set(['XAUUSD', 'XAGUSD', 'USOIL'])
@@ -67,12 +66,14 @@ export function claveDibujosDe(ticker, fuente) {
   return `${ticker}@contado`
 }
 
-// Fuentes que tiene un instrumento: el CSV del DAX cash solo existe en local y solo para el
-// DAX; un mercado suelto de IG, solo IG
+// Fuentes que tiene un instrumento: el CSV del DAX cash está en tu disco, así que solo existe
+// en local y solo para el DAX; IG, en local o con la clave del bot guardada (en producción el
+// servidor la pide); un mercado suelto de IG, solo IG
 export function fuentesDe(ticker) {
-  if (esMercadoIg(ticker)) return import.meta.env.DEV ? FUENTES.filter(f => f.id === 'ig') : []
+  const conIg = hayIg()
+  if (esMercadoIg(ticker)) return conIg ? FUENTES.filter(f => f.id === 'ig') : []
   const hayCsv = import.meta.env.DEV && ticker === '^GDAXI'
-  return FUENTES.filter(f => (!SOLO_LOCAL.has(f.id) || import.meta.env.DEV) && (f.id !== 'csv' || hayCsv))
+  return FUENTES.filter(f => (f.id !== 'ig' || conIg) && (f.id !== 'csv' || hayCsv))
 }
 
 // Lo que de verdad pinta un panel con su configuración guardada: sin la fuente elegida, la
@@ -80,7 +81,7 @@ export function fuentesDe(ticker) {
 // pasa a 5
 export function configDe({ ticker, tf, fuente }) {
   const disponibles = fuentesDe(ticker)
-  // fuera de local un mercado de IG no tiene con qué verse
+  // sin IG (en producción, sin la clave del bot) un mercado de IG no tiene con qué verse
   if (!disponibles.length) return { ticker: '^GDAXI', fuente: 'duka', tf }
   const f = disponibles.some(x => x.id === fuente) ? fuente : disponibles[0].id
   return { ticker, fuente: f, tf: f === 'csv' && tf === 'm1' ? 'm5' : tf }

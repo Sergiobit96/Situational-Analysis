@@ -3890,3 +3890,59 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   color: var(--muted);
   line-height: 1.5;
 }
+.grafico-pro-vivo { margin-left: 0.5rem; color: var(--green); }
+
+/* ── Gráfico: varios a la vez ───────────────────────────────────────────── */
+.grafico-rejilla {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--filas, 1), minmax(0, 1fr));
+}
+.grafico-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  min-height: 0;
+}
+/* el panel al que se aplica la barra */
+.grafico-panel.con-marco.activo .grafico-pro-lienzo {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.grafico-pro-estado.grafico-panel-estado {
+  margin-left: 0;
+  min-height: 1.6rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.grafico-panel-estado .grafico-panel-datos,
+.grafico-panel-estado .grafico-pro-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grafico-panel-estado .dibujo-btn { flex-shrink: 0; }
+/* en paneles estrechos la leyenda se parte antes de montarse sobre el eje de precios */
+.grafico-varios .grafico-pro-leyenda { font-size: 0.72rem; gap: 0.1rem 0.55rem; right: 5.5rem; }
+.grafico-pro-pista {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--faint);
+}
+.grafico-disp-icono { display: block; fill: currentColor; }
+
+@media (max-width: 900px) {
+  /* en móvil, uno debajo de otro y cada uno con alto propio */
+  .grafico-pro.grafico-varios { height: auto; }
+  .grafico-varios .grafico-rejilla {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-rows: 55vh;
+  }
+  .grafico-pro-pista { margin-left: 0; width: 100%; }
+}

@@ -502,6 +502,12 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     setMode,
     clearAll,
     cargar,
+    // Cambia los dibujos por los de la lista, sin avisar: para cuando otro gráfico de la
+    // misma serie los ha guardado y este tiene que enseñar lo mismo
+    reemplazar(lista) {
+      quitarTodos()
+      cargar(lista)
+    },
     exportar,
     cuantos: () => drawings.length,
     dispose() {

@@ -1,5 +1,5 @@
 import { createChart, CandlestickSeries, LineSeries, CrosshairMode, LineStyle, createSeriesMarkers } from 'lightweight-charts'
-import { madridOffsetAt } from './timezone'
+import { madridOffsetAt } from './timezone.js'
 
 // Minutos desde medianoche Madrid para un timestamp ya ajustado (ts + offset)
 const madridMinOfDay = adjTs => (adjTs % 86400) / 60

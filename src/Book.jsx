@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { CATEGORIAS_HORROR } from './parseTrades'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -51,7 +51,48 @@ export default function Book({ book = 'horror', nombre = 'Book of Horror', icono
   const [dragging, setDragging] = useState(false)
   const [zoom,     setZoom]     = useState(null)
   const [editando, setEditando] = useState(null)   // id del archivo cuyo nombre se está editando
+  const [filtro,   setFiltro]   = useState(null)   // { tipo: 'cat' | 'inst', valor }
   const inputRef = useRef(null)
+
+  // De qué va este book: qué errores (o aciertos) se repiten y en qué instrumentos. Es lo
+  // que no se veía teniendo las etiquetas sueltas en cada tarjeta.
+  const resumen = useMemo(() => {
+    const cats = new Map()
+    const inst = new Map()
+    for (const a of archivos) {
+      for (const n of a.cats ?? []) cats.set(n, (cats.get(n) ?? 0) + 1)
+      const i = a.clave?.includes('_') ? a.clave.split('_')[1] : null
+      if (i) inst.set(i, (inst.get(i) ?? 0) + 1)
+    }
+    const orden = m => [...m.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+    return {
+      cats: orden(cats),
+      inst: orden(inst),
+      conComentario: archivos.filter(a => a.comentario).length,
+      conEtiquetas:  archivos.filter(a => a.cats?.length).length,
+    }
+  }, [archivos])
+
+  const visibles = useMemo(() => {
+    if (!filtro) return archivos
+    if (filtro.tipo === 'cat') return archivos.filter(a => a.cats?.includes(filtro.valor))
+    return archivos.filter(a => a.clave?.split('_')[1] === filtro.valor)
+  }, [archivos, filtro])
+
+  // Un archivo al azar de los que se estén viendo: si hay un filtro puesto, sale de ahí.
+  // Nunca repite el que ya está abierto, que es lo que uno espera al darle dos veces.
+  const alAzar = useCallback(() => {
+    setZoom(actual => {
+      const pool = visibles.length > 1 && actual
+        ? visibles.filter(a => a.id !== actual.id)
+        : visibles
+      return pool.length ? pool[Math.floor(Math.random() * pool.length)] : actual
+    })
+  }, [visibles])
+
+  const alternarFiltro = (tipo, valor) => setFiltro(
+    f => (f && f.tipo === tipo && f.valor === valor ? null : { tipo, valor }),
+  )
 
   const urlArchivo = useCallback(
     (id, descargar = false) =>
@@ -154,9 +195,9 @@ export default function Book({ book = 'horror', nombre = 'Book of Horror', icono
   }, [zoom])
 
   return (
-    <div className="fotos-page">
+    <div className="fotos-page book-page">
       <div
-        className={`drop-zone ${dragging ? 'dragging' : ''}`}
+        className={`drop-zone ${dragging ? 'dragging' : 'compact'}`}
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
@@ -169,23 +210,88 @@ export default function Book({ book = 'horror', nombre = 'Book of Horror', icono
             ? 'Subiendo…'
             : dragging
               ? 'Suelta los archivos aquí'
-              : `Arrastra capturas, PPTX o PDF del ${nombre}, o haz clic para seleccionar`}
+              : `Arrastra aquí capturas, PPTX o PDF del ${nombre}`}
         </div>
-        <div className="drop-hint">
-          Se guardan en {carpeta || `la carpeta del ${nombre}`} · máx. 20 archivos de 200 MB por subida
-          <br />
-          Desde <strong>Diario → Trades comentados</strong> se añaden con un solo clic, y ahí llega
-          también su comentario
-        </div>
+        {dragging && (
+          <div className="drop-hint">
+            Se guardan en {carpeta || `la carpeta del ${nombre}`} · máx. 20 archivos de 200 MB por subida
+          </div>
+        )}
       </div>
 
       {error && <div className="fotos-error">{error}</div>}
       {aviso && <div className="horror-aviso">{aviso}</div>}
 
+      {archivos.length > 0 && (resumen.cats.length > 0 || resumen.inst.length > 0) && (
+        <div className="book-resumen">
+          {resumen.cats.length > 0 && (
+            <div className="book-bloque">
+              <span className="book-bloque-tit">
+                Lo que más se repite
+                <span className="book-bloque-sub">{resumen.conEtiquetas} de {archivos.length} con etiqueta</span>
+              </span>
+              {resumen.cats.map(([n, veces]) => {
+                const cat = CATEGORIAS_HORROR.find(c => c.n === n)
+                const activo = filtro?.tipo === 'cat' && filtro.valor === n
+                return (
+                  <button
+                    key={n}
+                    className={`book-barra ${activo ? 'activo' : ''}`}
+                    onClick={() => alternarFiltro('cat', n)}
+                    title={`${cat?.nombre ?? `Categoría ${n}`} · clic para ver solo estas`}
+                  >
+                    <span className="book-barra-fondo" style={{ width: `${veces / resumen.cats[0][1] * 100}%` }} />
+                    <span className="book-barra-txt">#{n} {cat?.corto ?? ''}</span>
+                    <span className="book-barra-num">{veces}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {resumen.inst.length > 0 && (
+            <div className="book-bloque">
+              <span className="book-bloque-tit">
+                Por instrumento
+                <span className="book-bloque-sub">{resumen.conComentario} con comentario</span>
+              </span>
+              {resumen.inst.map(([i, veces]) => {
+                const activo = filtro?.tipo === 'inst' && filtro.valor === i
+                return (
+                  <button
+                    key={i}
+                    className={`book-barra ${activo ? 'activo' : ''}`}
+                    onClick={() => alternarFiltro('inst', i)}
+                    title={`${veces} en ${i} · clic para ver solo estas`}
+                  >
+                    <span className="book-barra-fondo" style={{ width: `${veces / resumen.inst[0][1] * 100}%` }} />
+                    <span className="book-barra-txt">{i}</span>
+                    <span className="book-barra-num">{veces}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="fotos-toolbar">
         <span className="fotos-total">
-          {cargando ? 'Cargando archivos…' : `${archivos.length} archivo(s) en el ${nombre}`}
+          {cargando
+            ? 'Cargando archivos…'
+            : filtro
+              ? `${visibles.length} de ${archivos.length} archivo(s)`
+              : `${archivos.length} archivo(s) en el ${nombre}`}
         </span>
+        <button
+          className="btn-run-all"
+          onClick={alAzar}
+          disabled={cargando || visibles.length === 0}
+          title={filtro ? 'Uno al azar de los filtrados' : `Uno al azar del ${nombre}`}
+        >🎲 Trade aleatorio</button>
+        {filtro && (
+          <button className="clear-eventos" onClick={() => setFiltro(null)}>× quitar el filtro</button>
+        )}
         <button
           className="clear-eventos"
           onClick={() => { setCargando(true); cargarLista() }}
@@ -198,7 +304,7 @@ export default function Book({ book = 'horror', nombre = 'Book of Horror', icono
       )}
 
       <div className="horror-archivos">
-        {archivos.map(a => (
+        {visibles.map(a => (
           <div key={a.id} className="horror-archivo">
             {a.esImagen ? (
               <img
@@ -275,12 +381,31 @@ export default function Book({ book = 'horror', nombre = 'Book of Horror', icono
           <button className="fotos-lightbox-cerrar" onClick={() => setZoom(null)} title="Cerrar (Esc)">×</button>
           <div className="ts-zoom" onClick={e => e.stopPropagation()}>
             <img className="fotos-lightbox-img" src={urlArchivo(zoom.id)} alt={zoom.nombre} />
-            {zoom.comentario && (
-              <div className="ts-zoom-pie">
-                <span className="ts-zoom-tit">{zoom.nombre}</span>
-                <p className="book-comentario">{zoom.comentario}</p>
+            <div className="ts-zoom-pie">
+              <div className="ts-zoom-cabecera">
+                <span className="ts-zoom-tit">
+                  {zoom.clave ? tradeDeClave(zoom.clave) : zoom.nombre}
+                </span>
+                <button className="btn-run-all" onClick={alAzar} disabled={visibles.length < 2}>
+                  🎲 otro
+                </button>
               </div>
-            )}
+              {zoom.cats?.length > 0 && (
+                <div className="horror-badges-cell">
+                  {zoom.cats.map(n => {
+                    const cat = CATEGORIAS_HORROR.find(c => c.n === n)
+                    return (
+                      <span key={n} className="horror-badge" title={cat?.nombre ?? `Categoría ${n}`}>
+                        #{n} {cat?.corto ?? ''}
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+              <p className={`book-comentario ${zoom.comentario ? '' : 'vacio'}`}>
+                {zoom.comentario || 'Sin comentario'}
+              </p>
+            </div>
           </div>
         </div>
       )}

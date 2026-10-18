@@ -2,8 +2,13 @@ import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import { getHistoricalRates } from 'dukascopy-node'
-import { instalarTransporteDukascopy, estadoTransporteDukascopy } from './dukascopy-transport.js'
+import { instalarTransporteDukascopy, estadoTransporteDukascopy, dukascopyLimitando, revalidarTransporteDukascopy } from './dukascopy-transport.js'
 import { getEventIndex, getEventosEnFecha } from './eventos.js'
+import {
+  TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
+} from './velas-grafico.js'
+import { limpiarDibujos, claveValida } from './dibujos.js'
+import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion } from './excursiones.js'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
 import { join, dirname, relative, resolve, sep, basename, extname } from 'path'
 import { fileURLToPath } from 'url'
@@ -783,6 +788,10 @@ app.get('/api/gap-filter', async (req, res) => {
         gapPct:    parseFloat(gapPct.toFixed(3)),
         gapDir,
         prevClose: prev.close,
+        // rango del día anterior: con él se puede mirar si la sesión abre fuera de lo que
+        // hizo ayer, que es otro de los filtros de Estrategias
+        prevHigh:  prev.high,
+        prevLow:   prev.low,
         openPrice: curr.open,
         eventos,
       })
@@ -1046,15 +1055,15 @@ app.get('/api/velas15m', async (req, res) => {
 const PHOTOS_ROOT = process.env.PHOTOS_DIR || 'G:\\Mi unidad'
 const IMG_EXT      = /\.(jpe?g|png)$/i
 
-// Cada año guarda las capturas en una carpeta distinta con convenciones distintas;
-// 2026 prioriza la subcarpeta "Separados" (recorte por instrumento) y usa la captura
-// del día completo como respaldo solo para los días que aún no se han separado a mano
+// Cada año guarda las capturas en una carpeta distinta con convenciones distintas. En todos
+// manda la subcarpeta "Separados" (el recorte por instrumento) cuando existe, y la captura
+// del día completo solo entra para los días que aún no se han separado a mano
 const PHOTO_YEARS = [
   { year: 2022, dir: 'Trading 2022\\Trades 2022' },
   { year: 2023, dir: 'Trading 2023\\DAY' },
   { year: 2024, dir: 'Trading 2024\\Trades' },
   { year: 2025, dir: 'Trading 2025\\Trades' },
-  { year: 2026, dir: 'Trading 2026\\Trades', separadosConRespaldo: true },
+  { year: 2026, dir: 'Trading 2026\\Trades' },
 ]
 
 function walkImages(dir, excludeDirNamed) {
@@ -1073,21 +1082,32 @@ function walkImages(dir, excludeDirNamed) {
   return out
 }
 
-// La subcarpeta "collage" duplica exactamente las capturas sueltas del día completo,
-// así que se ignora. De las sueltas restantes, solo se cuelan las de días que no
-// tengan ya su versión separada por instrumento (para no contar el mismo día 2 veces).
-function walkImages2026(dir) {
-  const todas = walkImages(dir, 'collage')
-  const separadas = todas.filter(p => basename(dirname(p)).toLowerCase() === 'separados')
-  const sueltas    = todas.filter(p => basename(dirname(p)).toLowerCase() !== 'separados')
+// Las capturas de un año para la pestaña Fotos, contando cada trade una sola vez. Hay tres
+// formas de acabar con el mismo trade dos veces en Drive y las tres se descartan aquí:
+//   · la subcarpeta "collage", que es copia exacta de las capturas del día completo;
+//   · el día completo de un día que ya está recortado por instrumento en "Separados";
+//   · el mismo archivo guardado en dos carpetas: 2023 lo tiene en TODOS y en su mes, y 2025
+//     en "Trades/<mes>" y otra vez en "Trades/2025/<mes>". Se queda el primero que aparece.
+// Esto solo se hacía con 2026, así que 2023, 2024 y 2025 salían repetidos en el catálogo
+// (y con ellos el trade aleatorio, sus filtros y sus recuentos).
+function capturasFotos(dir, year) {
+  const todas      = walkImages(dir, 'collage')
+  const esSeparada = p => basename(dirname(p)).toLowerCase() === 'separados'
   const fechasSeparadas = new Set(
-    separadas.map(p => parseFotoInfo({ year: 2026, path: p }).fecha).filter(Boolean)
+    todas.filter(esSeparada).map(p => parseFotoInfo({ year, path: p }).fecha).filter(Boolean)
   )
-  const sueltasSinSeparar = sueltas.filter(p => {
-    const { fecha } = parseFotoInfo({ year: 2026, path: p })
-    return !fecha || !fechasSeparadas.has(fecha)
-  })
-  return [...separadas, ...sueltasSinSeparar]
+
+  const vistos = new Set()
+  const out    = []
+  for (const path of todas) {
+    const { fecha, instrumento, numero } = parseFotoInfo({ year, path })
+    if (!esSeparada(path) && fecha && fechasSeparadas.has(fecha)) continue
+    const clave = fecha ? `${fecha}|${instrumento ?? ''}` : `${year}#${numero}`
+    if (vistos.has(clave)) continue
+    vistos.add(clave)
+    out.push(path)
+  }
+  return out
 }
 
 let _photoIndex   = null
@@ -1095,10 +1115,8 @@ let _photoIndexTs = 0
 function getPhotoIndex() {
   if (_photoIndex && Date.now() - _photoIndexTs < 10 * 60_000) return _photoIndex
   const all = []
-  for (const { year, dir, separadosConRespaldo } of PHOTO_YEARS) {
-    const full  = join(PHOTOS_ROOT, dir)
-    const files = separadosConRespaldo ? walkImages2026(full) : walkImages(full)
-    for (const path of files) all.push({ year, path })
+  for (const { year, dir } of PHOTO_YEARS) {
+    for (const path of capturasFotos(join(PHOTOS_ROOT, dir), year)) all.push({ year, path })
   }
   _photoIndex   = all
   _photoIndexTs = Date.now()
@@ -1498,6 +1516,180 @@ function guardarComentariosTrades(comentarios) {
   renameSync(tmp, TRADES_COMENTARIOS_PATH)
 }
 
+// ── El diario de operaciones (solo local) ──
+// Hasta ahora las operaciones vivían solo en localStorage del navegador: limpiar los datos
+// del sitio, o cambiar de navegador, era perderlas. Aquí se guardan junto a los comentarios,
+// con la misma escritura atómica (fichero temporal y rename) para que un corte a media
+// escritura no deje el JSON a medias. El navegador sigue teniendo su copia como caché.
+const TRADES_PATH = process.env.TRADES_DIARIO || join(PHOTOS_ROOT, 'Diario operaciones.json')
+
+function leerTradesDiario() {
+  try {
+    const d = JSON.parse(readFileSync(TRADES_PATH, 'utf8'))
+    return Array.isArray(d?.trades) ? d.trades : []
+  } catch { return [] }
+}
+
+app.get('/api/trades', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    const trades = leerTradesDiario()
+    res.json({ archivo: TRADES_PATH, total: trades.length, trades })
+  } catch (err) {
+    console.error('[trades]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.put('/api/trades', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    const trades = req.body?.trades
+    if (!Array.isArray(trades)) return res.status(400).json({ error: 'Se esperaba { trades: [...] }' })
+    // Una lista vacía casi siempre es un error del cliente (un render antes de cargar), y
+    // sobreescribiría años de diario: se rechaza salvo que se pida vaciar a propósito.
+    const previas = leerTradesDiario()
+    if (trades.length === 0 && previas.length > 0 && req.query.vaciar !== '1') {
+      return res.status(409).json({ error: `Hay ${previas.length} operaciones guardadas; para borrarlas, vaciar=1` })
+    }
+    const tmp = `${TRADES_PATH}.tmp`
+    writeFileSync(tmp, JSON.stringify({ actualizado: Date.now(), trades }))
+    renameSync(tmp, TRADES_PATH)
+    res.json({ archivo: TRADES_PATH, total: trades.length })
+  } catch (err) {
+    console.error('[trades]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── MFE / MAE de las operaciones del diario (solo local) ──
+// Se calculan una vez con las velas de Dukascopy y se guardan junto al diario: la primera
+// pasada son ~1.900 días de velas de 1 min y, con el feed limitando por IP, tarda un rato.
+// Después solo se calculan las operaciones nuevas. La medida está en server/excursiones.js.
+const EXCURSIONES_PATH = process.env.EXCURSIONES_TRADES || join(PHOTOS_ROOT, 'Excursiones trades.json')
+
+let excursiones = null   // clave de operación → resultado; el cálculo escribe sobre este mismo objeto
+function excursionesActuales() {
+  if (excursiones) return excursiones
+  try {
+    const d = JSON.parse(readFileSync(EXCURSIONES_PATH, 'utf8'))
+    // lo de versiones anteriores se tira: con otra clave nunca volvería a encontrarse
+    excursiones = Object.fromEntries(Object.entries(d?.resultados ?? {})
+      .filter(([, r]) => r?.v === VERSION_EXCURSION))
+  } catch {
+    excursiones = {}
+  }
+  return excursiones
+}
+
+function guardarExcursiones() {
+  const tmp = `${EXCURSIONES_PATH}.tmp`
+  writeFileSync(tmp, JSON.stringify({ actualizado: Date.now(), resultados: excursionesActuales() }))
+  renameSync(tmp, EXCURSIONES_PATH)
+}
+
+// Lo que falta: operaciones de un instrumento con velas en Dukascopy sin resultado de esta
+// versión. Con `reintentar`, también las que la otra vez se quedaron sin velas.
+function excursionesPendientes(reintentar = false) {
+  const hechas = excursionesActuales()
+  return leerTradesDiario().filter(t => {
+    if (!YF_TO_DUKASCOPY[t.ticker]) return false
+    const r = hechas[claveExcursion(t)]
+    if (r?.v !== VERSION_EXCURSION) return true
+    return reintentar && r.sinDatos === 'sin velas en el tramo'
+  })
+}
+
+const excursionesEstado = { activo: false, total: 0, hechas: 0, sinDatos: 0, error: null, inicio: null, fin: null }
+
+// Cuando el feed corta (429 o caída) se espera y se reintenta la misma operación; si sigue
+// cortado tras la última espera, se para y lo calculado hasta ahí queda guardado
+const ESPERAS_EXCURSION_MS = [30_000, 2 * 60_000, 5 * 60_000]
+
+async function calcularExcursiones(reintentar) {
+  const resultados = excursionesActuales()
+  // de la más reciente a la más antigua: lo último que se ha operado es lo primero que se mira
+  const pendientes = excursionesPendientes(reintentar).sort((a, b) => b.openTime - a.openTime)
+  Object.assign(excursionesEstado, {
+    activo: true, total: pendientes.length, hechas: 0, sinDatos: 0, error: null, inicio: Date.now(), fin: null,
+  })
+
+  // Las operaciones de un mismo día comparten fichero de Dukascopy: se lee una vez por
+  // instrumento y día en vez de una vez por operación. Un día vacío no se guarda, para que
+  // el reintento tras un 429 vuelva a pedirlo.
+  let enMemoria = { clave: null, velas: [] }
+  const velasDe = async (instrument, tramo) => {
+    if (tramo.tf !== 'm1') return obtenerTramoDukascopy(instrument, tramo.tf, tramo.desde, tramo.hasta)
+    const dia    = Math.floor(tramo.desde / 86400) * 86400
+    // un segundo antes de medianoche: con la medianoche justa se bajaría también el día siguiente
+    const finDia = Math.ceil(tramo.hasta / 86400) * 86400 - 1
+    const clave  = `${instrument}|${dia}|${finDia}`
+    if (enMemoria.clave === clave) return enMemoria.velas
+    // un día de 1 min es uno o dos ficheros: el presupuesto de una consulta de un día basta
+    const velas = await obtenerTramoDukascopy(instrument, 'm1', dia, finDia, DUKA_TIMEOUT_MS)
+    if (velas.length > 0) enMemoria = { clave, velas }
+    return velas
+  }
+
+  let sinGuardar = 0
+  try {
+    for (const t of pendientes) {
+      const instrument = YF_TO_DUKASCOPY[t.ticker]
+      let velas
+      for (let intento = 0; ; intento++) {
+        try {
+          velas = await velasDe(instrument, tramoDe(t))
+          // con el feed limitando, un tramo vacío no es "no hay datos" sino un fichero perdido
+          if (velas.length === 0 && dukascopyLimitando()) throw new Error('Dukascopy está limitando las peticiones de esta IP (429)')
+          break
+        } catch (err) {
+          if (intento >= ESPERAS_EXCURSION_MS.length) throw err
+          // si el 443 se ha caído a media tarea, el reintento ya irá por HTTP
+          revalidarTransporteDukascopy()
+          console.warn(`[excursiones] ${errDetalle(err)}; reintento en ${ESPERAS_EXCURSION_MS[intento] / 1000} s`)
+          await new Promise(r => setTimeout(r, ESPERAS_EXCURSION_MS[intento]))
+        }
+      }
+
+      const r = calcularExcursion(t, velas)
+      resultados[claveExcursion(t)] = { v: VERSION_EXCURSION, ...r }
+      excursionesEstado.hechas++
+      if (r.sinDatos) excursionesEstado.sinDatos++
+      if (++sinGuardar >= 50) { guardarExcursiones(); sinGuardar = 0 }
+    }
+  } catch (err) {
+    excursionesEstado.error = errDetalle(err)
+    console.error('[excursiones]', excursionesEstado.error)
+  } finally {
+    try { if (sinGuardar > 0) guardarExcursiones() } catch (err) { excursionesEstado.error = err.message }
+    excursionesEstado.activo = false
+    excursionesEstado.fin = Date.now()
+    console.log(`[excursiones] ${excursionesEstado.hechas} de ${excursionesEstado.total} calculadas`)
+  }
+}
+
+app.get('/api/excursiones', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  res.json({ resultados: excursionesActuales(), estado: excursionesEstado })
+})
+
+app.get('/api/excursiones/estado', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const pendientes = excursionesEstado.activo
+    ? excursionesEstado.total - excursionesEstado.hechas
+    : excursionesPendientes().length
+  res.json({ ...excursionesEstado, pendientes })
+})
+
+// Arranca el cálculo y responde al momento: el progreso se sigue con /api/excursiones/estado
+app.post('/api/excursiones/calcular', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  if (!excursionesEstado.activo) {
+    calcularExcursiones(req.query.reintentar === '1').catch(err => console.error('[excursiones]', err))
+  }
+  res.json({ ...excursionesEstado, pendientes: excursionesEstado.total - excursionesEstado.hechas })
+})
+
 // Lo que hay escrito sobre un trade: su comentario, sus etiquetas (las 13 categorías del
 // Book of Horror, por número) y si ya está revisado. Todo en la misma anotación, para que
 // respaldar ese JSON respalde el trabajo entero.
@@ -1883,6 +2075,202 @@ app.get('/api/dax-historico', (req, res) => {
     })
   } catch (err) {
     console.error('[dax-historico]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Pestaña Gráfico: velas por páginas, de la más reciente hacia atrás ──
+// El gráfico pide la última página al abrirse y la anterior a su vela más antigua cada vez
+// que el usuario se acerca al borde izquierdo. Dos fuentes:
+//   · duka: el CFD de Dukascopy, 24 h y con años de histórico, para todos los instrumentos;
+//   · csv:  el CSV del DAX cash a 5 min (solo local), solo sesión y sin velas de 1 min.
+
+// Velas del CSV del DAX por temporalidad, agrupadas una vez: son 450.000 de 5 min y cada
+// página del gráfico es solo un trozo
+const VELAS_POR_PAGINA_CSV = 1500
+const APERTURA_DAX_MIN     = 9 * 60
+const _daxPorTf = new Map()
+function velasCsvDax(tf) {
+  const sesiones = getSesionesDax()
+  const hecho = _daxPorTf.get(tf)
+  if (hecho?.sesiones === sesiones) return hecho.velas
+  const finas   = sesiones.flatMap(s => s.finas ?? [])
+  const minutos = TEMPORALIDADES[tf].minutos
+  // la diaria va de medianoche a medianoche, como la de Dukascopy, para que lleve la fecha sin hora
+  const velas   = agruparVelas(finas, minutos, minutos >= 1440 ? 0 : APERTURA_DAX_MIN)
+  _daxPorTf.set(tf, { sesiones, velas })
+  return velas
+}
+
+// Un tramo de Dukascopy entre dos instantes. Lo cerrado (antes de hoy UTC) va a la caché
+// de .bi5; lo de hoy se baja siempre, porque el fichero del día sigue creciendo y
+// cachearlo congelaría la sesión a medias.
+async function obtenerTramoDukascopy(instrument, timeframe, desde, hasta, timeoutMs = DUKA_TIMEOUT_HISTORICO_MS) {
+  const hoy    = Math.floor(Date.now() / 86400_000) * 86400
+  // Del sábado al domingo por la tarde (UTC) no cotiza nada de lo que hay aquí: índices,
+  // metales y petróleo abren el domingo a partir de las 21:00-23:00 UTC. Lo de hoy serían
+  // hasta una veintena de ficheros horarios vacíos, y cada petición de más acerca el 429.
+  const ahora   = new Date()
+  const cerrado = ahora.getUTCDay() === 6 || (ahora.getUTCDay() === 0 && ahora.getUTCHours() < 20)
+  const tramos  = []
+  if (desde < Math.min(hasta, hoy)) tramos.push({ desde, hasta: Math.min(hasta, hoy), useCache: true })
+  if (hasta > hoy && !cerrado) tramos.push({ desde: Math.max(desde, hoy), hasta, useCache: false })
+
+  const velas = []
+  for (const t of tramos) {
+    const data = await dukaFetch({
+      instrument, timeframe,
+      dates: { from: new Date(t.desde * 1000), to: new Date(t.hasta * 1000) },
+      useCache: t.useCache,
+      cacheFolderPath: DUKA_RAW_CACHE_DIR,
+    }, timeoutMs)
+    for (const [ms, open, high, low, close] of data) {
+      const time = Math.floor(ms / 1000)
+      if (time >= t.desde && time < t.hasta) velas.push({ time, open, high, low, close })
+    }
+  }
+  return velas
+}
+
+// Páginas vacías seguidas antes de dar el histórico por terminado: un fin de semana largo
+// deja vacía una página de 1 min, pero cuatro seguidas ya es que no hay más datos
+const PAGINAS_VACIAS_MAX = 4
+
+app.get('/api/grafico/velas', async (req, res) => {
+  const { ticker, tf = 'm15', fuente = 'duka' } = req.query
+  const conf = TEMPORALIDADES[tf]
+  if (!conf) return res.status(400).json({ error: `Temporalidad desconocida: ${tf}` })
+  const ahora = Math.floor(Date.now() / 1000)
+  const hasta = Math.min(Number(req.query.hasta) || ahora, ahora)
+
+  try {
+    if (fuente === 'csv') {
+      if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'El CSV del DAX solo está en local' })
+      if (ticker !== '^GDAXI') return res.status(400).json({ error: 'El CSV solo tiene el DAX' })
+      if (tf === 'm1') return res.status(400).json({ error: 'El CSV del DAX va a 5 minutos: no hay velas de 1 min' })
+      if (!existsSync(DAX_CSV)) return res.status(404).json({ error: `No se encuentra el CSV: ${DAX_CSV}` })
+      const { velas, hayMas } = paginaAnteriorA(velasCsvDax(tf), hasta, VELAS_POR_PAGINA_CSV)
+      return res.json({ ticker, tf, fuente: 'CSV DAX cash 5m', velas, hayMas })
+    }
+
+    if (fuente === 'yahoo') {
+      // los índices son el contado; oro, plata y petróleo, el futuro (Yahoo no da el spot)
+      const simbolo  = DUKA_TO_YF_FALLBACK[YF_TO_DUKASCOPY[ticker]] ?? ticker
+      const etiqueta = v => `Yahoo ${v.intervalo}${simbolo !== ticker ? ` (${simbolo})` : ''}`
+      let fin = hasta
+      for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
+        const v = ventanaYahoo(tf, fin, ahora)
+        if (!v) break
+        const crudas = await obtenerRangoYahoo(simbolo, v.intervalo, v.desde, v.hasta)
+        if (crudas.length > 0 || v.alLimite) {
+          const velas = tf === 'd1' ? agruparVelas(crudas, 1440) : agruparPorSesion(crudas, conf.minutos)
+          return res.json({ ticker, tf, fuente: etiqueta(v), velas, hayMas: !v.alLimite, aviso: v.aviso })
+        }
+        fin = v.desde
+      }
+      return res.json({ ticker, tf, fuente: `Yahoo ${YAHOO[tf].intervalo}`, velas: [], hayMas: false, aviso: YAHOO[tf].aviso })
+    }
+
+    const instrument = YF_TO_DUKASCOPY[ticker]
+    if (!instrument) return res.status(400).json({ error: `Sin datos de Dukascopy para ${ticker}` })
+    if (dukaCaido()) {
+      const error = dukascopyLimitando(DUKA_CIRCUITO_MS)
+        ? 'Dukascopy está limitando las peticiones de esta IP (429); prueba en unos minutos'
+        : 'Dukascopy no responde ahora mismo; prueba en unos minutos'
+      return res.status(503).json({ error })
+    }
+
+    // Las páginas se cortan en la medianoche de Madrid para no partir una vela de 4 h o diaria
+    let fin = hasta
+    for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
+      const inicio = inicioDiaMadrid(fin - conf.diasPagina * 86400)
+      const crudas = await obtenerTramoDukascopy(instrument, conf.duka, inicio, fin)
+      if (crudas.length > 0) {
+        const velas = agruparVelas(crudas, conf.minutos)
+        return res.json({ ticker, tf, fuente: `Dukascopy ${conf.duka}`, velas, hayMas: true })
+      }
+      fin = inicio
+    }
+    res.json({ ticker, tf, fuente: `Dukascopy ${conf.duka}`, velas: [], hayMas: false })
+  } catch (err) {
+    const esDuka = fuente !== 'csv' && fuente !== 'yahoo'
+    if (esDuka) marcarDukaCaido(err)
+    console.error('[grafico/velas]', errDetalle(err))
+    const error = esDuka && dukascopyLimitando()
+      ? 'Dukascopy está limitando las peticiones de esta IP (429); prueba en unos minutos'
+      : errDetalle(err)
+    res.status(500).json({ error })
+  }
+})
+
+// Velas de Yahoo entre dos instantes, en el intervalo que se pida. Las páginas antiguas se
+// repiten al ir y volver por el gráfico: se guardan en la caché de memoria (15 min).
+async function obtenerRangoYahoo(simbolo, intervalo, desde, hasta) {
+  const clave  = `yfg_${simbolo}_${intervalo}_${desde}_${hasta}`
+  const cached = fromCache(clave)
+  if (cached) return cached
+
+  const auth  = await getYFAuth()
+  const crumb = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''
+  const hdrs  = auth ? { ...YF_HEADERS, 'Cookie': auth.cookie } : YF_HEADERS
+  const url   = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(simbolo)}?interval=${intervalo}&period1=${desde}&period2=${hasta}${crumb}`
+  const resp  = await fetch(url, { headers: hdrs })
+  const json  = await resp.json().catch(() => null)
+  const r     = json?.chart?.result?.[0]
+  if (!r) throw new Error(`Yahoo: ${json?.chart?.error?.description ?? `HTTP ${resp.status}`}`)
+
+  const ts    = r.timestamp ?? []
+  const q     = r.indicators?.quote?.[0] ?? {}
+  const velas = []
+  for (let i = 0; i < ts.length; i++) {
+    const [open, high, low, close] = [q.open?.[i], q.high?.[i], q.low?.[i], q.close?.[i]]
+    if (open == null || high == null || low == null || close == null) continue
+    if (ts[i] < desde || ts[i] >= hasta) continue
+    velas.push({ time: ts[i], open, high, low, close })
+  }
+  toCache(clave, velas)
+  return velas
+}
+
+// ── Dibujos de la pestaña Gráfico (solo local) ──
+// Un JSON junto al diario y los comentarios, con una lista de dibujos por instrumento.
+// Misma escritura atómica (temporal y rename) que el resto: un corte a media escritura no
+// puede dejar el fichero a medias. En producción no hay Drive y el navegador se queda con
+// su propia copia.
+const DIBUJOS_PATH = process.env.DIBUJOS_GRAFICO || join(PHOTOS_ROOT, 'Dibujos grafico.json')
+
+function leerDibujosGrafico() {
+  try {
+    const d = JSON.parse(readFileSync(DIBUJOS_PATH, 'utf8'))
+    return d?.dibujos && typeof d.dibujos === 'object' ? d.dibujos : {}
+  } catch { return {} }
+}
+
+app.get('/api/dibujos', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const { clave } = req.query
+  if (!claveValida(clave)) return res.status(400).json({ error: 'Clave de instrumento no válida' })
+  res.json({ clave, dibujos: leerDibujosGrafico()[clave] ?? [] })
+})
+
+app.put('/api/dibujos', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    const { clave } = req.body ?? {}
+    if (!claveValida(clave)) return res.status(400).json({ error: 'Clave de instrumento no válida' })
+    let dibujos
+    try { dibujos = limpiarDibujos(req.body.dibujos) }
+    catch (err) { return res.status(400).json({ error: err.message }) }
+
+    const todos = leerDibujosGrafico()
+    if (dibujos.length) todos[clave] = dibujos
+    else delete todos[clave]
+    const tmp = `${DIBUJOS_PATH}.tmp`
+    writeFileSync(tmp, JSON.stringify({ actualizado: Date.now(), dibujos: todos }, null, 2))
+    renameSync(tmp, DIBUJOS_PATH)
+    res.json({ clave, total: dibujos.length })
+  } catch (err) {
+    console.error('[dibujos]', err.message)
     res.status(500).json({ error: err.message })
   }
 })

@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { crearGrafico } from './graficoVelasCore'
-import { crearHerramientasDibujo } from './chartDrawingTools'
-
-const HERRAMIENTAS = [
-  { id: 'cursor',    icon: '↖',   title: 'Cursor / seleccionar' },
-  { id: 'trendline', icon: '╱',   title: 'Línea de tendencia' },
-  { id: 'fib',       icon: 'Fib', title: 'Fibonacci (retroceso + extensión)' },
-  { id: 'ray',       icon: '→',   title: 'Ray horizontal' },
-]
+import { crearHerramientasDibujo, HERRAMIENTAS_DIBUJO as HERRAMIENTAS } from './chartDrawingTools'
 
 export default function GraficoVelas({ velas, patrones, ticker, prevClose, openPrice, skipTz = false, herramientas = false, trades, rango, operacion, alto, pantallaCompleta = false, onPantallaCompleta }) {
   const contenedorRef = useRef(null)

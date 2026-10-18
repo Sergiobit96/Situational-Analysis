@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { parseTradesXLSX, parseTradesDesdeAPI, fmtFechaTS, fmtHoraTS, CATEGORIAS_HORROR, PRODUCTO_A_INSTRUMENTO, PRODUCTO_A_TICKER, FACTOR_PRECIO } from './parseTrades'
 import { useTrades } from './useTrades'
+import { useExcursiones } from './useExcursiones'
+import { claveDeExcursion } from './estadisticas.js'
 import { intradayUrl } from './intradayApi'
 import GraficoVelas from './GraficoVelas'
 import { capturarVelasPNG } from './graficoVelasCore'
@@ -46,6 +48,8 @@ const ANOTACION_VACIA = { cats: [], texto: '' }
 
 export default function Operaciones({ abrir, onAbierto }) {
   const [trades, setTrades] = useTrades()
+  // MFE/MAE de cada operación, calculados desde la pestaña Estadísticas
+  const { resultados: excursiones } = useExcursiones()
   const [dragging, setDragging] = useState(false)
   const [error,    setError]    = useState(null)
   const [pagina,   setPagina]   = useState(0)
@@ -384,6 +388,15 @@ export default function Operaciones({ abrir, onAbierto }) {
     : -1
   const totalPaginas  = Math.max(1, Math.ceil(ordenadas.length / PAGE_SIZE))
   const enPagina       = ordenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
+
+  // Barra de fondo en la columna de puntos, para leer la página de un vistazo. La escala es
+  // el percentil 90 de lo que hay en pantalla: con el máximo, una operación enorme dejaba
+  // todas las demás en una rayita.
+  const topePuntos = (() => {
+    const o = enPagina.map(t => Math.abs(t.puntos ?? 0)).sort((a, b) => a - b)
+    return Math.max(1, o[Math.floor(0.9 * (o.length - 1))] ?? 1)
+  })()
+  const anchoPuntos = v => `${Math.max(8, Math.min(100, Math.abs(v) / topePuntos * 100))}%`
 
   // Con una categoría del Book of Horror activa, se muestra la foto de cada caso en vez
   // de la tabla de entry/exit: se agrupan las piernas de una misma sesión ("D53" puede
@@ -916,10 +929,15 @@ export default function Operaciones({ abrir, onAbierto }) {
                       <th>Producto</th><th>Dir</th>
                       <th title="Tamaño de la posición tal como viene del diario o del historial">Size</th>
                       <th>Puntos</th>
+                      <th title="MFE: lo más que llegó a ir ganando mientras estuvo abierta, en puntos (velas de Dukascopy, ±1-3 pts)">MFE</th>
+                      <th title="MAE: lo más que llegó a ir perdiendo mientras estuvo abierta, en puntos (velas de Dukascopy, ±1-3 pts)">MAE</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {enPagina.map((t, i) => (
+                    {enPagina.map((t, i) => {
+                      const exc = excursiones[claveDeExcursion(t)]
+                      const medida = exc && !exc.sinDatos
+                      return (
                       <tr
                         key={i}
                         className={`clickable-row ${t.puntos >= 0 ? 'fila-up' : 'fila-down'} ${seleccionado === t ? 'fila-seleccionada' : ''}`}
@@ -935,9 +953,19 @@ export default function Operaciones({ abrir, onAbierto }) {
                         <td>{t.producto}</td>
                         <td>{t.direccion}</td>
                         <td>{fmtSize(t.size)}</td>
-                        <td className="trades-puntos">{t.puntos > 0 ? '+' : ''}{t.puntos.toFixed(2)}</td>
+                        <td
+                          className={`trades-puntos seg-barra ${t.puntos >= 0 ? 'positivo' : 'negativo'}`}
+                          style={{ '--barra': anchoPuntos(t.puntos) }}
+                        >{t.puntos > 0 ? '+' : ''}{t.puntos.toFixed(2)}</td>
+                        <td className="trades-exc" title={exc?.sinDatos ? `Sin MFE: ${exc.sinDatos}` : undefined}>
+                          {medida ? `+${exc.mfe.toFixed(1)}` : '—'}
+                        </td>
+                        <td className="trades-exc" title={exc?.sinDatos ? `Sin MAE: ${exc.sinDatos}` : undefined}>
+                          {medida ? exc.mae.toFixed(1) : '—'}
+                        </td>
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

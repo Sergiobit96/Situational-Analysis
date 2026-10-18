@@ -1,4 +1,4 @@
-import { madridOffsetAt, londresOffsetAt } from './timezone'
+import { madridOffsetAt, londresOffsetAt } from './timezone.js'
 
 // Nombre de producto (tal cual aparece en el diario) → ticker usado en el resto de la app
 export const PRODUCTO_A_TICKER = {

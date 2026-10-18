@@ -73,6 +73,22 @@ const VELAS1 = [
   { id: 'negra',  label: '⬛ Negra',  dir: 'bajista' },
 ]
 
+// Dónde abre la sesión respecto al máximo y el mínimo del día anterior: por encima de aquel
+// máximo, por debajo de aquel mínimo, o dentro de lo que ya se había recorrido. Sin rango
+// del día anterior (la primera sesión de la tanda, o un instrumento sin calendario) devuelve
+// null y esa sesión se queda fuera de los tres subconjuntos.
+const posicionApertura = (a, previo) => {
+  if (!previo || !Number.isFinite(previo.high) || !Number.isFinite(previo.low)) return null
+  return a.apertura > previo.high ? 'encima' : a.apertura < previo.low ? 'debajo' : 'dentro'
+}
+
+const APERTURAS = [
+  { id: 'todas',  label: 'Todas',             pos: null,     nota: 'sin mirar dónde abrió el día' },
+  { id: 'encima', label: '↑ Sobre el máximo', pos: 'encima', nota: 'abre por encima del máximo del día anterior' },
+  { id: 'dentro', label: 'Dentro',            pos: 'dentro', nota: 'abre dentro del rango del día anterior' },
+  { id: 'debajo', label: '↓ Bajo el mínimo',  pos: 'debajo', nota: 'abre por debajo del mínimo del día anterior' },
+]
+
 // Qué operativa se simula. El stop de una pierna es el nivel de entrada de la contraria,
 // así que "con flip" es literalmente darle la vuelta a la posición cuando salta.
 const MODOS = [
@@ -83,6 +99,11 @@ const MODOS = [
 // Dónde se pone el stop. Al otro extremo, 1R es el rango entero de la vela; a la mitad se
 // arriesga la mitad, así que la R se hace pequeña y con ella el disparador del break even y
 // el paso de la pirámide.
+// Puntos de horquilla y comisión por unidad y lado. Hasta ahora todo salía en bruto, que
+// con brackets de 27 puntos de mediana no es un detalle: dos puntos por unidad y lado se
+// llevan miles de puntos del acumulado de 4.400 sesiones.
+const COSTES = [0, 0.5, 1, 2]
+
 // A qué modo se cae cuando el stop deja de estar en el extremo contrario
 const SIN_FLIP = { flip: 'ambos' }
 
@@ -161,9 +182,11 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [error,      setError]      = useState(null)
   const [filtros,    setFiltros]    = useState(() => new Set())   // vacío = sin filtrar
   const [vela1,      setVela1]      = useState('todas')
+  const [aperturaPos, setAperturaPos] = useState('todas')
   const [modo,       setModo]       = useState(estrategiaDe(estrategiaId).modoInicial ?? 'ambos')
   const [nivelStop,  setNivelStop]  = useState('extremo')
   const [tamano,     setTamano]     = useState('uno')
+  const [coste,      setCoste]      = useState(0)
   const [stopModo,   setStopModo]   = useState('fijo')
   const [volumen,    setVolumen]    = useState('fijo')
   const [tpModo,     setTpModo]     = useState('no')
@@ -198,6 +221,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     tpPct: tpValor,
     stopPct,
     tamanoAnadido: TAMANOS.find(t => t.id === tamano)?.tamano ?? 1,
+    costePts: Number(coste) > 0 ? Number(coste) : 0,
   }
 
   const toggleDia = n => setDias(prev => {
@@ -288,6 +312,20 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       const d = await r.json()
       if (d.error) throw new Error(d.error)
 
+      // El rango del día anterior se saca de la lista entera, ANTES de filtrar por día de la
+      // semana: si no, "el anterior" de un lunes sería el lunes pasado.
+      const previos = new Map()
+      let anterior = null
+      for (const ses of (d.sesiones ?? [])) {
+        if (anterior) previos.set(ses.date, anterior)
+        if (ses.velas?.length) {
+          anterior = {
+            high: Math.max(...ses.velas.map(v => v.high)),
+            low:  Math.min(...ses.velas.map(v => v.low)),
+          }
+        }
+      }
+
       const semana = new Set(dias)
       const lista = (d.sesiones ?? [])
         .filter(s => semana.has(new Date(`${s.date}T12:00:00Z`).getUTCDay()))
@@ -302,6 +340,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           sesion: { date: s.date, prevClose: null },
           velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
           ventana: prep.ventana,
+          previo: previos.get(s.date) ?? null,
           fuente: 'CSV DAX 5 min',
           analisis: analizarSesion({
             ...opciones, velas: prep.velas, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
@@ -424,6 +463,10 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         const prep = prepararSesion(estr, ticker, velas)
         const fila = {
           sesion: s, fuente,
+          // el calendario del Gap Filter ya trae el máximo y el mínimo del día anterior
+          previo: Number.isFinite(s.prevHigh) && Number.isFinite(s.prevLow)
+            ? { high: s.prevHigh, low: s.prevLow }
+            : null,
           velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
           ventana: prep.ventana,
           analisis: analizarSesion({
@@ -459,12 +502,25 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
   // recalculo, y son todas valores sueltos
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  })), [resultados, ticker, modoEfectivo, stopModo, volumen, tpValor, stopPct, tamano])
+  })), [resultados, ticker, modoEfectivo, stopModo, volumen, tpValor, stopPct, tamano, coste])
 
   const analizadas = useMemo(() => {
     const dir = VELAS1.find(v => v.id === vela1)?.dir
-    return dir ? conModo.filter(({ analisis: a }) => a.valido && a.dir1 === dir) : conModo
-  }, [conModo, vela1])
+    const pos = APERTURAS.find(x => x.id === aperturaPos)?.pos
+    let out = dir ? conModo.filter(({ analisis: a }) => a.valido && a.dir1 === dir) : conModo
+    if (pos) out = out.filter(r => r.analisis.valido && posicionApertura(r.analisis, r.previo) === pos)
+    return out
+  }, [conModo, vela1, aperturaPos])
+
+  // cuántas sesiones hay de cada caso, para no tener que ir probando los chips
+  const porApertura = useMemo(() => {
+    const cuenta = { encima: 0, dentro: 0, debajo: 0 }
+    for (const r of conModo) {
+      const pos = r.analisis.valido ? posicionApertura(r.analisis, r.previo) : null
+      if (pos) cuenta[pos]++
+    }
+    return cuenta
+  }, [conModo])
 
   const resumen = useMemo(() => resumir(analizadas.map(r => r.analisis)), [analizadas])
 
@@ -476,6 +532,23 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       .map(({ sesion, analisis: a }) => ({ date: sesion.date, pts: a.resultadoTotalPts ?? a.resultadoPts })),
     [analizadas],
   )
+
+  // Con doce filtros combinables es fácil dar con la combinación que brilla en todo el
+  // histórico por casualidad. Partiendo las sesiones por la mitad en el tiempo y midiendo
+  // las dos por separado se ve enseguida si la ventaja estaba repartida o solo en un tramo.
+  const mitades = useMemo(() => {
+    const val = analizadas
+      .filter(r => r.analisis.valido)
+      .sort((a, b) => a.sesion.date.localeCompare(b.sesion.date))
+    if (val.length < 40) return null   // con menos, partir por la mitad no dice nada
+    const trozo = lista => ({
+      desde: lista[0].sesion.date,
+      hasta: lista[lista.length - 1].sesion.date,
+      r: resumir(lista.map(x => x.analisis)),
+    })
+    const corte = Math.floor(val.length / 2)
+    return { primera: trozo(val.slice(0, corte)), segunda: trozo(val.slice(corte)) }
+  }, [analizadas])
 
   // Los filtros se acumulan: una sesión sale si cumple TODOS los que estén puestos, así que
   // "Sale en BE" + "Añade 3+" son los días en los que pasaron las dos cosas.
@@ -652,6 +725,26 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
         <div className="filtro-group">
           <label className="filtro-label">
+            Apertura del día
+            <span className="filtro-valor">{APERTURAS.find(x => x.id === aperturaPos)?.nota}</span>
+          </label>
+          <div className="filtro-presets">
+            {APERTURAS.map(x => (
+              <button
+                key={x.id}
+                className={`chip ${aperturaPos === x.id ? 'activo' : ''}`}
+                onClick={() => { setAperturaPos(x.id); setMostradas(POR_PAGINA) }}
+                title={x.nota}
+              >
+                {x.label}
+                {x.pos && <span className="chip-cuenta">{porApertura[x.pos]}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="filtro-group">
+          <label className="filtro-label">
             Operativa
             <span className="filtro-valor">{MODOS.find(m => m.id === modoEfectivo)?.nota}</span>
           </label>
@@ -772,6 +865,45 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           </div>
         </div>
 
+        <div className="filtro-group">
+          <label className="filtro-label">
+            Costes
+            <span className="filtro-valor">
+              {Number(coste) > 0
+                ? `${Number(coste).toLocaleString('es-ES')} pts por unidad y lado, descontados al abrir y al cerrar`
+                : 'resultados en bruto, sin horquilla ni comisión'}
+            </span>
+          </label>
+          <div className="filtro-presets">
+            {COSTES.map(c => (
+              <button
+                key={c}
+                className={`chip ${Number(coste) === c ? 'activo' : ''}`}
+                onClick={() => { setCoste(c); setMostradas(POR_PAGINA) }}
+                title={c === 0 ? 'Sin costes' : `${c} puntos por unidad en cada lado`}
+              >{c === 0 ? 'Sin costes' : `${c.toLocaleString('es-ES')} pts`}</button>
+            ))}
+            <input
+              key={coste}
+              className="pag-input filtro-pct"
+              type="number"
+              min={0}
+              max={50}
+              step={0.1}
+              defaultValue={coste}
+              title="Puntos de coste por unidad y lado"
+              onFocus={e => e.target.select()}
+              onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+              onBlur={e => {
+                const n = Number(e.target.value)
+                if (!Number.isFinite(n) || n < 0) { e.target.value = coste; return }
+                setCoste(n)
+                setMostradas(POR_PAGINA)
+              }}
+            />
+          </div>
+        </div>
+
         {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
           <label className="filtro-label">Periodo</label>
           <div className="filtro-periodos">
@@ -836,11 +968,20 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         {error && <div className="error-global">{error}</div>}
       </div>
 
+      {resultados.length === 0 && !cargando && (
+        <div className="estr-vacio">
+          <p className="estr-vacio-tit">Elige los filtros y pulsa <strong>Analizar sesiones</strong></p>
+          <p className="estr-vacio-sub">{estr.nota}</p>
+        </div>
+      )}
+
       {resultados.length > 0 && (
-        <>
+        <div className="estr-resultados">
           <Resumen r={resumen} />
 
           <CurvaEquity sesiones={sesionesCurva} />
+
+          <Mitades mitades={mitades} />
 
           <div className="filtro-group">
             <label className="filtro-label">
@@ -895,7 +1036,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               )}
             </>
           )}
-        </>
+        </div>
       )}
     </div>
   )
@@ -913,7 +1054,11 @@ function Resumen({ r }) {
     { label: 'Días con operación',    valor: fmtPct(r.pctEntrada), sub: lados },
     { label: 'Operaciones ganadoras', valor: fmtPct(r.pctGanadas), sub: sobreOps, marca: '▲', tono: 'verde' },
     { label: 'Resultado medio',       valor: fmtPtsSgn(r.resultadoMedPts), sub: 'por sesión operada' },
-    { label: 'Acumulado',             valor: fmtPtsSgn(r.totalPts), sub: sobreOps },
+    {
+      label: 'Acumulado',
+      valor: fmtPtsSgn(r.totalPts),
+      sub: r.costePts > 0 ? `${sobreOps} · ${fmtSgn(-r.costePts)} de costes` : sobreOps,
+    },
     {
       label: 'Profit factor',
       // sin ninguna pérdida la división no existe: se pinta como infinito
@@ -952,6 +1097,64 @@ function Resumen({ r }) {
         . Los resultados van en puntos del instrumento: cerrar en el extremo contrario del
         bracket cuesta exactamente su rango. Si una vela rompe los dos extremos a la vez,
         se lee como entrada larga con el stop saltando en esa misma vela.
+      </p>
+    </div>
+  )
+}
+
+// Las dos mitades del histórico filtrado, una al lado de la otra. No es un backtest
+// fuera de muestra de verdad — para eso habría que elegir los filtros mirando solo la
+// primera mitad —, pero sí enseña lo más habitual: una configuración que solo funciona
+// en un tramo del histórico.
+function Mitades({ mitades }) {
+  if (!mitades) return null
+  const { primera, segunda } = mitades
+  const pf = m => (m.r.nOps === 0 ? null : m.r.profitFactor)
+  const pf1 = pf(primera)
+  const pf2 = pf(segunda)
+
+  const veredicto = () => {
+    if (pf1 == null || pf2 == null) return 'Una de las dos mitades no tiene operaciones.'
+    if (pf2 < 1) return 'La segunda mitad pierde dinero: lo de la primera no se sostiene.'
+    if (pf1 < 1) return 'La primera mitad perdía y la segunda gana: la ventaja, si existe, es reciente.'
+    const peor = Math.min(pf1, pf2), mejor = Math.max(pf1, pf2)
+    if (peor >= 1.2 && mejor / peor < 1.5) return 'Las dos mitades aguantan y se parecen: buena señal.'
+    return 'Las dos ganan, pero una bastante más que la otra: cuidado con fiarse del total.'
+  }
+
+  const fila = (etiqueta, valor) => (
+    <tr>
+      <th>{etiqueta}</th>
+      <td>{valor(primera)}</td>
+      <td>{valor(segunda)}</td>
+    </tr>
+  )
+  const dia = f => f.split('-').reverse().join('/')
+
+  return (
+    <div className="estr-resumen estr-mitades">
+      <table className="estr-mitades-tabla">
+        <thead>
+          <tr>
+            <th>Mitad a mitad</th>
+            <th>Primera mitad</th>
+            <th>Segunda mitad</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fila('Periodo',        m => `${dia(m.desde)} → ${dia(m.hasta)}`)}
+          {fila('Sesiones',       m => m.r.n)}
+          {fila('Operaciones',    m => m.r.nOps)}
+          {fila('Acumulado',      m => fmtPtsSgn(m.r.totalPts))}
+          {fila('Resultado medio', m => fmtPtsSgn(m.r.resultadoMedPts))}
+          {fila('Profit factor',  m => (m.r.nOps === 0 ? '—' : m.r.profitFactor == null ? '∞' : m.r.profitFactor.toFixed(2)))}
+          {fila('Ganadoras',      m => fmtPct(m.r.pctGanadas))}
+        </tbody>
+      </table>
+      <p className="estr-nota">
+        <strong>{veredicto()}</strong> Las sesiones filtradas se parten por la mitad en el
+        tiempo y cada trozo se mide por separado. Si cambias un filtro y el total mejora pero
+        una de las dos mitades se hunde, lo que has encontrado es una casualidad de ese tramo.
       </p>
     </div>
   )

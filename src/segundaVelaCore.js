@@ -1,4 +1,4 @@
-import { madridOffsetAt } from './timezone'
+import { madridOffsetAt } from './timezone.js'
 
 // ── Estrategia SRS: la 2ª vela de 15 min ───────────────────────────────────────
 // El bracket es el máximo y el mínimo de la segunda vela de 15 min de la sesión.
@@ -56,6 +56,10 @@ export const fmtPts = v =>
 // `stopPct` dice dónde va el stop como fracción del rango del bracket: 1 lo pone en el
 // extremo contrario (lo de siempre, 1R = el rango entero) y 0,5 a mitad de vela. Con él
 // cambia el tamaño de la R, y con la R el disparador del break even y el paso de la pirámide.
+// `costePts` son los puntos que cuesta cada unidad en cada lado (horquilla más comisión):
+// se restan al abrir y al cerrar, así que una pierna de dos unidades con 1 punto de coste
+// paga 4. Todo lo demás (break even, pirámide, objetivo) sigue mirando el precio en bruto,
+// que es lo que hace el mercado; el coste solo entra en el resultado.
 // `tamanoAnadido` es lo que mete cada unidad de la pirámide: 1, o 0,5 para añadir de media
 // en media. La entrada vale siempre 1. Cuanto más pequeños los añadidos, menos se desplaza
 // el precio medio de la posición hacia el precio actual — y como el stop del conjunto se
@@ -74,7 +78,7 @@ export const fmtPts = v =>
 // instrumento, pero recibiendo { open, close, minutosVela, nBracket } se puede braquetear
 // otra vela de otro tamaño en otro tramo del día — es lo que usa la Rule of 4, que coge la
 // cuarta vela de 10 min desde que sale la noticia del FOMC.
-export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, velasFinas = null, finasEtiqueta = '5m', ventana = null }) {
+export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -161,7 +165,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
   let ladoActual = lado
   while (true) {
     const p = simularPierna({
-      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido,
+      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, costePts,
       // una pierna abierta al saltar el stop de la anterior no puede morir en esa misma
       // vela: dentro de 15 min no se sabe el orden y encadenaría vueltas irreales
       stopDesde: piernas.length ? desde + 1 : desde,
@@ -180,10 +184,11 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
   const vueltas = piernas.slice(1).map(p => ({
     lado: p.lado, entrada: p.entrada, salida: p.salida,
     resultadoPts: p.resultadoPts, resultadoR: p.resultadoR,
-    unidades: p.unidades, volumen: p.volumen, anadidos: p.anadidos, objetivo: p.objetivo,
+    unidades: p.unidades, volumen: p.volumen, coste: p.coste, anadidos: p.anadidos, objetivo: p.objetivo,
   }))
   const resultadoTotalR   = piernas.reduce((n, p) => n + p.resultadoR, 0)
   const resultadoTotalPts = piernas.reduce((n, p) => n + p.resultadoPts, 0)
+  const costeTotal        = piernas.reduce((n, p) => n + p.coste, 0)
 
   return {
     ...comun,
@@ -192,6 +197,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
     salida:  pierna.salida,
     unidades: pierna.unidades,
     volumen: pierna.volumen,
+    coste: pierna.coste,
     anadidos: pierna.anadidos,
     objetivo: pierna.objetivo,
     resultadoPts: pierna.resultadoPts,
@@ -205,6 +211,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
     flip: vueltas[0] ?? null,   // la primera vuelta, que es la que resume la tarjeta
     resultadoTotalPts,
     resultadoTotalR,
+    costeTotal,
     tocaAbajoAntes: resto.slice(0, iEntrada).some(v => v.low <= low),
     resultado: resultadoTotalR > 0 ? 'ganada' : 'perdida',
   }
@@ -213,7 +220,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
 // Una pierna de la operación: entra al romper su extremo y sale al tocar el contrario
 // (−1R) o, si no lo toca, al cierre de la sesión. 1R es el rango del bracket en los dos
 // sentidos, porque entrada y stop están en los extremos opuestos.
-function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1 }) {
+function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, costePts = 0 }) {
   const paso    = pasoPiramide(piramide)
   const largo   = lado === 'largo'
   const entradaPrecio = largo ? high : low
@@ -318,20 +325,26 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
 
   // Con pirámide el resultado es el de todas las unidades abiertas, que es el sentido de
   // meter más volumen: cada una cuenta desde su propio precio de entrada y por lo que mete.
-  const bruto = unidades.reduce((n, u, k) => n + pesos[k] * (largo ? salida.precio - u : u - salida.precio), 0)
+  const bruto   = unidades.reduce((n, u, k) => n + pesos[k] * (largo ? salida.precio - u : u - salida.precio), 0)
+  const volumen = pesos.reduce((a, b) => a + b, 0)
+  // la horquilla se paga dos veces por unidad: al abrirla y al cerrarla
+  const coste = 2 * costePts * volumen
+  const neto  = bruto - coste
 
   return {
     lado, entrada, salida, iSalida,
     objetivo,
     unidades: unidades.length,
-    volumen: pesos.reduce((a, b) => a + b, 0),
+    volumen,
+    coste,
     anadidos,
     // en puntos, que es como se lee en el gráfico; la versión en R se conserva porque el
     // bracket es distinto cada día y es lo que permite comparar sesiones entre sí
-    resultadoPts: bruto,
+    resultadoPts: neto,
+    brutoPts: bruto,
     mfePts: mfe,
     maePts: Math.max(mae, 0),
-    resultadoR: bruto / riesgo,
+    resultadoR: neto / riesgo,
     mfeR: mfe / riesgo,
     maeR: Math.max(mae, 0) / riesgo,
   }
@@ -370,6 +383,7 @@ export function resumir(analisis) {
     pctVenta:     pct(ops.filter(a => a.salida.motivo === 'bracket').length, ops.length),
     pctBE:        pct(ops.filter(a => a.salida.motivo === 'breakeven').length, ops.length),
     pctObjetivo:  pct(ops.filter(a => a.salida.motivo === 'objetivo').length, ops.length),
+    costePts:     ops.reduce((n, a) => n + (a.costeTotal ?? 0), 0),
     resultadoMed: media(erres),
     resultadoMdn: mediana(erres),
     totalR:       erres.length ? erres.reduce((a, b) => a + b, 0) : null,

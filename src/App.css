@@ -3316,3 +3316,502 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
 
 /* Etiquetas del Book of Horror en Operaciones: legibles sin tener que afinar la vista */
 .ops-etiquetas-chips .dia-esp-chip { font-size: 0.85rem; padding: 0.3rem 0.75rem; }
+
+/* ── Estrategias: la pestaña tiene su propio aire ────────────────────────────
+   Los filtros son doce grupos: en una sola columna obligaban a bajar media
+   pantalla antes de llegar al botón. Aquí se reparten en una rejilla de fichas,
+   que además hace que la pestaña se lea como un panel de mandos y no como un
+   formulario. Todo va colgado de .estrategias-page para no tocar Gap Filter,
+   que comparte las mismas clases de filtro. */
+
+/* Selector de estrategia: control segmentado en vez de tres píldoras sueltas */
+.estrategias-page .estrategias-nav {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem;
+  gap: 0.2rem;
+  width: fit-content;
+}
+.estrategias-page .estrategia-chip {
+  background: transparent;
+  border-color: transparent;
+  padding: 0.4rem 1.05rem;
+}
+.estrategias-page .estrategia-chip:hover { background: var(--surface-2); color: var(--text); }
+.estrategias-page .estrategia-chip.activo {
+  box-shadow: 0 1px 10px rgba(109, 93, 252, 0.35);
+}
+
+/* Encabezado con una barra de acento en degradado */
+.estrategias-page .estrategia-intro {
+  border-left: none;
+  position: relative;
+  overflow: hidden;
+  padding-left: 1.5rem;
+}
+.estrategias-page .estrategia-intro::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+}
+
+/* Filtros a la izquierda, en una columna fija, y los resultados a la derecha con
+   los gráficos en grande: es la forma de trabajar de esta pestaña — se toca un
+   filtro y se mira el gráfico, sin perder de vista ninguno de los dos. */
+.estrategias-page .estrategia-panel {
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+}
+.estrategias-page .filtro-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.9rem;
+  position: sticky;
+  top: 0.75rem;
+  max-height: calc(100vh - 1.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.estrategias-page .filtro-controls::-webkit-scrollbar { width: 6px; }
+.estrategias-page .filtro-controls::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+/* en la columna, los grupos no llevan ficha: serían cajas dentro de una caja */
+.estrategias-page .filtro-controls > .filtro-group {
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 0.4rem;
+}
+/* chips más pequeños para que quepan dos o tres por fila en 258 px */
+.estrategias-page .filtro-controls .chip,
+.estrategias-page .filtro-controls .dia-chip,
+.estrategias-page .filtro-controls .periodo-chip,
+.estrategias-page .filtro-controls .filtro-otros {
+  font-size: 0.72rem;
+  padding: 0.24rem 0.55rem;
+}
+.estrategias-page .filtro-controls .dia-chip { padding: 0.24rem 0.5rem; }
+.estrategias-page .filtro-label {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+.estrategias-page .filtro-valor {
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0.95;
+}
+
+/* La columna de resultados */
+.estrategias-page .estr-resultados {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-width: 0;
+}
+/* un gráfico por fila: es lo que hace que se vean de verdad */
+.estrategias-page .multi-charts-grid { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1750px) {
+  .estrategias-page .multi-charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Antes de analizar, la derecha no se queda en blanco */
+.estr-vacio {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+.estr-vacio-tit { font-size: 0.95rem; color: var(--text); margin-bottom: 0.4rem; }
+.estr-vacio-sub { font-size: 0.8rem; color: var(--muted); }
+
+@media (max-width: 1100px) {
+  .estrategias-page .estrategia-panel { grid-template-columns: minmax(0, 1fr); }
+  .estrategias-page .filtro-controls { position: static; max-height: none; }
+}
+
+/* El botón de analizar y los avisos ocupan la fila entera */
+.estrategias-page .btn-filtrar {
+  align-self: stretch;
+  justify-content: center;
+  padding: 0.75rem 1.4rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 2px 14px rgba(109, 93, 252, 0.3);
+}
+.estrategias-page .btn-filtrar:hover:not(:disabled) { opacity: 1; filter: brightness(1.1); }
+
+/* Casillas del resumen: números tabulares y un realce al pasar por encima */
+.estrategias-page .estr-tile {
+  background: linear-gradient(160deg, var(--surface) 0%, var(--surface-2) 100%);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.estrategias-page .estr-tile:hover { border-color: var(--accent-2); transform: translateY(-1px); }
+.estrategias-page .estr-tile-valor { font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* Tarjetas de sesión: se levantan un poco al pasar el ratón */
+.estrategias-page .estr-card {
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.estrategias-page .estr-card:not(.pantalla-completa):hover {
+  border-color: var(--accent-2);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+/* las cifras grandes caben en una línea y los valores quedan alineados aunque la
+   etiqueta ocupe dos */
+.estrategias-page .estr-tiles { grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); }
+.estrategias-page .estr-tile-label { min-height: 2.1em; align-items: flex-start; }
+/* el botón se queda pegado al fondo de la columna de filtros: con doce grupos, al
+   bajar a los últimos ya no hay que volver arriba para analizar */
+.estrategias-page .filtro-controls .btn-filtrar {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  z-index: 2;
+  box-shadow: 0 0 0 0.9rem var(--surface), 0 2px 14px rgba(109, 93, 252, 0.3);
+}
+
+/* Las dos mitades del histórico, una al lado de la otra */
+.estr-mitades-tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.estr-mitades-tabla th,
+.estr-mitades-tabla td {
+  padding: 0.35rem 0.6rem;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.estr-mitades-tabla thead th {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.estr-mitades-tabla tbody th {
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+}
+.estr-mitades-tabla thead th:first-child { text-align: left; }
+.estr-mitades-tabla tbody tr:last-child th,
+.estr-mitades-tabla tbody tr:last-child td { border-bottom: none; }
+
+/* ── Seguimiento más visual ─────────────────────────────────────────────── */
+/* Resumen del mes encima de la tabla */
+.seg-mes-resumen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.2rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.seg-mes-resumen strong { color: var(--text); font-size: 0.95rem; }
+.seg-mes-resumen .verde strong { color: var(--green); }
+.seg-mes-resumen .rojo  strong { color: var(--red); }
+
+/* Barra de fondo dentro de la celda, proporcional al mayor valor del mes */
+.seg-page .trades-tabla td.seg-barra {
+  position: relative;
+  font-variant-numeric: tabular-nums;
+}
+.seg-page .trades-tabla td.seg-barra::before {
+  content: '';
+  position: absolute;
+  inset: 3px auto 3px 3px;
+  width: var(--barra, 0);
+  border-radius: 3px;
+  opacity: 0.18;
+  pointer-events: none;
+}
+.seg-page .trades-tabla td.seg-barra.positivo::before { background: var(--green); }
+.seg-page .trades-tabla td.seg-barra.negativo::before { background: var(--red); }
+/* las cifras en euros son largas: casillas algo más anchas para que no se parta el € */
+.seg-page .estr-tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.seg-page .estr-tile-label { min-height: 2.1em; align-items: flex-start; }
+/* la barra se pega al número, que va alineado a la derecha */
+.seg-page .trades-tabla td.seg-barra::before { inset: 3px 3px 3px auto; }
+/* la misma barra de fondo en la tabla de Operaciones */
+.ops-page .trades-tabla td.seg-barra,
+.trades-tabla td.trades-puntos.seg-barra { position: relative; font-variant-numeric: tabular-nums; }
+.trades-tabla td.trades-puntos.seg-barra::before {
+  content: '';
+  position: absolute;
+  inset: 3px 3px 3px auto;
+  width: var(--barra, 0);
+  border-radius: 3px;
+  opacity: 0.16;
+  pointer-events: none;
+}
+.trades-tabla td.trades-puntos.seg-barra.positivo::before { background: var(--green); }
+.trades-tabla td.trades-puntos.seg-barra.negativo::before { background: var(--red); }
+
+/* ── Books: el reparto de etiquetas e instrumentos, en barras ─────────────── */
+.book-resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+.book-bloque { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.book-bloque-tit {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.book-bloque-sub { text-transform: none; letter-spacing: 0; color: var(--accent-2); font-weight: 600; }
+
+/* cada fila es una barra con su texto encima: se lee el reparto de un vistazo
+   y al pulsarla se filtran las capturas de esa etiqueta o instrumento */
+.book-barra {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0.28rem 0.5rem;
+  overflow: hidden;
+  text-align: left;
+}
+.book-barra:hover  { border-color: var(--accent-2); }
+.book-barra.activo { border-color: var(--accent); }
+.book-barra-fondo {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  opacity: 0.22;
+  pointer-events: none;
+}
+.book-barra.activo .book-barra-fondo { opacity: 0.4; }
+.book-barra-txt {
+  position: relative;
+  flex: 1;
+  font-size: 0.76rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.book-barra-num {
+  position: relative;
+  font-size: 0.76rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* La captura manda: miniatura más grande y los metadatos solo al pasar por encima */
+.book-page .horror-archivos { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); }
+.book-page .horror-thumb { height: 165px; transition: transform 0.15s; }
+.book-page .horror-archivo { transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.book-page .horror-archivo:hover {
+  border-color: var(--accent-2);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.book-page .horror-pie { opacity: 0.35; transition: opacity 0.15s; }
+.book-page .horror-archivo:hover .horror-pie { opacity: 1; }
+.book-page .book-comentario {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* ficha del trade dentro de la lupa del book */
+.ts-zoom .ts-zoom-pie .book-comentario { max-width: 70ch; }
+.ts-zoom .ts-zoom-cabecera { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.ts-zoom .ts-zoom-cabecera .btn-run-all { padding: 0.3rem 0.8rem; font-size: 0.8rem; }
+
+/* ═══════════════════════════════════════
+   PESTAÑA GRÁFICO: gráfico a pantalla completa
+═══════════════════════════════════════ */
+.contenido.contenido-ancho { max-width: none; padding: 0.75rem 1rem; }
+
+.grafico-pro {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  /* todo el alto que deja la barra superior (60px) menos el relleno del contenido */
+  height: calc(100vh - 60px - 1.5rem);
+  min-height: 420px;
+}
+
+.grafico-pro-barra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+}
+.grafico-pro-grupo { display: flex; gap: 0.25rem; }
+.grafico-pro-select {
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.grafico-pro .dibujo-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.grafico-pro .dibujo-btn:disabled:hover { border-color: var(--border); color: var(--muted); }
+.grafico-pro-estado {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.grafico-pro-error { color: var(--red); }
+
+.grafico-pro-lienzo {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.grafico-pro-chart { position: absolute; inset: 0; }
+
+/* datos de la vela bajo el cursor, arriba a la izquierda como en TradingView */
+.grafico-pro-leyenda {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.75rem;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.grafico-pro-leyenda strong { color: var(--text); font-weight: 650; }
+.grafico-pro-leyenda b { color: var(--text); font-weight: 500; }
+.grafico-pro-leyenda .sube { color: var(--green); }
+.grafico-pro-leyenda .baja { color: var(--red); }
+
+@media (max-width: 900px) {
+  .contenido.contenido-ancho { padding: 0.75rem 1rem; }
+  /* aquí la barra lateral pasa a ser una fila arriba y la superior deja de ser fija */
+  .grafico-pro { height: 70vh; }
+  .grafico-pro-estado { margin-left: 0; width: 100%; }
+}
+
+/* ── Pestaña Estadísticas ────────────────────────────────────────────────── */
+.stats-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.stats-page .ts-menu-tit { flex-basis: 3.6rem; }
+.stats-page .estrategia-chip:disabled { opacity: 0.4; cursor: not-allowed; }
+.stats-page .estr-tiles { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.stats-page .stats-pos { color: var(--green); }
+.stats-page .stats-neg { color: var(--red); }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 430px), 1fr));
+  gap: 1rem;
+}
+.stats-tabla {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.stats-tabla h3,
+.stats-bloque h3 {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+.stats-nota {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.stats-nota strong { color: var(--text); }
+.stats-page .velas-tabla-wrap { max-height: 360px; }
+.stats-page .velas-tabla td { font-variant-numeric: tabular-nums; }
+.stats-page .velas-tabla td:first-child { color: var(--text); }
+/* grupos con menos de MIN_MUESTRA: se ven, pero apagados */
+.stats-page .velas-tabla tr.stats-poca td { opacity: 0.42; }
+
+/* barra de fondo en el total, pegada al número como en Seguimiento */
+.stats-page td.stats-barra { position: relative; }
+.stats-page td.stats-barra::before {
+  content: '';
+  position: absolute;
+  inset: 3px 3px 3px auto;
+  width: var(--barra, 0);
+  border-radius: 3px;
+  opacity: 0.18;
+  pointer-events: none;
+}
+.stats-page td.stats-barra.stats-pos::before { background: var(--green); }
+.stats-page td.stats-barra.stats-neg::before { background: var(--red); }
+
+/* bloque de MFE / MAE */
+.stats-bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+}
+.stats-bloque-cab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+}
+.stats-cobertura { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats-progreso {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+}
+.stats-page .stats-tabla-ancha { max-height: none; }
+
+/* columnas de MFE / MAE en la tabla de Operaciones */
+.trades-tabla td.trades-exc { color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats-page .velas-tabla th { white-space: nowrap; }

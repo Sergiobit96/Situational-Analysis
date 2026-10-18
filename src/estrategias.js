@@ -1,6 +1,6 @@
-import { madridOffsetAt, nuevaYorkOffsetAt } from './timezone'
-import { SESIONES } from './segundaVelaCore'
-import { HORA_FOMC_NY } from './fomc'
+import { madridOffsetAt, nuevaYorkOffsetAt } from './timezone.js'
+import { SESIONES } from './segundaVelaCore.js'
+import { HORA_FOMC_NY } from './fomc.js'
 
 // Las estrategias que se pueden probar en la pestaña. Todas usan el mismo motor
 // (analizarSesion): lo único que cambia es qué vela se braquetea, de qué tamaño y desde qué

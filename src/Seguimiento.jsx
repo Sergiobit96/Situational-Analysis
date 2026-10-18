@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import CurvaEquity from './CurvaEquity.jsx'
 import { useTrades } from './useTrades'
 import { fmtFechaTS, PRODUCTO_A_INSTRUMENTO, pnlDeTrade } from './parseTrades'
 
@@ -107,6 +108,42 @@ export default function Seguimiento({ onIrATrade }) {
 
   const pnlTotal = useMemo(() => grupos.reduce((n, g) => n + g.pnl, 0), [grupos])
 
+  // La curva de la cuenta: un punto por día de trading con el importe de ese día, de la
+  // sesión más antigua a la más reciente. Va sobre todo el histórico, no sobre el mes
+  // elegido: lo que se quiere ver aquí es la pendiente de la cuenta entera.
+  const curva = useMemo(() => {
+    const porDia = new Map()
+    for (const g of grupos) {
+      if (g.conPnl === 0) continue
+      porDia.set(g.fecha, (porDia.get(g.fecha) ?? 0) + g.pnl)
+    }
+    return [...porDia.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, pts]) => ({ date, pts }))
+  }, [grupos])
+
+  // Cifras del mes que se está mirando, para la fila de arriba de la tabla
+  const resumenMes = useMemo(() => {
+    const dias = new Set(delMes.map(g => g.fecha))
+    const pnl  = delMes.reduce((n, g) => n + g.pnl, 0)
+    const verdes = [...dias].filter(f => delMes.filter(g => g.fecha === f).reduce((n, g) => n + g.pnl, 0) > 0).length
+    return { dias: dias.size, pnl, verdes, rojos: dias.size - verdes, ops: delMes.reduce((n, g) => n + g.operaciones, 0) }
+  }, [delMes])
+
+  // Para las barras dentro de las celdas. Cada columna tiene su escala (puntos y euros no
+  // son lo mismo) y el tope es el percentil 90, no el máximo: con un solo día enorme, medir
+  // contra él dejaba todas las demás barras en una rayita.
+  const topes = useMemo(() => {
+    const p90 = valores => {
+      const o = valores.map(Math.abs).filter(Number.isFinite).sort((a, b) => a - b)
+      return Math.max(1, o[Math.floor(0.9 * (o.length - 1))] ?? 1)
+    }
+    return { puntos: p90(delMes.map(g => g.puntos)), pnl: p90(delMes.map(g => g.pnl)) }
+  }, [delMes])
+
+  // nada baja del 8%: una barra invisible no dice si el día fue pequeño o si no hay dato
+  const ancho = (valor, tope) => `${Math.max(8, Math.min(100, Math.abs(valor) / tope * 100))}%`
+
   const totalRevisados = useMemo(
     () => grupos.filter(g => anotaciones[claveDeGrupo(g)]?.revisado).length,
     [grupos, anotaciones],
@@ -147,11 +184,13 @@ export default function Seguimiento({ onIrATrade }) {
 
       {error && <div className="fotos-error">{error}</div>}
 
+      {curva.length > 1 && <CurvaEquity sesiones={curva} unidad="€" />}
+
       <div className="ts-toolbar">
         <span className="diario-total">
           {grupos.length === 0
             ? 'Sin operaciones cargadas todavía (ve a Operaciones y sincroniza)'
-            : `${grupos.length} día(s) de trading · PNL ${pnlTotal > 0 ? '+' : ''}${pnlTotal.toFixed(2)} · ${totalRevisados} revisado(s) · ${grupos.length - totalRevisados} pendiente(s)`}
+            : `${grupos.length} días × instrumento · PNL ${pnlTotal > 0 ? '+' : ''}${pnlTotal.toFixed(2)} · ${totalRevisados} revisado(s) · ${grupos.length - totalRevisados} pendiente(s)`}
         </span>
         {hayServidor && (
           <button className="diario-boton" onClick={cargar}>↻ releer revisados</button>
@@ -199,6 +238,18 @@ export default function Seguimiento({ onIrATrade }) {
         </div>
       )}
 
+      {delMes.length > 0 && (
+        <div className="seg-mes-resumen">
+          <span><strong>{resumenMes.dias}</strong> días</span>
+          <span><strong>{resumenMes.ops}</strong> operaciones</span>
+          <span className="verde"><strong>{resumenMes.verdes}</strong> en verde</span>
+          <span className="rojo"><strong>{resumenMes.rojos}</strong> en rojo</span>
+          <span className={resumenMes.pnl >= 0 ? 'verde' : 'rojo'}>
+            <strong>{resumenMes.pnl > 0 ? '+' : ''}{resumenMes.pnl.toFixed(2)}</strong> en el mes
+          </span>
+        </div>
+      )}
+
       <div className="velas-tabla-wrap">
         <table className="velas-tabla trades-tabla">
           <thead>
@@ -223,8 +274,16 @@ export default function Seguimiento({ onIrATrade }) {
                 <td>{fmtDia(g.fecha)}</td>
                 <td>{g.producto}</td>
                 <td>{g.operaciones}</td>
-                <td>{g.puntos > 0 ? '+' : ''}{g.puntos.toFixed(2)}</td>
-                <td className={`seg-pnl ${g.conPnl === 0 ? '' : (g.pnl >= 0 ? 'positivo' : 'negativo')}`}>
+                {/* la barra del fondo hace el mes legible de un vistazo: cuanto más
+                    ancha, más pesó ese día frente al mayor del mes */}
+                <td
+                  className={`seg-barra ${g.puntos >= 0 ? 'positivo' : 'negativo'}`}
+                  style={{ '--barra': ancho(g.puntos, topes.puntos) }}
+                >{g.puntos > 0 ? '+' : ''}{g.puntos.toFixed(2)}</td>
+                <td
+                  className={`seg-pnl seg-barra ${g.conPnl === 0 ? '' : (g.pnl >= 0 ? 'positivo' : 'negativo')}`}
+                  style={{ '--barra': g.conPnl === 0 ? '0%' : ancho(g.pnl, topes.pnl) }}
+                >
                   {g.conPnl === 0 ? '—' : `${g.pnl > 0 ? '+' : ''}${g.pnl.toFixed(2)}`}
                 </td>
                 <td className="seg-comentario" title={comentario(g)}>

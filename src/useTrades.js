@@ -1,5 +1,7 @@
 import { useSyncExternalStore, useCallback } from 'react'
-import { londresOffsetAt } from './timezone'
+import { londresOffsetAt } from './timezone.js'
+
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
 const STORAGE_KEY = 'abcd_trades_v1'
 const TZ_KEY      = 'abcd_trades_tz_v2'    // marca de que ya se corrigió la hora guardada
@@ -61,10 +63,53 @@ function leerAlmacenadas() {
 let enMemoria = null
 const actuales = () => (enMemoria ??= leerAlmacenadas())
 const oyentes  = new Set()
+const avisar   = () => oyentes.forEach(fn => fn())
 const suscribir = fn => { oyentes.add(fn); return () => oyentes.delete(fn) }
 
-// Operaciones parseadas del diario Excel, persistidas en localStorage (100% local:
-// el archivo nunca sale del navegador) para que estén disponibles en cualquier pestaña.
+function guardarEnDisco(trades) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(trades)) } catch { /* cuota llena, no crítico */ }
+}
+
+// ── Copia en el servidor ──
+// El diario es lo único que vivía solo en el navegador: limpiar los datos del sitio lo
+// borraba. Ahora manda el JSON del servidor y localStorage queda como caché, que es lo que
+// pinta la primera vez mientras llega la respuesta (y lo único que hay en producción, donde
+// estos endpoints no existen).
+let sincronizando = null
+
+async function sincronizarConServidor() {
+  if (!import.meta.env.DEV) return
+  try {
+    const res = await fetch(`${API}/api/trades`)
+    if (!res.ok) return
+    const { trades } = await res.json()
+
+    if (Array.isArray(trades) && trades.length > 0) {
+      enMemoria = trades
+      guardarEnDisco(trades)
+      avisar()
+      return
+    }
+    // El servidor aún no tiene nada: se sube lo que haya en el navegador (una sola vez)
+    const locales = actuales()
+    if (locales.length > 0) await subirAlServidor(locales)
+  } catch { /* sin servidor local se sigue con lo del navegador */ }
+}
+
+async function subirAlServidor(trades) {
+  if (!import.meta.env.DEV) return
+  try {
+    await fetch(`${API}/api/trades`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ trades }),
+    })
+  } catch { /* se queda en el navegador hasta la próxima */ }
+}
+
+// Operaciones parseadas del diario Excel. Se guardan en el servidor (JSON junto a los
+// comentarios) y en localStorage como caché, para que estén disponibles en cualquier
+// pestaña de la app y sobrevivan a limpiar el navegador.
 // setTrades admite tanto un array como un actualizador funcional (prev => next), igual
 // que el setState nativo de React, para poder fusionar varias fuentes sin condiciones
 // de carrera cuando se sincronizan varios años a la vez.
@@ -74,11 +119,15 @@ const suscribir = fn => { oyentes.add(fn); return () => oyentes.delete(fn) }
 export function useTrades() {
   const trades = useSyncExternalStore(suscribir, actuales)
 
+  // una sola vez por carga de la app, no por componente que use el hook
+  sincronizando ??= sincronizarConServidor()
+
   const setTrades = useCallback(nuevas => {
     const siguiente = typeof nuevas === 'function' ? nuevas(actuales()) : nuevas
     enMemoria = siguiente
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(siguiente)) } catch { /* cuota llena, no crítico */ }
-    oyentes.forEach(fn => fn())
+    guardarEnDisco(siguiente)
+    avisar()
+    subirAlServidor(siguiente)
   }, [])
 
   return [trades, setTrades]

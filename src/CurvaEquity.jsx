@@ -7,10 +7,11 @@ const fmt = (v, dec = 0) => v == null ? '—'
 
 const fmtDia = f => f ? f.split('-').reverse().join('/') : '—'
 
-// Curva de puntos acumulados con su drawdown debajo, en el mismo gráfico: la línea vive en
-// el 70% de arriba y las barras rojas de drawdown en el 30% de abajo, que es como se leen
-// las dos cosas a la vez sin cambiar de escala.
-export default function CurvaEquity({ sesiones }) {
+// Curva de resultado acumulado con su drawdown debajo, en el mismo gráfico: la línea vive
+// en el 70% de arriba y las barras rojas de drawdown en el 30% de abajo, que es como se leen
+// las dos cosas a la vez sin cambiar de escala. `unidad` solo cambia cómo se llama lo que se
+// acumula: puntos cuando es un backtest, euros cuando es el resultado real de la cuenta.
+export default function CurvaEquity({ sesiones, unidad = 'pts' }) {
   const contenedorRef = useRef(null)
   const datos = useMemo(() => curvaEquity(sesiones), [sesiones])
 
@@ -66,11 +67,19 @@ export default function CurvaEquity({ sesiones }) {
 
   if (datos.puntos.length === 0) return null
 
+  const enDinero = unidad === '€'
+  const dec = enDinero ? 2 : 0
+  const con = v => (v === '—' || !enDinero ? v : `${v} €`)
+
   const tiles = [
-    { label: 'Puntos acumulados', valor: fmt(datos.total),  sub: `${datos.n} sesiones operadas` },
+    {
+      label: enDinero ? 'Resultado acumulado' : 'Puntos acumulados',
+      valor: con(fmt(datos.total, dec)),
+      sub: `${datos.n} sesiones operadas`,
+    },
     {
       label: 'Máximo drawdown',
-      valor: fmt(datos.maxDD),
+      valor: con(fmt(datos.maxDD, dec)),
       sub: datos.maxDDPct != null ? `${Math.abs(datos.maxDDPct).toFixed(0)}% desde su máximo` : 'sin máximo previo',
       marca: '▼', tono: 'rojo',
     },
@@ -79,9 +88,9 @@ export default function CurvaEquity({ sesiones }) {
       valor: `${datos.peorDD.sesiones} sesiones`,
       sub: `${fmtDia(datos.peorDD.desde)} → ${fmtDia(datos.peorDD.hasta)}`,
     },
-    { label: 'Drawdown al final', valor: fmt(datos.ddActual), sub: datos.ddActual === 0 ? 'en máximos' : 'sin recuperar' },
-    { label: 'Mejor sesión',  valor: fmt(datos.mejor?.pts, 1), sub: fmtDia(datos.mejor?.date), marca: '▲', tono: 'verde' },
-    { label: 'Peor sesión',   valor: fmt(datos.peor?.pts, 1),  sub: fmtDia(datos.peor?.date),  marca: '▼', tono: 'rojo' },
+    { label: 'Drawdown al final', valor: con(fmt(datos.ddActual, dec)), sub: datos.ddActual === 0 ? 'en máximos' : 'sin recuperar' },
+    { label: 'Mejor sesión',  valor: con(fmt(datos.mejor?.pts, enDinero ? 2 : 1)), sub: fmtDia(datos.mejor?.date), marca: '▲', tono: 'verde' },
+    { label: 'Peor sesión',   valor: con(fmt(datos.peor?.pts, enDinero ? 2 : 1)),  sub: fmtDia(datos.peor?.date),  marca: '▼', tono: 'rojo' },
     { label: 'Racha ganadora', valor: `${datos.mejorRachaG} seguidas`, sub: 'sesiones en verde' },
     { label: 'Racha perdedora', valor: `${datos.peorRachaP} seguidas`, sub: 'sesiones en rojo' },
   ]
@@ -102,7 +111,8 @@ export default function CurvaEquity({ sesiones }) {
       </div>
       <div ref={contenedorRef} className="curva-equity-grafico" />
       <p className="estr-nota">
-        Línea verde: puntos acumulados sesión a sesión, de la más antigua a la más reciente.
+        Línea verde: {enDinero ? 'resultado acumulado' : 'puntos acumulados'} sesión a sesión,
+        de la más antigua a la más reciente.
         Barras rojas de abajo: lo que se llevaba perdido desde el máximo anterior en cada momento.
       </p>
     </div>

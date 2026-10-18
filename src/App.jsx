@@ -10,16 +10,20 @@ import Seguimiento from './Seguimiento'
 import Fotos from './Fotos'
 import Book from './Book'
 import Estrategias from './Estrategias.jsx'
+import Grafico from './Grafico'
+import Estadisticas from './Estadisticas.jsx'
 import './App.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
 const ICONOS = {
   gap:      'M3 17l5-5 4 4 8-8M14 8h6v6',
+  graf:     'M7 3v4M7 17v4M5 7h4v10H5zM17 5v3M17 15v4M15 8h4v7h-4z',
   cal:      'M4 6h16v14H4zM4 10h16M9 3v4M15 3v4',
   estr:     'M12 3l8 4.5-8 4.5-8-4.5L12 3zM4 12l8 4.5 8-4.5M4 16.5L12 21l8-4.5',
   ops:      'M4 20V10M10 20V4M16 20v-7M22 20H2',
   diario:   'M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3V4zM5 17a3 3 0 013-3h11M9 8h6',
   seg:      'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
+  stats:    'M12 3v9h9a9 9 0 11-9-9zM15 3.5A9 9 0 0120.5 9H15z',
   datos:    'M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4',
   pipeline: 'M6 4l14 8-14 8V4z',
   fotos:    'M3 7h4l2-3h6l2 3h4v13H3zM12 17a4 4 0 100-8 4 4 0 000 8z',
@@ -30,6 +34,7 @@ const ICONOS = {
 const GRUPOS = [
   { titulo: 'Mercado', tabs: [
     { id: 'gap',  label: 'Gap Filter' },
+    { id: 'graf', label: 'Gráfico' },
     { id: 'cal',  label: 'Calendario' },
     { id: 'estr', label: 'Estrategias' },
   ] },
@@ -37,6 +42,7 @@ const GRUPOS = [
     { id: 'ops',    label: 'Operaciones' },
     { id: 'diario', label: 'Diario' },
     { id: 'seg',    label: 'Seguimiento' },
+    { id: 'stats',  label: 'Estadísticas' },
   ] },
   { titulo: 'Datos', tabs: [
     { id: 'datos', label: 'Subir datos' },
@@ -127,8 +133,9 @@ export default function App() {
           <QuoteBar />
         </header>
 
-        <main className="contenido">
+        <main className={`contenido ${tab === 'graf' ? 'contenido-ancho' : ''}`}>
           {tab === 'gap'      && <FiltroGap />}
+          {tab === 'graf'     && <Grafico />}
           {tab === 'datos'    && <SubirDatos />}
           {tab === 'cal'      && <Calendario />}
           {tab === 'ops'      && <Operaciones abrir={irATrade} onAbierto={() => setIrATrade(null)} />}
@@ -137,6 +144,7 @@ export default function App() {
             <Seguimiento onIrATrade={p => { setIrATrade(p); setTab('ops') }} />
           )}
           {tab === 'estr'     && <Estrategias />}
+          {tab === 'stats'    && <Estadisticas />}
           {tab === 'pipeline' && <Pipeline />}
           {tab === 'fotos'    && <Fotos />}
           {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}

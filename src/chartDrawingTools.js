@@ -36,10 +36,92 @@ function distanciaASegmento(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
 }
 
+// ── Hora <-> posición, también entre velas y fuera de los datos ──
+// Los dibujos se guardan por hora y precio y se pintan en cualquier temporalidad: una línea
+// trazada en 15 min tiene sus puntos a mitad de una vela de 1 h, y uno anterior al
+// histórico cargado cae a la izquierda de la primera vela. timeToCoordinate solo resuelve
+// horas que son exactamente una vela (y logicalToCoordinate devuelve 0 con índices no
+// enteros), así que la posición se interpola entre las dos velas que rodean la hora y,
+// fuera de los datos, se prolonga con el paso de la temporalidad.
+
+// Paso de la temporalidad: el hueco más corto entre las últimas velas (los más largos son
+// noches y fines de semana)
+export function pasoDe(tiempos) {
+  let paso = Infinity
+  for (let i = Math.max(1, tiempos.length - 50); i < tiempos.length; i++) {
+    const d = tiempos[i] - tiempos[i - 1]
+    if (d > 0 && d < paso) paso = d
+  }
+  return Number.isFinite(paso) ? paso : 60
+}
+
+// Dónde cae una hora respecto a las velas: entre la vela `i` y la siguiente (a una fracción
+// `frac` del camino), o `barras` velas más allá de la del borde (`borde`) si queda fuera
+export function ubicarTiempo(tiempos, t, paso) {
+  const n = tiempos.length
+  if (n === 0) return null
+  if (t < tiempos[0])     return { borde: 0,     barras: (t - tiempos[0]) / paso }
+  if (t > tiempos[n - 1]) return { borde: n - 1, barras: (t - tiempos[n - 1]) / paso }
+  let lo = 0, hi = n - 1
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (tiempos[mid] <= t) lo = mid
+    else hi = mid - 1
+  }
+  if (tiempos[lo] === t) return { i: lo, frac: 0 }
+  return { i: lo, frac: (t - tiempos[lo]) / (tiempos[lo + 1] - tiempos[lo]) }
+}
+
+function crearEscala(chart, series) {
+  // series.data() rehace el array en cada llamada: las horas se guardan y se refrescan
+  // cuando cambian los datos (la pestaña Gráfico añade páginas de histórico sobre la marcha)
+  let tiempos = []
+  let paso = 60
+  const refrescar = () => {
+    tiempos = series.data().map(v => v.time)
+    paso    = pasoDe(tiempos)
+  }
+  refrescar()
+  series.subscribeDataChanged(refrescar)
+
+  return {
+    x(time) {
+      const u = ubicarTiempo(tiempos, time, paso)
+      if (!u) return null
+      const escala = chart.timeScale()
+      if (u.barras !== undefined) {
+        const xBorde = escala.timeToCoordinate(tiempos[u.borde])
+        const anchoBarra = escala.logicalToCoordinate(1) - escala.logicalToCoordinate(0)
+        return xBorde == null ? null : xBorde + u.barras * anchoBarra
+      }
+      const x0 = escala.timeToCoordinate(tiempos[u.i])
+      if (x0 == null || u.frac === 0) return x0
+      const x1 = escala.timeToCoordinate(tiempos[u.i + 1])
+      return x1 == null ? x0 : x0 + u.frac * (x1 - x0)
+    },
+    // Hora de la vela bajo x; más allá de los datos, la que tendría contando velas desde el borde
+    tiempo(x) {
+      const escala = chart.timeScale()
+      const t = escala.coordinateToTime(x)
+      if (t != null || tiempos.length === 0) return t
+      const indice = escala.coordinateToLogical(x)
+      if (indice == null) return null
+      const ultima  = tiempos[tiempos.length - 1]
+      const iUltima = escala.timeToIndex(ultima, false)
+      if (iUltima != null && indice > iUltima) return ultima + (indice - iUltima) * paso
+      const iPrimera = escala.timeToIndex(tiempos[0], false)
+      if (iPrimera != null && indice < iPrimera) return tiempos[0] + (indice - iPrimera) * paso
+      return null
+    },
+    dispose() { series.unsubscribeDataChanged(refrescar) },
+  }
+}
+
 // ── Primitives: convierten {time,price} <-> coordenadas de pantalla y dibujan ──
 class BaseDrawingPrimitive {
-  constructor(drawing, onAttached) {
+  constructor(drawing, escala, onAttached) {
     this._drawing    = drawing
+    this._escala     = escala
     this._onAttached = onAttached
     this._chart = null
     this._series = null
@@ -53,7 +135,7 @@ class BaseDrawingPrimitive {
   updateAllViews() {}
   _coord(p) {
     if (!this._chart || !this._series || p == null) return null
-    const x = this._chart.timeScale().timeToCoordinate(p.time)
+    const x = this._escala.x(p.time)
     const y = this._series.priceToCoordinate(p.price)
     if (x == null || y == null) return null
     return { x, y }
@@ -157,10 +239,22 @@ class FibonacciPrimitive extends BaseDrawingPrimitive {
 
 const CTOR_POR_TIPO = { trendline: TrendLinePrimitive, ray: RayPrimitive, fib: FibonacciPrimitive }
 
+// Botones de la barra de dibujo, compartidos por el gráfico de sesión y la pestaña Gráfico
+export const HERRAMIENTAS_DIBUJO = [
+  { id: 'cursor',    icon: '↖',   title: 'Cursor / seleccionar' },
+  { id: 'trendline', icon: '╱',   title: 'Línea de tendencia' },
+  { id: 'fib',       icon: 'Fib', title: 'Fibonacci (retroceso + extensión)' },
+  { id: 'ray',       icon: '→',   title: 'Ray horizontal' },
+]
+
 // ── Controlador: gestiona modo activo, colección de dibujos e interacción de ratón ──
-export function crearHerramientasDibujo({ chart, series, container, onModeChange }) {
+// `onChange` recibe la lista completa (ver exportar) cada vez que el usuario termina de
+// crear, mover o borrar un dibujo; nunca al cargar los guardados ni al desmontar el gráfico,
+// para que guardarla no pueda pisar lo que ya había con una lista vacía o a medias.
+export function crearHerramientasDibujo({ chart, series, container, onModeChange, onChange }) {
   const drawings   = []
   const primitives = new Map()
+  const escala     = crearEscala(chart, series)
   let modo = 'cursor'
   let selectedId = null
   let mouseDownState = null
@@ -168,10 +262,16 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
   let nextId = 1
 
   const puntoDesdeCoord = (x, y) => {
-    const time  = chart.timeScale().coordinateToTime(x)
+    const time  = escala.tiempo(x)
     const price = series.coordinateToPrice(y)
     return time == null || price == null ? null : { time, price }
   }
+
+  // Lo que se guarda de cada dibujo: tipo, color y sus puntos (hora y precio)
+  const exportar = () => drawings.map(({ type, color, p1, p2 }) => ({
+    type, color, p1: { ...p1 }, p2: p2 ? { ...p2 } : null,
+  }))
+  const avisar = () => onChange?.(exportar())
 
   // El arrastre con el ratón para crear/editar dibujos no debe además panear el gráfico
   // (comportamiento nativo de lightweight-charts), así que se desactiva solo mientras
@@ -182,9 +282,23 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
   function requestUpdateAll() { requestUpdateFn?.() }
 
   function attachPrimitiveFor(drawing) {
-    const primitive = new CTOR_POR_TIPO[drawing.type](drawing, fn => { requestUpdateFn = fn })
+    const primitive = new CTOR_POR_TIPO[drawing.type](drawing, escala, fn => { requestUpdateFn = fn })
     series.attachPrimitive(primitive)
     primitives.set(drawing.id, primitive)
+  }
+
+  // Añade dibujos guardados (los que ya hubiera se quedan) sin avisar: no hay nada nuevo que guardar
+  function cargar(lista) {
+    for (const d of lista ?? []) {
+      if (!CTOR_POR_TIPO[d?.type] || !d.p1 || (d.type !== 'ray' && !d.p2)) continue
+      const drawing = {
+        id: nextId++, type: d.type, color: d.color ?? COLOR_POR_TIPO[d.type],
+        p1: { ...d.p1 }, p2: d.type === 'ray' ? null : { ...d.p2 }, selected: false,
+      }
+      drawings.push(drawing)
+      attachPrimitiveFor(drawing)
+    }
+    requestUpdateAll()
   }
 
   function removeDrawing(id) {
@@ -195,9 +309,15 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     if (selectedId === id) selectedId = null
   }
 
-  function clearAll() {
+  function quitarTodos() {
     [...primitives.keys()].forEach(removeDrawing)
     requestUpdateAll()
+  }
+
+  // Borrado pedido por el usuario (la papelera): ese sí se guarda
+  function clearAll() {
+    quitarTodos()
+    avisar()
   }
 
   function selectDrawing(id) {
@@ -218,7 +338,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     for (const d of drawings) {
       const puntos = d.type === 'ray' ? [['p1', d.p1]] : [['p1', d.p1], ['p2', d.p2]]
       for (const [nombre, p] of puntos) {
-        const cx = chart.timeScale().timeToCoordinate(p.time)
+        const cx = escala.x(p.time)
         const cy = series.priceToCoordinate(p.price)
         if (cx == null || cy == null) continue
         if (Math.hypot(x - cx, y - cy) <= HANDLE_RADIUS + HIT_TOLERANCE) return { id: d.id, handle: nombre }
@@ -230,7 +350,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
   function hitTestLine(x, y) {
     for (let i = drawings.length - 1; i >= 0; i--) {
       const d = drawings[i]
-      const ax = chart.timeScale().timeToCoordinate(d.p1.time)
+      const ax = escala.x(d.p1.time)
       const ay = series.priceToCoordinate(d.p1.price)
       if (ax == null || ay == null) continue
 
@@ -239,7 +359,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
         continue
       }
 
-      const bx = chart.timeScale().timeToCoordinate(d.p2.time)
+      const bx = escala.x(d.p2.time)
       const by = series.priceToCoordinate(d.p2.price)
       if (bx == null || by == null) continue
 
@@ -310,6 +430,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
 
     const d = drawings.find(dr => dr.id === mouseDownState.id)
     if (!d) return
+    mouseDownState.movido = true
 
     if (mouseDownState.kind === 'new') {
       const p = puntoDesdeCoord(x, y)
@@ -324,7 +445,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
       const dx = x - mouseDownState.startX
       const dy = y - mouseDownState.startY
       const mover = orig => {
-        const cx = chart.timeScale().timeToCoordinate(orig.time)
+        const cx = escala.x(orig.time)
         const cy = series.priceToCoordinate(orig.price)
         if (cx == null || cy == null) return null
         return puntoDesdeCoord(cx + dx, cy + dy)
@@ -340,13 +461,25 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
   }
 
   function onMouseUp() {
-    if (mouseDownState?.kind === 'new') {
-      selectDrawing(mouseDownState.id)
-      setMode('cursor')
-    } else if (mouseDownState && modo === 'cursor') {
-      panActivado(true)
-    }
+    const estado = mouseDownState
     mouseDownState = null
+    if (estado?.kind === 'new') {
+      const d = drawings.find(dr => dr.id === estado.id)
+      // Un clic sin arrastrar deja una línea o un Fibonacci de longitud cero, invisible y
+      // que luego no hay forma de seleccionar: se descarta en vez de guardarlo
+      const vacio = d && d.type !== 'ray' && d.p1.time === d.p2.time && d.p1.price === d.p2.price
+      if (vacio) {
+        removeDrawing(d.id)
+        requestUpdateAll()
+      } else {
+        selectDrawing(estado.id)
+        avisar()
+      }
+      setMode('cursor')
+    } else if (estado && modo === 'cursor') {
+      panActivado(true)
+      if (estado.movido) avisar()
+    }
   }
 
   function onKeyDown(e) {
@@ -355,6 +488,7 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
     removeDrawing(selectedId)
     requestUpdateAll()
+    avisar()
   }
 
   container.addEventListener('mousedown', onMouseDown)
@@ -367,12 +501,17 @@ export function crearHerramientasDibujo({ chart, series, container, onModeChange
   return {
     setMode,
     clearAll,
+    cargar,
+    exportar,
+    cuantos: () => drawings.length,
     dispose() {
       container.removeEventListener('mousedown', onMouseDown)
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('keydown', onKeyDown)
-      clearAll()
+      escala.dispose()
+      // sin avisar: desmontar el gráfico no es borrar los dibujos
+      quitarTodos()
     },
   }
 }

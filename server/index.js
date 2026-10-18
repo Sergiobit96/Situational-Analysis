@@ -2521,12 +2521,14 @@ app.get('/api/ig/navegar', async (req, res) => {
 })
 
 // Velas de 1 min en directo para un gráfico abierto (SSE). Al conectarse recibe las últimas
-// cinco, para cubrir lo que haya pasado entre su histórico y este momento.
+// cinco, para cubrir lo que haya pasado entre su histórico y este momento. Un mercado suelto
+// de IG (ig:EPIC) se suscribe al abrirse el gráfico y se suelta al cerrarse.
 app.get('/api/tiempo-real/stream', (req, res) => {
   const { fuente, ticker } = req.query
   if (!fuente || !ticker) return res.status(400).json({ error: 'fuente y ticker requeridos' })
+  const soltar = fuente === 'ig' && ig ? ig.seguir(String(ticker)) : () => {}
   const desconectar = suscribir(res, String(fuente), String(ticker))
-  req.on('close', desconectar)
+  req.on('close', () => { desconectar(); soltar() })
 })
 
 // ── Bot SRS en la demo de IG (ver server/bot-srs.js) ──

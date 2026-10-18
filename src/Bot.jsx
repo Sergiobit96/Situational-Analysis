@@ -262,8 +262,8 @@ export default function Bot() {
               <option value={0.5}>La mitad de la entrada</option>
             </select>
           </label>
-          <label>Riesgo por operación (€)
-            <input type="number" min="1" max="5000" value={editando.riesgoEur} onChange={e => cambiar('riesgoEur', e.target.value)} />
+          <label>Riesgo por operación (% de la cuenta)
+            <input type="number" min="0.1" max="10" step="0.1" value={editando.riesgoPct ?? 2.5} onChange={e => cambiar('riesgoPct', e.target.value)} />
           </label>
           <label>No entrar si el precio se ha ido más de (% del bracket)
             <input type="number" min="1" max="200" step="5" value={Math.round(editando.deslizamientoMaxR * 100)} onChange={e => cambiar('deslizamientoMaxR', Number(e.target.value) / 100)} />
@@ -273,15 +273,15 @@ export default function Bot() {
           </label>
         </div>
         <p className="bot-nota">
-          El tamaño sale del riesgo: lo que se pierde si salta el stop. Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
+          El tamaño sale del riesgo, que es lo que se pierde si salta el stop: ese % del saldo de la cuenta entre los puntos hasta el stop (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
           Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
           Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
           La pirámide abre como mucho {datos.maxUnidades ?? 5} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
           Un cambio vale para las sesiones que aún no han fijado su bracket.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoEur, deslizamientoMaxR, rangoMaxPct } = form
-          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoEur, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
+          const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct } = form
+          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
 
@@ -336,7 +336,7 @@ function SesionHoy({ d, nombre }) {
       <div className="estr-tiles">
         <Tile label="Estado" valor={ESTADOS[d.estado] ?? d.estado} sub={d.recuperada ? 'recuperada de IG al arrancar' : ''} />
         <Tile label="Bracket" valor={d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : '—'} sub={d.bracket ? `${precio(d.bracket.rango)} puntos` : ''} />
-        <Tile label="Plan" valor={plan ? `${plan.tamano} contratos` : '—'} sub={plan ? `${plan.valorPunto} ${plan.moneda}/punto · ${Math.round(plan.riesgoEur)} € de riesgo` : ''} />
+        <Tile label="Plan" valor={plan ? `${plan.tamano} contratos` : '—'} sub={plan ? `${plan.valorPunto} ${plan.moneda}/punto · ${Math.round(plan.riesgoEur)} € de riesgo${plan.riesgoPct != null ? ` (${String(plan.riesgoPct).replace('.', ',')}% de ${Math.round(plan.saldo).toLocaleString('es-ES')} €)` : ''}` : ''} />
         {antes && (
           <Tile label="Primera pierna" valor={`${ladoTexto(antes.lado)} a ${precio(antes.entrada)}`}
             sub={`salida ${precio(antes.salida?.nivel)} (${MOTIVOS[antes.salida?.motivo] ?? antes.salida?.motivo}) · ${pts(antes.resultadoPts)} · ${eur(antes.resultadoEur)}`} />

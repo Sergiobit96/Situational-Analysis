@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { siguientePaso, nivelStop, crearBot, sesionDe, proximaApertura, tamanoPorRiesgo, CONFIG_INICIAL } from '../server/bot-srs.js'
+import { siguientePaso, nivelStop, crearBot, sesionDe, proximaApertura, tamanoPorRiesgo, riesgoDeCuenta, CONFIG_INICIAL } from '../server/bot-srs.js'
 import { buscarCierre, crearIG } from '../server/ig.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -63,6 +63,14 @@ test('el tamaño sale del riesgo en euros, y se respeta el mínimo de IG sin arr
   assert.equal(ndx.ok, false)
   assert.match(ndx.motivo, /arriesgaría 1068 €/)
   assert.equal(tamanoPorRiesgo({ riesgoEur: 400, riesgoPts: 0, valorPunto: 1, cambioAEur: 1 }).ok, false)
+})
+
+test('lo que se arriesga es un % del saldo de la cuenta, un 2,5% si no se dice otra cosa', () => {
+  assert.equal(CONFIG_INICIAL.riesgoPct, 2.5)
+  assert.equal(riesgoDeCuenta(20000, 2.5), 500)
+  assert.equal(riesgoDeCuenta(18400, 2), 368)
+  assert.equal(riesgoDeCuenta(null, 2.5), null)
+  assert.equal(riesgoDeCuenta(0, 2.5), null)
 })
 
 // ── La decisión ──
@@ -155,7 +163,7 @@ const MERCADOS = {
 
 // Un IG que apunta lo que se le pide y contesta lo que diga cada prueba. `velas` por
 // instrumento: la del bracket (por su hora) y las de después
-function igFalso({ velas = {}, precios = {}, disponible = 20000, aMercado = true }) {
+function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, aMercado = true }) {
   const ordenes = []
   let abiertas = []
   let n = 0
@@ -185,7 +193,7 @@ function igFalso({ velas = {}, precios = {}, disponible = 20000, aMercado = true
       },
       posiciones: async () => abiertas,
       cierreDe: async () => ig.nivelCierre == null ? null : { nivel: ig.nivelCierre },
-      disponible: async () => disponible,
+      cuenta: async () => ({ saldo, disponible, moneda: 'EUR' }),
     },
     ordenes,
     quitarPosiciones: () => { abiertas = [] },
@@ -215,7 +223,7 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     return vela15(time, 25510, 25530, 25505, 25520)
   })
   const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25502, 25503] } })
-  const { bot, dir, enHora, archivo } = botDePrueba(ig, { ...soloDax, riesgoEur: 400 })
+  const { bot, dir, enHora, archivo } = botDePrueba(ig, { ...soloDax, riesgoPct: 2 })
   try {
     enHora(madrid(19, 9, 30, 4)); await bot._paso()
     let hoy = apunte(bot, '^GDAXI')
@@ -260,13 +268,48 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('el plan arriesga el 2,5% del saldo entre los puntos hasta el stop, y sin saldo no se opera', async () => {
+  const bracket = [vela15(madrid(30, 9, 0), 25470, 25485, 25455, 25480), vela15(madrid(30, 9, 15), 25480, 25500, 25460, 25490)]   // 40 puntos
+  // con margen de sobra: 2,5% de 20.000 € = 500 € / 40 puntos a 1 €/punto = 12,5 contratos
+  const ig = igFalso({ velas: { '^GDAXI': bracket }, saldo: 20000, disponible: 100000 })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madrid(30, 9, 30, 4)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.config.riesgoPct, 2.5)
+    assert.equal(hoy.plan.tamano, 12.5)
+    assert.equal(hoy.plan.riesgoEur, 500)
+    assert.equal(hoy.plan.saldo, 20000)
+    assert.ok(hoy.eventos.some(e => /el 2,5% de 20\.000 € son 500 €/.test(e.texto)))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+
+  const sinSaldo = igFalso({ velas: { '^GDAXI': bracket }, saldo: null })
+  const b = botDePrueba(sinSaldo, soloDax)
+  try {
+    b.enHora(madrid(30, 9, 30, 4)); await b.bot._paso()
+    const hoy = apunte(b.bot, '^GDAXI')
+    assert.equal(hoy.estado, 'sin-operar')
+    assert.match(hoy.eventos.at(-1).texto, /saldo/)
+  } finally { b.bot.parar(); rmSync(b.dir, { recursive: true, force: true }) }
+})
+
+test('el riesgo se cambia en % de la cuenta, entre el 0,1% y el 10%', () => {
+  const ig = igFalso({})
+  const { bot, dir } = botDePrueba(ig, soloDax)
+  try {
+    assert.equal(bot.cambiarConfig({ riesgoPct: 1.5 }).riesgoPct, 1.5)
+    assert.throws(() => bot.cambiarConfig({ riesgoPct: 25 }), /10%/)
+    assert.throws(() => bot.cambiarConfig({ riesgoPct: 0 }), /0,1%/)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('donde IG no admite órdenes a mercado, entra con límite a un cuarto del bracket del nivel, y sale con ese margen', async () => {
   const sesion = [
     vela15(madrid(19, 9, 0), 25470, 25485, 25455, 25480),
     vela15(madrid(19, 9, 15), 25480, 25500, 25460, 25490),   // bracket de 40 puntos
   ]
   const ig = igFalso({ velas: { '^GDAXI': sesion }, precios: { '^GDAXI': [25503, 25504] }, aMercado: false })
-  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoEur: 400 })
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, riesgoPct: 2 })
   try {
     enHora(madrid(19, 9, 30, 4)); await bot._paso()
     vela1m('^GDAXI', madrid(19, 9, 41), 25502, 25495)
@@ -281,7 +324,7 @@ test('donde IG no admite órdenes a mercado, entra con límite a un cuarto del b
 test('en Nueva York, si el contrato pequeño no tiene precio para la cuenta, prueba el grande, y si no cabe en el riesgo no entra', async () => {
   const bracket = vela15(nuevaYork(20, 9, 45), 29200, 29230, 29170, 29210)   // 60 puntos
   const ig = igFalso({ velas: { '^NDX': [bracket] }, precios: { '^NDX': [29230, 29231] } })
-  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': false, '^GDAXI': false, '^NDX': true, '^GSPC': false, '^DJI': false }, riesgoEur: 400 })
+  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': false, '^GDAXI': false, '^NDX': true, '^GSPC': false, '^DJI': false }, riesgoPct: 2 })
   try {
     enHora(nuevaYork(20, 10, 0, 5)); await bot._paso()
     const hoy = apunte(bot, '^NDX')
@@ -294,7 +337,7 @@ test('en Nueva York, si el contrato pequeño no tiene precio para la cuenta, pru
 test('Tokio: el bracket es la vela de 09:15 a 09:30 de Tokio, que en Madrid es de madrugada', async () => {
   const bracket = vela15(tokio(21, 9, 15), 63400, 63500, 63300, 63450)   // 200 puntos
   const ig = igFalso({ velas: { '^N225': [bracket] }, precios: { '^N225': [63499, 63505] } })
-  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': true, '^GDAXI': false, '^NDX': false, '^GSPC': false, '^DJI': false }, riesgoEur: 400 })
+  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': true, '^GDAXI': false, '^NDX': false, '^GSPC': false, '^DJI': false }, riesgoPct: 2 })
   try {
     enHora(tokio(21, 9, 30, 5)); await bot._paso()
     const hoy = apunte(bot, '^N225')

@@ -5,7 +5,9 @@
 
 const TIPOS        = new Set(['trendline', 'fib', 'ray'])
 const MAX_DIBUJOS  = 500
-const CLAVE_VALIDA = /^[\w^.=@-]{1,40}$/
+// el instrumento, con la fuente detrás (^GDAXI@ig); los mercados sueltos de IG van con su
+// epic (ig:CS.D.EURUSD.CEC.IP@ig)
+const CLAVE_VALIDA = /^[\w^.=@:-]{1,60}$/
 
 const esPunto = p => p != null && Number.isFinite(p.time) && Number.isFinite(p.price)
 const punto   = p => ({ time: p.time, price: p.price })

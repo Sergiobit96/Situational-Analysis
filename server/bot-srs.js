@@ -18,8 +18,9 @@
 //     nivel más de `deslizamientoMaxR` veces el bracket, no la manda: no persigue el precio;
 //     no deja órdenes pendientes en IG, así que no entran dos lados a la vez ni entra nada
 //     con el bot parado;
-//   · el tamaño sale del riesgo: se arriesgan `riesgoEur` euros hasta el stop, con el
-//     contrato más pequeño que la cuenta pueda operar y sin pasar de una parte del margen;
+//   · el tamaño sale del riesgo: un `riesgoPct` % del saldo de la cuenta entre los puntos
+//     hasta el stop (y el valor del punto), con el contrato más pequeño que la cuenta pueda
+//     operar y sin pasar de una parte del margen;
 //   · cada orden lleva una referencia propia (SRS-…): si el registro se pierde (un despliegue
 //     sin volumen), al arrancar recupera sus posiciones abiertas desde IG y las sigue;
 //   · si arranca con la sesión empezada y la rotura ya pasó, no entra tarde;
@@ -57,8 +58,8 @@ export const CONFIG_INICIAL = {
   beR:               null,    // null, 1 o 2: stop a la entrada al recorrer esas veces el riesgo
   piramide:          1,       // null: sin pirámide; un número: una posición más cada tantas R a favor
   tamanoAnadido:     0.5,     // lo que mete cada añadido, en fracción de la entrada: 1 o 0,5
-  riesgoEur:         400,     // lo que se arriesga por operación hasta el stop, en euros (un 2% de la demo de 20.000 €;
-                              // con menos, el mínimo de IG en el Dow o el Nikkei ya arriesga más del doble y no entrarían)
+  riesgoPct:         2.5,     // lo que se arriesga por operación hasta el stop, en % del saldo de la cuenta: el tamaño es
+                              // saldo × riesgoPct / (puntos hasta el stop × valor del punto); 500 € en la demo de 20.000 €
   deslizamientoMaxR: 0.25,    // no entra (ni da la vuelta, ni añade) si el precio ya se ha ido del nivel más de esta
                               // fracción del bracket; donde IG no admite órdenes a mercado, es el límite de la orden
   rangoMaxPct:       0.8,     // si el bracket mide más (en % del precio), ese día no se opera
@@ -188,6 +189,9 @@ export function nivelStop(bracket, lado, stopPct) {
   return lado === 'largo' ? bracket.high - riesgo : bracket.low + riesgo
 }
 
+// Lo que se arriesga por operación: un `riesgoPct` % del saldo de la cuenta
+export const riesgoDeCuenta = (saldo, riesgoPct) => (saldo > 0 && riesgoPct > 0 ? saldo * riesgoPct / 100 : null)
+
 // Contratos para arriesgar `riesgoEur` hasta el stop, de décima en décima. Si eso queda por
 // debajo del mínimo de IG, se usa el mínimo mientras no arriesgue más del doble; si no, no.
 export function tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto, cambioAEur, tamanoMin }) {
@@ -222,7 +226,7 @@ const DESCRIBIR = {
   beR:               v => `Break even: ${v == null ? 'no' : `al recorrer ${v}R`}`,
   piramide:          v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${v}R a favor, hasta ${MAX_UNIDADES}`}`,
   tamanoAnadido:     v => `Cada añadido: ${v === 1 ? 'una unidad entera' : 'media unidad'}`,
-  riesgoEur:         v => `Riesgo por operación: ${v} €`,
+  riesgoPct:         v => `Riesgo por operación: ${String(v).replace('.', ',')}% de la cuenta`,
   deslizamientoMaxR: v => `No entra si el precio se ha ido del nivel más de un ${Math.round(v * 100)}% del bracket`,
   rangoMaxPct:       v => `Bracket máximo: ${v}% del precio`,
 }
@@ -309,6 +313,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       }
     }
 
+    // lo que se arriesga sale del saldo de la cuenta de hoy
+    const cuenta = await ig.operar.cuenta()
+    const riesgoEur = riesgoDeCuenta(cuenta?.saldo, cfg.riesgoPct)
+    if (riesgoEur == null) { dia.estado = 'sin-operar'; apuntar(dia, 'IG no da el saldo de la cuenta: sin él no se sabe el tamaño, hoy no se opera'); return }
+
     // el contrato: el primero de la lista con precio para la cuenta y que quepa en el riesgo
     const riesgoPts = rango * cfg.stopPct
     const descartes = []
@@ -316,9 +325,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     for (const epic of EPICS_OPERAR[dia.ticker] ?? [null]) {
       const m = await ig.operar.datosMercado(dia.ticker, epic)
       if (!m.conPrecio) { descartes.push(`${m.epic} sin precio para esta cuenta`); continue }
-      const t = tamanoPorRiesgo({ riesgoEur: cfg.riesgoEur, riesgoPts, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin })
+      const t = tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin })
       if (!t.ok) { descartes.push(`${m.epic}: ${t.motivo}`); continue }
-      plan = { epic: m.epic, moneda: m.moneda, tamano: t.tamano, riesgoEur: t.riesgoEur, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin }
+      plan = { epic: m.epic, moneda: m.moneda, tamano: t.tamano, riesgoEur: t.riesgoEur, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin,
+        saldo: cuenta.saldo, riesgoPct: cfg.riesgoPct }
       break
     }
     if (!plan) {
@@ -328,7 +338,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     }
     // que el margen de la posición no se coma la cuenta: como mucho una parte del disponible
     // (IG pide un 5% del nominal en estos índices)
-    const disponible = await ig.operar.disponible()
+    const { disponible } = cuenta
     if (disponible != null) {
       const margenUno = v.close * plan.valorPunto * plan.cambioAEur * 0.05
       const tope = Math.floor((disponible * MARGEN_MAX / margenUno) * 10) / 10
@@ -345,7 +355,8 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     }
     dia.plan = plan
     dia.estado = 'esperando-rotura'
-    apuntar(dia, `Plan: ${plan.tamano} contratos de ${plan.epic} (${plan.valorPunto} ${plan.moneda} por punto), ${Math.round(plan.riesgoEur)} € hasta el stop`)
+    apuntar(dia, `Plan: ${plan.tamano} contratos de ${plan.epic} (${plan.valorPunto} ${plan.moneda} por punto), ${Math.round(plan.riesgoEur)} € hasta el stop`
+      + ` (el ${String(cfg.riesgoPct).replace('.', ',')}% de ${Math.round(cuenta.saldo).toLocaleString('es-ES')} € son ${Math.round(riesgoEur)} €)`)
   }
 
   // Entra en la rotura (o, con `vuelta`, en el sentido contrario tras saltar el stop) si el
@@ -852,7 +863,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       if (![1, 0.5].includes(Number(cambios.tamanoAnadido))) throw new Error('Cada añadido es de 1 o de 0,5 unidades')
       c.tamanoAnadido = Number(cambios.tamanoAnadido)
     }
-    if ('riesgoEur' in cambios) numero('riesgoEur', 1, 5000, 'Riesgo por operación entre 1 y 5.000 €')
+    if ('riesgoPct' in cambios) numero('riesgoPct', 0.1, 10, 'Riesgo por operación entre el 0,1% y el 10% de la cuenta')
     if ('deslizamientoMaxR' in cambios) numero('deslizamientoMaxR', 0.01, 2, 'Deslizamiento máximo entre 0,01 y 2 veces el bracket')
     if ('rangoMaxPct' in cambios) numero('rangoMaxPct', 0.01, 10, 'Rango máximo entre 0,01% y 10%')
     if (c.modo === 'flip' && c.stopPct !== 1) throw new Error('Flip the switch necesita el stop al otro lado del bracket, que es justo donde entra el sentido contrario')

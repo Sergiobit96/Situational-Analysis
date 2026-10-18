@@ -60,6 +60,7 @@ test('claves de instrumento', () => {
   assert.ok(claveValida('^GDAXI'))
   assert.ok(claveValida('^GDAXI@csv'))
   assert.ok(claveValida('XAUUSD'))
+  assert.ok(claveValida('ig:CS.D.EURUSD.CEC.IP@ig'))
   assert.ok(!claveValida('../../etc'))
   assert.ok(!claveValida(''))
   assert.ok(!claveValida(undefined))

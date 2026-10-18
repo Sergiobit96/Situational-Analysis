@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import {
-  medio, velaDeHistorico, velaDeStreaming, elegirMercado, intervalosPendientes, cubrir, fundirVelas, acumularPrecio, crearIG, EPICS_IG,
+  medio, velaDeHistorico, velaDeStreaming, elegirMercado, intervalosPendientes, cubrir, fundirVelas, acumularPrecio, crearIG, EPICS_IG, epicDeMercadoIg,
 } from '../server/ig.js'
 import { ultimasVelas } from '../server/tiempo-real.js'
 
@@ -91,11 +91,12 @@ function igFalso() {
 
 // Un Lightstreamer de mentira que guarda la suscripción para poder mandarle actualizaciones
 function lightstreamerFalso() {
-  const yo = { usuario: null, clave: null, subs: [] }
+  const yo = { usuario: null, clave: null, subs: [], quitadas: [] }
   class LightstreamerClient {
     constructor(endpoint) { yo.endpoint = endpoint; this.connectionDetails = { setUser: u => { yo.usuario = u }, setPassword: p => { yo.clave = p } } }
     addListener() {}
     subscribe(sub) { yo.subs.push(sub) }
+    unsubscribe(sub) { yo.subs = yo.subs.filter(s => s !== sub); yo.quitadas.push(sub) }
     connect() {}
     disconnect() {}
   }
@@ -240,4 +241,57 @@ test('escribir a un gráfico que ya se cerró no tumba el servidor', async () =>
   assert.equal(typeof res.oyentes.error, 'function')     // los errores de la conexión se descartan
   assert.equal(escritos.filter(t => t.startsWith('event: velas')).length, 2)   // la inicial y la primera
   desconectar()
+})
+
+test('un mercado cualquiera de IG (ig:EPIC): histórico por su epic y directo mientras haya un gráfico abierto', async () => {
+  assert.equal(epicDeMercadoIg('ig:CS.D.EURUSD.CEC.IP'), 'CS.D.EURUSD.CEC.IP')
+  assert.equal(epicDeMercadoIg('ig:../../session'), null)
+  assert.equal(epicDeMercadoIg('^GDAXI'), null)
+
+  const dir = mkdtempSync(join(tmpdir(), 'ig-'))
+  try {
+    const { fetchFn, peticiones } = igFalso()
+    const ls = lightstreamerFalso()
+    const ig = crearIG({ apiKey: 'k', usuario: 'yo', password: 'secreta', cacheDir: dir, pausaBusquedaMs: 0, soltarTrasMs: 20, fetchFn, Lightstreamer: ls.Lightstreamer })
+    await ig.iniciar()
+    const ticker = 'ig:CS.D.EURUSD.CEC.IP'
+    const desde = Date.UTC(2026, 9, 14, 8) / 1000, hasta = Date.UTC(2026, 9, 14, 9) / 1000
+    assert.equal((await ig.velasEntre(ticker, 'm5', desde, hasta)).length, 12)
+    assert.ok(peticiones.some(p => p.url.includes('/prices/CS.D.EURUSD.CEC.IP?')))
+
+    const item = 'CHART:CS.D.EURUSD.CEC.IP:1MINUTE'
+    const soltarA = ig.seguir(ticker)
+    const soltarB = ig.seguir(ticker)
+    assert.equal(ls.subs.filter(s => s.items.includes(item)).length, 1)   // dos gráficos, una suscripción
+    const utm = Date.UTC(2026, 9, 19, 8, 3, 10)
+    ls.mandar(item, { UTM: String(utm), BID_OPEN: '1.1', OFR_OPEN: '1.1002', BID_HIGH: '1.1', OFR_HIGH: '1.1002', BID_LOW: '1.1', OFR_LOW: '1.1002', BID_CLOSE: '1.1', OFR_CLOSE: '1.1002' })
+    assert.equal(ultimasVelas('ig', ticker).at(-1).close, 1.1001)
+
+    soltarA()
+    soltarB()
+    soltarB()   // soltar dos veces el mismo no descuenta otro gráfico
+    await new Promise(r => setTimeout(r, 40))
+    assert.equal(ls.subs.filter(s => s.items.includes(item)).length, 0)
+    assert.equal(ls.quitadas.length, 1)
+    // los mercados de la app no van por aquí: ya tienen su suscripción fija
+    ig.seguir('^GDAXI')()
+    assert.equal(ls.quitadas.length, 1)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si un gráfico vuelve a abrir el mercado suelto antes de soltarlo, la suscripción sigue', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ig-'))
+  try {
+    const { fetchFn } = igFalso()
+    const ls = lightstreamerFalso()
+    const ig = crearIG({ apiKey: 'k', usuario: 'yo', password: 'secreta', cacheDir: dir, pausaBusquedaMs: 0, soltarTrasMs: 20, fetchFn, Lightstreamer: ls.Lightstreamer })
+    await ig.iniciar()
+    const ticker = 'ig:CS.D.GBPUSD.CEC.IP'
+    ig.seguir(ticker)()
+    const soltar = ig.seguir(ticker)   // otra temporalidad: cierra y abre enseguida
+    await new Promise(r => setTimeout(r, 40))
+    assert.equal(ls.subs.filter(s => s.items.includes('CHART:CS.D.GBPUSD.CEC.IP:1MINUTE')).length, 1)
+    assert.equal(ls.quitadas.length, 0)
+    soltar()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

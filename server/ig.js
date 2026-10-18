@@ -109,6 +109,15 @@ export const IG_RESOLUCION = {
   d1:  { res: 'DAY',       segundos: 86400, diasPagina: 400 },
 }
 
+// Un mercado cualquiera de IG, abierto en el gráfico buscándolo, va con el ticker `ig:` +
+// su epic (ig:CS.D.EURUSD.CEC.IP). Un epic son letras, números, puntos, guiones y _.
+export const PREFIJO_IG = 'ig:'
+export const epicDeMercadoIg = ticker => {
+  if (typeof ticker !== 'string' || !ticker.startsWith(PREFIJO_IG)) return null
+  const epic = ticker.slice(PREFIJO_IG.length)
+  return /^[\w.-]{3,40}$/.test(epic) ? epic : null
+}
+
 // Lo que IG contesta con un código, dicho de forma que se sepa qué tocar
 const ERRORES = {
   'error.security.invalid-details':     'IG no acepta el usuario o la contraseña (IG_USUARIO es el nombre de usuario, no el correo)',
@@ -235,7 +244,7 @@ const fechaIG = ts => new Date(ts * 1000).toISOString().slice(0, 19)
 
 // ── El cliente ──
 
-export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd = null, epicsFijos = {}, cacheDir, fetchFn = fetch, Lightstreamer = null, pausaBusquedaMs = 400 }) {
+export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd = null, epicsFijos = {}, cacheDir, fetchFn = fetch, Lightstreamer = null, pausaBusquedaMs = 400, soltarTrasMs = 60_000 }) {
   const base = BASE[entorno] ?? BASE.demo
   const estado = {
     configurado: true, entorno, sesion: 'sin iniciar', streaming: 'sin conectar',
@@ -407,8 +416,9 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   }
 
   // ── Streaming de velas de 1 min ──
+  const libLS = () => Lightstreamer ?? require('lightstreamer-client-node')
   function conectarStreaming() {
-    const { LightstreamerClient, Subscription } = Lightstreamer ?? require('lightstreamer-client-node')
+    const { LightstreamerClient, Subscription } = libLS()
     clienteLS?.disconnect()
     const items = Object.values(estado.epics).map(e => `CHART:${e.epic}:1MINUTE`)
     if (items.length === 0) { estado.streaming = 'sin mercados'; return }
@@ -430,11 +440,14 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     estado.suscripciones = {}
     estado.recibidas = {}
     for (const [ticker, { epic }] of Object.entries(estado.epics)) suscribirVelas(cliente, Subscription, ticker, epic)
+    // y los mercados sueltos que tenga abiertos algún gráfico
+    for (const [ticker, m] of sueltos) { m.subs = []; suscribirVelas(cliente, Subscription, ticker, m.epic, m.subs) }
     cliente.connect()
     clienteLS = cliente
   }
 
-  function suscribirVelas(cliente, Subscription, ticker, epic) {
+  // `subs`, si se da, se queda con las suscripciones hechas, para poder quitarlas después
+  function suscribirVelas(cliente, Subscription, ticker, epic, subs = null) {
     const campos = ['UTM', 'BID_OPEN', 'BID_HIGH', 'BID_LOW', 'BID_CLOSE', 'OFR_OPEN', 'OFR_HIGH', 'OFR_LOW', 'OFR_CLOSE']
     const sub = new Subscription('MERGE', [`CHART:${epic}:1MINUTE`], campos)
     sub.setRequestedSnapshot('yes')
@@ -449,13 +462,14 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       },
       onSubscriptionError: (codigo, texto) => {
         estado.suscripciones[ticker] = `velas rechazadas (${texto}); probando cotización suelta`
-        suscribirPrecios(cliente, Subscription, ticker, epic)
+        suscribirPrecios(cliente, Subscription, ticker, epic, subs)
       },
     })
+    subs?.push(sub)
     cliente.subscribe(sub)
   }
 
-  function suscribirPrecios(cliente, Subscription, ticker, epic) {
+  function suscribirPrecios(cliente, Subscription, ticker, epic, subs = null) {
     const sub = new Subscription('MERGE', [`MARKET:${epic}`], ['BID', 'OFFER', 'MARKET_STATE'])
     sub.setRequestedSnapshot('yes')
     let vela = null
@@ -471,7 +485,39 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       },
       onSubscriptionError: (codigo, texto) => { estado.suscripciones[ticker] = `sin permiso para precios en directo (${texto})` },
     })
+    subs?.push(sub)
     cliente.subscribe(sub)
+  }
+
+  // Mercados sueltos (ig:EPIC): sus velas en directo se piden cuando un gráfico los abre y se
+  // dejan de pedir un rato después de cerrarse el último (cambiar de temporalidad cierra el
+  // gráfico y lo vuelve a abrir: así no se quita y se pone la suscripción por nada)
+  const sueltos = new Map()   // ticker → { epic, graficos, subs, temporizador }
+  function seguir(ticker) {
+    const epic = epicDeMercadoIg(ticker)
+    if (!epic || estado.epics[ticker]) return () => {}
+    let m = sueltos.get(ticker)
+    if (!m) {
+      m = { epic, graficos: 0, subs: [], temporizador: null }
+      sueltos.set(ticker, m)
+      if (clienteLS) suscribirVelas(clienteLS, libLS().Subscription, ticker, epic, m.subs)
+    }
+    clearTimeout(m.temporizador)
+    m.graficos++
+    let soltado = false
+    return () => {
+      if (soltado) return
+      soltado = true
+      if (--m.graficos > 0) return
+      m.temporizador = setTimeout(() => {
+        if (m.graficos > 0 || sueltos.get(ticker) !== m) return
+        for (const sub of m.subs) { try { clienteLS?.unsubscribe(sub) } catch { /* ya no estaba */ } }
+        sueltos.delete(ticker)
+        delete estado.suscripciones?.[ticker]
+        delete estado.recibidas?.[ticker]
+      }, soltarTrasMs)
+      m.temporizador.unref?.()
+    }
   }
 
   function programarReconexion(esperaMs = 30_000) {
@@ -522,7 +568,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   }
 
   async function velasEntre(ticker, tf, desde, hasta) {
-    const epic = estado.epics[ticker]?.epic
+    const epic = estado.epics[ticker]?.epic ?? epicDeMercadoIg(ticker)
     if (!epic) throw new Error(estado.error ?? `IG: no se ha encontrado el mercado de ${ticker}`)
     const { res, segundos } = IG_RESOLUCION[tf]
     const c = leerCache(epic, res)
@@ -532,7 +578,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       // una hora de margen por el final: no está claro si IG lee las fechas en UTC o en
       // hora de Londres, y así el tramo pedido queda entero en los dos casos
       const qs = new URLSearchParams({ resolution: res, from: fechaIG(a), to: fechaIG(Math.min(b + 3600, Date.now() / 1000)), pageSize: '0' })
-      const { json } = await pedir(`/prices/${epic}?${qs}`, { version: 3 })
+      const { json } = await pedir(`/prices/${encodeURIComponent(epic)}?${qs}`, { version: 3 })
       if (json.metadata?.allowance) estado.cupo = json.metadata.allowance
       c.velas = fundirVelas(c.velas, (json.prices ?? []).map(velaDeHistorico).filter(Boolean))
       c.cubiertos = cubrir(c.cubiertos, a, Math.min(b, cerradoHasta))
@@ -700,12 +746,12 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     return resumenConfirmacion(ticker, await confirmar(json.dealReference))
   }
 
-  // Lo que la cuenta tiene disponible para margen (en su moneda): con él el bot no deja que
-  // una posición se coma la cuenta
-  async function disponible() {
+  // La cuenta en la que se opera, en su moneda: el saldo, del que sale lo que arriesga el
+  // bot, y lo disponible para margen, con lo que no deja que una posición se coma la cuenta
+  async function cuenta() {
     const { json } = await pedir('/accounts')
     const c = (json.accounts ?? []).find(x => x.accountId === sesion?.cuenta)
-    return c?.balance?.available ?? null
+    return { saldo: c?.balance?.balance ?? null, disponible: c?.balance?.available ?? null, moneda: c?.currency ?? null }
   }
 
   async function posiciones() {
@@ -742,6 +788,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   return {
     iniciar,
     velasEntre,
+    seguir,
     actividad,
     buscar,
     navegar,
@@ -750,6 +797,6 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     cuentas,
     rebuscarEpics,
     estado: () => ({ ...estado, epics: { ...estado.epics } }),
-    operar: { datosMercado, abrir, moverStop, cerrar, posiciones, cierreDe, disponible },
+    operar: { datosMercado, abrir, moverStop, cerrar, posiciones, cierreDe, cuenta },
   }
 }

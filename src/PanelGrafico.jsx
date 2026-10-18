@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { createChart, CandlestickSeries, CrosshairMode } from 'lightweight-charts'
 import { crearHerramientasDibujo } from './chartDrawingTools'
 import { madridOffsetAt } from './timezone'
 import { leerDibujos, guardarDibujos } from './dibujosApi'
 import { meterVelaEnDirecto } from './velaEnDirecto'
-import { TEMPORALIDADES, claveDibujosDe, configDe, nombreDe } from './graficoConfig'
+import { TEMPORALIDADES, claveDibujosDe, configDe, nombreDe, fuentesDe, esMercadoIg, decimalesDe } from './graficoConfig'
 
 // Un gráfico de la pestaña Gráfico: instrumento, temporalidad y fuente propios, que va
 // pidiendo histórico al servidor según se desplaza hacia la izquierda. La pestaña pone uno
@@ -45,7 +45,7 @@ function indiceDe(velas, time) {
   return -1
 }
 
-const fmt = n => n?.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const fmt = (n, decimales = 2) => n?.toLocaleString('es-ES', { minimumFractionDigits: decimales, maximumFractionDigits: decimales })
 
 // Dos paneles con la misma serie de precios (el DAX a 5 min y a 1 h, por ejemplo) comparten
 // dibujos. Cuando uno guarda, los demás repintan su lista: si no, al guardar después desde
@@ -60,13 +60,27 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
   const [leyenda, setLeyenda] = useState(null)
   const [errorDibujos, setErrorDibujos] = useState(null)
   const [vivo, setVivo] = useState(null)   // hora del último precio en directo
+  const [decimales, setDecimales] = useState(2)
+  // el gráfico pasó solo a IG porque Dukascopy no dio nada: { ticker, motivo }
+  const [respaldo, setRespaldo] = useState(null)
   const contenedorRef = useRef(null)
   const reintentarRef = useRef(null)
   // Los dibujos son de la serie de precios y se ven en todas las temporalidades, como en TradingView
   const claveDibujos = claveDibujosDe(ticker, fuente)
+  const conIg = fuente !== 'ig' && fuentesDe(ticker).some(f => f.id === 'ig')
+
+  // Si Dukascopy no da ni la primera página (suele ser su 429), el gráfico pasa a IG, que
+  // tiene el mismo instrumento, en vez de quedarse en blanco
+  const pasarAIg = useEffectEvent(motivo => {
+    setRespaldo({ ticker, motivo })
+    onCambiar({ fuente: 'ig' })
+  })
 
   useEffect(() => {
     const contenedor = contenedorRef.current
+    // un mercado suelto de IG puede ser una divisa: sus decimales salen de lo que cotiza
+    let dec = 2
+    setDecimales(2)
     const chart = createChart(contenedor, {
       autoSize: true,
       layout: { background: { color: '#11151d' }, textColor: '#8a93a5', fontFamily: 'Inter, sans-serif' },
@@ -75,7 +89,7 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
       rightPriceScale: { borderColor: '#232a37' },
       timeScale: { borderColor: '#232a37', timeVisible: tf !== 'd1', secondsVisible: false, rightOffset: 8 },
       // los precios del eje con el mismo formato que la leyenda (25.464,68)
-      localization: { locale: 'es-ES', priceFormatter: fmt },
+      localization: { locale: 'es-ES', priceFormatter: n => fmt(n, dec) },
     })
     const serie = chart.addSeries(CandlestickSeries, {
       upColor: '#22c55e', downColor: '#ef4444',
@@ -145,6 +159,11 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
         if (j.velas.length) {
           masAntigua = j.velas[0].time
           const nuevas = aHoraMadrid(j.velas)
+          if (!datos.length && esMercadoIg(ticker)) {
+            dec = decimalesDe(nuevas.at(-1).close)
+            serie.applyOptions({ priceFormat: { type: 'price', precision: dec, minMove: 1 / 10 ** dec } })
+            setDecimales(dec)
+          }
           datos = datos.length ? [...nuevas.filter(v => v.time < datos[0].time), ...datos] : nuevas
           serie.setData(datos)
         }
@@ -152,8 +171,11 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
         if (!hasta && j.directo) abrirDirecto()
         parado = false
         setEstado({ cargando: false, error: null, fuente: j.fuente, n: datos.length, hayMas, aviso: j.aviso ?? null })
+        // el aviso del paso a IG solo vale para ese instrumento, mientras siga en IG
+        if (!hasta) setRespaldo(r => (r && (r.ticker !== ticker || fuente !== 'ig') ? null : r))
       } catch (err) {
         if (err.name === 'AbortError') return
+        if (fuente === 'duka' && !hasta && !datos.length && conIg) { pasarAIg(err.message); return }
         parado = true
         setEstado(e => ({ ...e, cargando: false, error: err.message }))
       } finally {
@@ -215,7 +237,7 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
       herramientas.dispose()
       chart.remove()
     }
-  }, [ticker, tf, fuente, claveDibujos, onModo, registrar])
+  }, [ticker, tf, fuente, claveDibujos, conIg, onModo, registrar])
 
   const sube = leyenda && leyenda.cambio >= 0
 
@@ -229,12 +251,12 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
         {leyenda && (
           <div className="grafico-pro-leyenda">
             <strong>{nombreDe(ticker)} · {TEMPORALIDADES.find(t => t.id === tf)?.label}</strong>
-            <span>O <b>{fmt(leyenda.open)}</b></span>
-            <span>H <b>{fmt(leyenda.high)}</b></span>
-            <span>L <b>{fmt(leyenda.low)}</b></span>
-            <span>C <b>{fmt(leyenda.close)}</b></span>
+            <span>O <b>{fmt(leyenda.open, decimales)}</b></span>
+            <span>H <b>{fmt(leyenda.high, decimales)}</b></span>
+            <span>L <b>{fmt(leyenda.low, decimales)}</b></span>
+            <span>C <b>{fmt(leyenda.close, decimales)}</b></span>
             <span className={sube ? 'sube' : 'baja'}>
-              {sube ? '+' : ''}{fmt(leyenda.cambio)} ({sube ? '+' : ''}{fmt(leyenda.pct)}%)
+              {sube ? '+' : ''}{fmt(leyenda.cambio, decimales)} ({sube ? '+' : ''}{fmt(leyenda.pct)}%)
             </span>
           </div>
         )}
@@ -247,12 +269,21 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
           <>
             <span className="grafico-pro-error" title={estado.error}>{estado.error}</span>
             <button className="dibujo-btn" onClick={() => reintentarRef.current?.()}>Reintentar</button>
+            {fuente === 'duka' && conIg && (
+              <button className="dibujo-btn" onClick={() => onCambiar({ fuente: 'ig' })}>Ver con IG</button>
+            )}
             {fuente === 'duka' && (
               <button className="dibujo-btn" onClick={() => onCambiar({ fuente: 'yahoo' })}>Ver con Yahoo</button>
             )}
           </>
         ) : estado.cargando ? 'Cargando…' : (
           <>
+            {respaldo?.ticker === ticker && fuente === 'ig' && (
+              <>
+                <span className="grafico-pro-respaldo" title={respaldo.motivo}>Dukascopy no responde: se ve con IG</span>
+                <button className="dibujo-btn" onClick={() => { setRespaldo(null); onCambiar({ fuente: 'duka' }) }}>Volver a Dukascopy</button>
+              </>
+            )}
             <span className="grafico-panel-datos">
               {estado.n.toLocaleString('es-ES')} velas · {estado.fuente}
               {!estado.hayMas && ` · ${estado.aviso ?? 'inicio del histórico'}`}

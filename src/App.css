@@ -3935,6 +3935,66 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   color: var(--faint);
 }
 .grafico-disp-icono { display: block; fill: currentColor; }
+/* el gráfico pasó solo a IG porque Dukascopy no respondía */
+.grafico-pro-respaldo { color: var(--short); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Gráfico: buscador de mercados de IG ── */
+.grafico-ig {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 45vh;
+  overflow: auto;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.grafico-ig-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.grafico-ig-form input {
+  flex: 1;
+  min-width: 12rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.grafico-ig-form input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+.grafico-ig-nota { font-size: 0.75rem; color: var(--faint); }
+.grafico-ig-lista, .grafico-ig-grupo { display: flex; flex-direction: column; }
+.grafico-ig-grupo { gap: 0.1rem; margin-bottom: 0.4rem; }
+.grafico-ig-grupo strong { font-size: 0.78rem; color: var(--muted); padding: 0.2rem 0.4rem; }
+.grafico-ig-fila {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.75rem;
+  padding: 0.3rem 0.4rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.grafico-ig-fila:hover, .grafico-ig-fila:focus-visible { background: var(--surface-2); outline: none; }
+.grafico-ig-fila small { color: var(--faint); font-size: 0.74rem; }
+.grafico-ig-fila .grafico-ig-precio { color: var(--muted); font-variant-numeric: tabular-nums; }
+.grafico-ig-guardados { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.grafico-ig-chip { display: inline-flex; align-items: center; }
+.grafico-ig-quitar {
+  border: 0;
+  background: transparent;
+  color: var(--faint);
+  font-size: 0.9rem;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+.grafico-ig-quitar:hover { color: var(--red); }
 
 @media (max-width: 900px) {
   /* en móvil, uno debajo de otro y cada uno con alto propio */

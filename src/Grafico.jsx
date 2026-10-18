@@ -2,7 +2,11 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { HERRAMIENTAS_DIBUJO } from './chartDrawingTools'
 import { INSTRUMENTOS } from './intradayApi'
 import PanelGrafico from './PanelGrafico'
-import { TEMPORALIDADES, fuentesDe, configDe, claveDibujosDe, nombreDe } from './graficoConfig'
+import BuscadorIg from './BuscadorIg'
+import {
+  TEMPORALIDADES, fuentesDe, configDe, claveDibujosDe, nombreDe,
+  esMercadoIg, mercadosIgGuardados, recordarMercadoIg, olvidarMercadoIg,
+} from './graficoConfig'
 
 // Pestaña Gráfico: uno o varios gráficos a la vez, cada uno con su instrumento, temporalidad
 // y fuente (PanelGrafico.jsx). La barra de arriba actúa sobre el panel activo, que es el
@@ -20,6 +24,9 @@ const MAX_PANELES = 6
 
 // Lo que sale en los paneles nuevos: los índices que se operan, y el oro
 const POR_DEFECTO = ['^GDAXI', '^NDX', '^DJI', '^FTSE', '^GSPC', 'XAUUSD']
+
+// La fuente IG la abre el servidor local: fuera de local no hay mercados de IG que buscar
+const CON_IG = fuentesDe('^GDAXI').some(f => f.id === 'ig')
 
 const VISTA = 'sa.grafico.vista'
 const PREFS_DE_UNO = 'sa.grafico'   // las de cuando la pestaña tenía un solo gráfico
@@ -64,6 +71,8 @@ function IconoDisposicion({ d }) {
 export default function Grafico() {
   const [vista, setVista] = useState(leerVista)
   const [modos, setModos] = useState([])   // modo de dibujo de cada panel
+  const [buscandoIg, setBuscandoIg] = useState(false)
+  const [mercadosIg, setMercadosIg] = useState(mercadosIgGuardados)
   const mandos = useRef([])                // lo que cada panel deja manejar a la barra
 
   const guardar = useCallback(cambio => setVista(v => {
@@ -86,6 +95,15 @@ export default function Grafico() {
 
   const cambiarPanel = (i, cambio) =>
     guardar(v => ({ ...v, paneles: v.paneles.map((p, j) => (j === i ? { ...p, ...cambio } : p)) }))
+
+  // Un mercado de IG elegido en el buscador se abre en el panel activo y queda en el selector
+  const abrirMercadoIg = m => {
+    setMercadosIg(recordarMercadoIg(m))
+    cambiarPanel(activo, { ticker: m.ticker, fuente: 'ig' })
+    setBuscandoIg(false)
+  }
+  const elegirInstrumento = valor =>
+    cambiarPanel(activo, esMercadoIg(valor) ? { ticker: valor, fuente: 'ig' } : { ticker: valor })
 
   // Con "en todos" la temporalidad cambia en todos los paneles que se ven
   const cambiarTf = nueva => guardar(v => ({
@@ -120,14 +138,29 @@ export default function Grafico() {
           ))}
         </div>
 
-        <select
-          className="grafico-pro-select"
-          value={ticker}
-          onChange={e => cambiarPanel(activo, { ticker: e.target.value })}
-          aria-label="Instrumento"
-        >
-          {INSTRUMENTOS.map(i => <option key={i.value} value={i.value}>{i.label}</option>)}
-        </select>
+        <div className="grafico-pro-grupo">
+          <select
+            className="grafico-pro-select"
+            value={ticker}
+            onChange={e => elegirInstrumento(e.target.value)}
+            aria-label="Instrumento"
+          >
+            {INSTRUMENTOS.map(i => <option key={i.value} value={i.value}>{i.label}</option>)}
+            {CON_IG && (mercadosIg.length > 0 || esMercadoIg(ticker)) && (
+              <optgroup label="Mercados de IG">
+                {mercadosIg.map(m => <option key={m.ticker} value={m.ticker}>{m.nombre}</option>)}
+                {esMercadoIg(ticker) && !mercadosIg.some(m => m.ticker === ticker) && <option value={ticker}>{nombreDe(ticker)}</option>}
+              </optgroup>
+            )}
+          </select>
+          {CON_IG && (
+            <button
+              className={`dibujo-btn ${buscandoIg ? 'activo' : ''}`}
+              title="Abrir en este gráfico cualquier mercado de IG: divisas, bonos, acciones, cripto… o los de tus listas"
+              onClick={() => setBuscandoIg(b => !b)}
+            >Buscar en IG</button>
+          )}
+        </div>
 
         <div className="grafico-pro-grupo" role="group" aria-label="Temporalidad">
           {TEMPORALIDADES.map(t => (
@@ -181,6 +214,15 @@ export default function Grafico() {
           </span>
         )}
       </div>
+
+      {buscandoIg && (
+        <BuscadorIg
+          guardados={mercadosIg}
+          onElegir={abrirMercadoIg}
+          onOlvidar={t => setMercadosIg(olvidarMercadoIg(t))}
+          onCerrar={() => setBuscandoIg(false)}
+        />
+      )}
 
       <div className="grafico-rejilla" style={{ '--cols': disp.cols, '--filas': disp.filas }}>
         {vista.paneles.slice(0, disp.n).map((p, i) => (

@@ -679,6 +679,8 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       bid, oferta,
       conPrecio:   bid != null && oferta != null,
       aMercado:    reglas.marketOrderPreference !== 'NOT_AVAILABLE',
+      // el margen que pide IG en tanto por uno del nominal (5% en casi todos; 10% en el Russell)
+      factorMargen: json.instrument?.marginFactorUnit === 'PERCENTAGE' && json.instrument?.marginFactor != null ? json.instrument.marginFactor / 100 : null,
     }
   }
 

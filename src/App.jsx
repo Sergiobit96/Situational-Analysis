@@ -13,6 +13,7 @@ import Estrategias from './Estrategias.jsx'
 import Grafico from './Grafico'
 import Estadisticas from './Estadisticas.jsx'
 import Bot from './Bot'
+import BotTortugas from './BotTortugas'
 import './App.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
@@ -26,6 +27,7 @@ const ICONOS = {
   seg:      'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
   stats:    'M12 3v9h9a9 9 0 11-9-9zM15 3.5A9 9 0 0120.5 9H15z',
   bot:      'M5 9h14v10H5zM12 5v4M9 13h.01M15 13h.01M9 16h6M12 5a1 1 0 100-2 1 1 0 000 2z',
+  tortugas: 'M4 15c0-4.4 3.6-8 8-8s8 3.6 8 8H4zM8 15l-1.5 3M16 15l1.5 3M20 13h1.5a1.5 1.5 0 000-3H19M12 7v8M7.5 10.5l9 0',
   datos:    'M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4',
   pipeline: 'M6 4l14 8-14 8V4z',
   fotos:    'M3 7h4l2-3h6l2 3h4v13H3zM12 17a4 4 0 100-8 4 4 0 000 8z',
@@ -48,6 +50,7 @@ const GRUPOS = [
     // el bot opera en la demo de IG desde el servidor (en la nube, con BOT_OPERA=1); en
     // producción la pestaña pide la clave del bot
     { id: 'bot', label: 'Bot SRS' },
+    { id: 'tortugas', label: 'Bot Tortugas' },
   ] },
   { titulo: 'Datos', tabs: [
     { id: 'datos', label: 'Subir datos' },
@@ -151,6 +154,7 @@ export default function App() {
           {tab === 'estr'     && <Estrategias />}
           {tab === 'stats'    && <Estadisticas />}
           {tab === 'bot'      && <Bot />}
+          {tab === 'tortugas' && <BotTortugas />}
           {tab === 'pipeline' && <Pipeline />}
           {tab === 'fotos'    && <Fotos />}
           {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}

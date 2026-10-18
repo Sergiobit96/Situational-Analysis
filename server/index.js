@@ -10,7 +10,9 @@ import {
 import { limpiarDibujos, claveValida } from './dibujos.js'
 import { crearIG, IG_RESOLUCION } from './ig.js'
 import { suscribir, resumenTiempoReal } from './tiempo-real.js'
-import { crearBot } from './bot-srs.js'
+import { crearBot, SESIONES_BOT } from './bot-srs.js'
+import { crearBotTortugas } from './bot-tortugas.js'
+import { fechaEnZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
 import { crearTelegram } from './telegram.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
@@ -2586,6 +2588,40 @@ app.post('/api/bot/telegram', async (req, res) => {
 app.post('/api/bot/ensayo', async (req, res) => {
   if (!bot) return sinBot(res)
   try { res.json({ pasos: await bot.ensayo(req.body?.ticker ?? '^GDAXI') }) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Bot de las tortugas en la demo de IG (ver server/bot-tortugas.js) ──
+// Como el SRS: existe con IG en la demo, opera solo donde BOT_OPERA=1 y avisa por el mismo
+// Telegram. Sus niveles salen del diario de Yahoo de cada índice (tres años, que sobran para
+// la N de Wilder y el filtro del Sistema 1), con la fecha en la zona de su bolsa: Yahoo pone
+// cada vela diaria a la hora de apertura de su sesión. Va bajo /api/bot, con la misma clave.
+const BOT_TORTUGAS_PATH = process.env.BOT_TORTUGAS || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-tortugas.json' : 'Bot Tortugas.json')
+async function velasDiariasYahoo(ticker) {
+  // `hasta` a la hora en punto: la caché de memoria acierta dentro de la hora
+  const hasta = Math.floor(Date.now() / 3_600_000) * 3600
+  const velas = await obtenerRangoYahoo(ticker, '1d', hasta - 3 * 365 * 86400, hasta)
+  const zona = SESIONES_BOT[ticker].zona
+  return velas.map(v => ({ date: fechaEnZona(v.time, zona), open: v.open, high: v.high, low: v.low, close: v.close }))
+}
+const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasYahoo, archivo: BOT_TORTUGAS_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+if (botTortugas && BOT_OPERA) botTortugas.arrancar()
+if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+
+app.get('/api/bot/tortugas', (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  res.json({ archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() })
+})
+
+app.put('/api/bot/tortugas/config', (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  try { res.json(botTortugas.cambiarConfig(req.body ?? {})) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+
+app.post('/api/bot/tortugas/parar', async (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  try { res.json(await botTortugas.pararYCerrar()) }
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 

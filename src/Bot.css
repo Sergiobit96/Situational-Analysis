@@ -92,3 +92,23 @@
 .bot-tabla td.bot-celda-texto { font-family: var(--font-sans); }
 .bot-clave form { display: flex; gap: 0.5rem; }
 .bot-clave input { padding: 0.4rem 0.55rem; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+
+/* ── Pestaña Bot Tortugas ── */
+.velas-tabla-wrap.tor-tabla-wrap { max-height: none; }
+.velas-tabla.tor-tabla th,
+.velas-tabla.tor-tabla td { text-align: left; vertical-align: top; }
+.velas-tabla.tor-tabla { min-width: 60rem; }
+.velas-tabla.tor-tabla .tor-num { text-align: right; white-space: nowrap; }
+/* en móvil, App.css oculta las columnas 3 y 4 de las tablas; aquí son la N, el precio, el lado y la apertura */
+.velas-tabla.tor-todas th:nth-child(n),
+.velas-tabla.tor-todas td:nth-child(n) { display: table-cell; }
+.tor-tabla small { color: var(--muted); font-size: 0.7rem; }
+.tor-tabla .tor-sub { display: block; margin-top: 0.1rem; }
+.tor-tabla small.bot-pos { color: var(--green); }
+.tor-tabla small.bot-neg { color: var(--red); }
+.tor-motivo { max-width: 22rem; white-space: normal; }
+.tor-apagado td { opacity: 0.55; }
+.tor-indice { display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; color: var(--text); }
+.tor-indice input { margin-top: 0.15rem; }
+.tor-eventos { max-height: 22rem; }
+.tor-eventos b { font-weight: 600; }

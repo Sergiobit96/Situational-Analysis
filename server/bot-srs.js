@@ -431,8 +431,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const { intento } = dia
     const abiertas = await ig.operar.posiciones()
     const conocidas = new Set((dia.operacion?.unidades ?? []).map(u => u.dealId))
+    // (sin la referencia, solo una sin referencia o con la del bot: la de otro bot de la misma
+    // cuenta, como el de las tortugas, no es nuestra aunque entre a la vez)
     const nuestra = abiertas.find(p => p.referencia && p.referencia === intento.referencia)
-      ?? abiertas.find(p => p.ticker === dia.ticker && !conocidas.has(p.dealId) && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
+      ?? abiertas.find(p => p.ticker === dia.ticker && !conocidas.has(p.dealId) && (!p.referencia || p.referencia.startsWith(PREFIJO))
+        && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
     if (intento.tipo === 'anadido') {
       dia.estado = 'en-posicion'
       if (!nuestra) { apuntar(dia, 'El añadido no llegó a entrar en IG'); return }

@@ -607,7 +607,10 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     try { writeFileSync(`${fichero}.tmp`, JSON.stringify(c)); renameSync(`${fichero}.tmp`, fichero) } catch { /* no crítico */ }
   }
 
-  async function velasEntre(ticker, tf, desde, hasta) {
+  // `reservar`: los puntos del cupo semanal que se dejan para otro (el gráfico deja los del bot
+  // de las tortugas, que saca de aquí los niveles de las materias primas): si quedan menos, no
+  // se pide nada y se contesta como sin cupo. Lo que ya está en la caché no gasta cupo.
+  async function velasEntre(ticker, tf, desde, hasta, { reservar = 0 } = {}) {
     const epic = estado.epics[ticker]?.epic ?? epicDeMercadoIg(ticker)
     if (!epic) throw new Error(estado.error ?? `IG: no se ha encontrado el mercado de ${ticker}`)
     const { res, segundos } = IG_RESOLUCION[tf]
@@ -615,10 +618,22 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     const cerradoHasta = Date.now() / 1000 - segundos
 
     for (const [a, b] of intervalosPendientes(c.cubiertos, desde, hasta)) {
+      const quedan = estado.cupo?.remainingAllowance
+      if (reservar && quedan != null && quedan < reservar) {
+        throw new Error(`Lo que queda del cupo semanal de histórico de IG (${quedan} puntos) es para el bot de las tortugas`)
+      }
       // una hora de margen por el final: no está claro si IG lee las fechas en UTC o en
       // hora de Londres, y así el tramo pedido queda entero en los dos casos
       const qs = new URLSearchParams({ resolution: res, from: fechaIG(a), to: fechaIG(Math.min(b + 3600, Date.now() / 1000)), pageSize: '0' })
-      const { json } = await pedir(`/prices/${encodeURIComponent(epic)}?${qs}`, { version: 3 })
+      let json
+      try {
+        ({ json } = await pedir(`/prices/${encodeURIComponent(epic)}?${qs}`, { version: 3 }))
+      } catch (err) {
+        // sin cupo: hasta que una petición vuelva a salir (las del bot, que lo prueban cada
+        // hora) y traiga el cupo nuevo, se cuenta como 0
+        if (/cupo semanal/.test(err.message)) estado.cupo = { ...estado.cupo, remainingAllowance: 0 }
+        throw err
+      }
       if (json.metadata?.allowance) estado.cupo = json.metadata.allowance
       c.velas = fundirVelas(c.velas, (json.prices ?? []).map(velaDeHistorico).filter(Boolean))
       c.cubiertos = cubrir(c.cubiertos, a, Math.min(b, cerradoHasta))

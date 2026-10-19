@@ -218,6 +218,7 @@ export default function BotTortugas() {
         </div>
         <p className="bot-nota">
           Los niveles salen del diario de Yahoo de cada índice hasta la sesión anterior, como en el backtest; el precio es el de IG (el CFD de contado, que puede ir unos puntos separado del índice).
+          Las divisas, del contado de Yahoo; las materias primas, del histórico de IG, y si IG se queda sin cupo, el oro y la plata, del contado de Twelve Data o Dukascopy (lo pone debajo de la N).
           En «Canal», la pista es el canal de 55 sesiones y la parte clara el de 20; las rayas azules de arriba son las compras (la corta, S1; la larga, S2), las naranjas de abajo las ventas, el punto el precio y una raya roja el stop de una posición abierta. Debajo, lo que le falta al precio para la ruptura más cercana (o para su stop, con posición), en N.
           Cada sistema lleva su posición: un índice puede tener una de cada. Antes de abrir, el plan es provisional: al abrir se rehace con el saldo de ese momento.
           «Abierto» es lo que va ganando la posición; debajo, lo que dejaría si saltara el stop ahora.
@@ -366,7 +367,10 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
                 </label>
               </td>
               <td className="bot-celda-texto" rowSpan={n}>{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
-              <td className="tor-num" rowSpan={n}>{hoy ? px(hoy.n) : '—'}</td>
+              <td className="tor-num" rowSpan={n}>
+                {hoy ? px(hoy.n) : '—'}
+                {hoy?.respaldo && <small className="tor-sub" title="IG no da su histórico (sin cupo semanal): los niveles salen del contado de esta fuente">de {hoy.respaldo}</small>}
+              </td>
               <td className="tor-num" rowSpan={n}>{px(m.precio)}</td>
               <td rowSpan={n}>
                 {hoy ? <>

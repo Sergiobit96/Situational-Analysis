@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -170,6 +170,7 @@ const MERCADOS = {
   // en divisas el punto de IG es el pip (0,0001): 1 $ por pip en el mini son 10.000 $ por unidad de precio
   'CS.D.EURUSD.CECM.IP': { ticker: 'EURUSD', valorPunto: 1, valorPrecio: 10_000, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.1, factorMargen: 0.0333, decimales: 5 },
   'CS.D.EURUSD.CEC.IP':  { ticker: 'EURUSD', valorPunto: 10, valorPrecio: 100_000, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.1, factorMargen: 0.0333, decimales: 5 },
+  'CS.D.CFEGOLD.CEC.IP': { ticker: 'XAUUSD', valorPunto: 1, moneda: 'USD', cambioAEur: 0.86, tamanoMin: 0.1, factorMargen: 0.05, decimales: 2 },
 }
 
 // `sinPrecio`: los contratos que la cuenta no puede operar (su ficha viene sin precio)
@@ -581,6 +582,38 @@ test('divisas: el plan, dos horas y media después de abrir; la unidad, por pip;
     assert.equal(abrir.tamano, 3.8)
     assert.equal(abrir.stop, 1.11112)
     assert.ok(bot.estado().eventos.some(e => /Compra de 3,8 a 1,12312/.test(e.texto)))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('el respaldo del oro y la plata: las velas de 1 h, en las sesiones del bot (de 18:00 a 17:00 de Nueva York)', () => {
+  // cada hora desde el viernes 16-oct a las 15:00 de Nueva York hasta el martes a las 09:00,
+  // con el fin de semana y la pausa de las 17:00 dentro; la hora k vale k
+  const inicio = Date.parse('2026-10-16T15:00:00-04:00') / 1000
+  const horas = Array.from({ length: 91 }, (_, k) => ({ time: inicio + 3600 * k, open: k, high: k + 0.5, low: k - 0.5, close: k + 0.2 }))
+  const dias = diariasDeSesiones('XAUUSD', horas)
+  assert.deepEqual(dias, [
+    { date: '2026-10-16', open: 0, high: 1.5, low: -0.5, close: 1.2 },      // el viernes, hasta las 17:00
+    { date: '2026-10-19', open: 51, high: 73.5, low: 50.5, close: 73.2 },   // del domingo a las 18:00 al lunes a las 17:00
+    { date: '2026-10-20', open: 75, high: 90.5, low: 74.5, close: 90.2 },   // sin la hora de las 17:00 del lunes
+  ])
+  assert.equal(sesionesQueFaltan(dias), 0)
+  assert.equal(sesionesQueFaltan([dias[0], dias[2]]), 1)                    // falta el lunes
+  assert.equal(sesionesQueFaltan([]), Infinity)
+})
+
+test('oro: sin histórico de IG, el plan sale de su respaldo y lo dice', async () => {
+  const ig = igFalso({ precios: { XAUUSD: [4000, 4000.4] } })
+  const diario = diarioPlano(4000, 30, '2026-10-16')
+  diario.respaldo = 'Twelve Data'
+  const { bot, dir, enHora } = botDePrueba(ig, { XAUUSD: diario }, solo('XAUUSD'))
+  try {
+    enHora(utcS(10, 19, 0, 31)); await bot._paso()                // lunes 00:31 UTC: 2 h 31 min después de abrir
+    const plan = mercado(bot, 'XAUUSD').plan
+    assert.equal(plan.error, undefined)
+    assert.equal(plan.respaldo, 'Twelve Data')
+    assert.equal(plan.n, 60)
+    assert.equal(plan.sistemas[1].entrada.largo.nivel, 4030)
+    assert.ok(bot.estado().eventos.some(e => /niveles de Twelve Data: IG no da su histórico/.test(e.texto)))
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

@@ -171,6 +171,38 @@ test('el histórico se pide una vez y luego sale de la caché', async () => {
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('el gráfico deja para el bot de las tortugas lo último del cupo de histórico, y sin cupo no lo pide', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ig-'))
+  try {
+    const { fetchFn, peticiones } = igFalso()
+    let sinCupo = false
+    const conCupo = async (url, init) => (sinCupo && url.includes('/prices/')
+      ? (peticiones.push({ url, init }), { ok: false, status: 403, json: async () => ({ errorCode: 'error.public-api.exceeded-account-historical-data-allowance' }), headers: new Headers() })
+      : fetchFn(url, init))
+    const ig = crearIG({ apiKey: 'k', usuario: 'yo', password: 'secreta', cacheDir: dir, pausaBusquedaMs: 0, fetchFn: conCupo, Lightstreamer: lightstreamerFalso().Lightstreamer })
+    await ig.iniciar()
+    const dia = (d, h) => Date.UTC(2026, 9, d, h) / 1000
+    const precios = () => peticiones.filter(p => p.url.includes('/prices/')).length
+    // quedan 9000: con 2500 de reserva se pide
+    assert.equal((await ig.velasEntre('^GDAXI', 'm5', dia(14, 8), dia(14, 9), { reservar: 2500 })).length, 12)
+    // con 9500 de reserva, no: se contesta como sin cupo y no se pregunta a IG
+    const antes = precios()
+    await assert.rejects(ig.velasEntre('^GDAXI', 'm5', dia(15, 8), dia(15, 9), { reservar: 9500 }), /cupo semanal de histórico de IG \(9000 puntos\) es para el bot/)
+    assert.equal(precios(), antes)
+    // lo que ya está en la caché sale aunque no quede cupo
+    assert.equal((await ig.velasEntre('^GDAXI', 'm5', dia(14, 8), dia(14, 9), { reservar: 9500 })).length, 12)
+    // IG se queda sin cupo: desde ahí el gráfico no lo pide, y el bot sí, para ver si ha vuelto
+    sinCupo = true
+    await assert.rejects(ig.velasEntre('^GDAXI', 'm5', dia(16, 8), dia(16, 9)), /Agotado el cupo semanal/)
+    assert.equal(ig.estado().cupo.remainingAllowance, 0)
+    const n = precios()
+    await assert.rejects(ig.velasEntre('^GDAXI', 'm5', dia(16, 8), dia(16, 9), { reservar: 2500 }), /es para el bot/)
+    assert.equal(precios(), n)
+    await assert.rejects(ig.velasEntre('^GDAXI', 'm5', dia(16, 8), dia(16, 9)), /Agotado el cupo semanal/)
+    assert.equal(precios(), n + 1)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('con credenciales malas lo dice claro y no se queda reintentando', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ig-'))
   try {

@@ -15,7 +15,7 @@ import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
 import { suscribir, resumenTiempoReal, escucharFuente } from './tiempo-real.js'
 import { crearBot, RULE_OF_4 } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
-import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
+import { crearBotTortugas, MERCADOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
 import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
@@ -2421,7 +2421,12 @@ const mt5 = process.env.NODE_ENV !== 'production' && process.platform === 'win32
 //
 // IG se deja de pedir media hora si dice que no queda cupo, y un minuto si va muy deprisa:
 // cada petición, aunque falle, cuenta en el límite por minuto que comparten los bots.
+// El gráfico no gasta los últimos RESERVA_CUPO_TORTUGAS puntos del cupo semanal: son para el
+// bot de las tortugas, que saca de ahí los niveles de las materias primas (unas 160 velas por
+// mercado la primera vez y una al día después; el 18-oct-2026 el gráfico agotó el cupo y las
+// doce se quedaron sin plan).
 let igHistoricoParado = { hasta: 0, error: null }
+const RESERVA_CUPO_TORTUGAS = 2500
 
 // Un mercado suelto de IG (ig:EPIC) que es uno de los fijos, o la misma divisa con otro
 // tamaño de contrato (CS.D.EURUSD.CFD.IP y CS.D.EURUSD.CECM.IP cotizan igual), tira de lo
@@ -2466,7 +2471,7 @@ async function velasIg(tickerPedido, tf, inicio, fin) {
   for (const [a, b] of intervalosPendientes(grabados, inicio, fin)) {
     try {
       if (Date.now() < igHistoricoParado.hasta) throw igHistoricoParado.error
-      const velas = await ig.velasEntre(tickerPedido, tf, a, b)
+      const velas = await ig.velasEntre(tickerPedido, tf, a, b, { reservar: RESERVA_CUPO_TORTUGAS })
       if (velas.length) { trozos.push(velas); partes.add(`histórico ${resolucion}`) }
     } catch (err) {
       if (Date.now() >= igHistoricoParado.hasta) {
@@ -2953,7 +2958,8 @@ app.post('/api/bot/rule-of-4/parar', async (req, res) => {
 //     Sistema 1), con la fecha en la zona con la que Yahoo pone cada vela (la de apertura de la
 //     bolsa en los índices; Londres en divisas) y sin los fines de semana;
 //   · materias primas, del histórico de IG del CFD de contado: solo las velas ya cerradas y unas
-//     150 sesiones, porque gasta el cupo semanal de histórico (se guarda en el volumen).
+//     150 sesiones, porque gasta el cupo semanal de histórico (se guarda en el volumen). Si IG
+//     no lo da, el oro y la plata tiran de su respaldo (respaldoTortugas, más abajo).
 const BOT_TORTUGAS_PATH = process.env.BOT_TORTUGAS || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-tortugas.json' : 'Bot Tortugas.json')
 const DIAS_IG_TORTUGAS = 220
 const entreSemana = v => ![0, 6].includes(new Date(`${v.date}T12:00:00Z`).getUTCDay())
@@ -2961,8 +2967,13 @@ async function velasDiariasTortugas(ticker) {
   const m = MERCADOS_TORTUGAS[ticker]
   const ahora = Math.floor(Date.now() / 1000)
   if (m.datos.fuente === 'ig') {
-    const velas = await ig.velasEntre(ticker, 'd1', ahora - DIAS_IG_TORTUGAS * 86400, ahora - 86400)
-    return velas.map(v => ({ date: fechaEnZona(v.time, 'Europe/Madrid'), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
+    try {
+      const velas = await ig.velasEntre(ticker, 'd1', ahora - DIAS_IG_TORTUGAS * 86400, ahora - 86400)
+      return velas.map(v => ({ date: fechaEnZona(v.time, 'Europe/Madrid'), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
+    } catch (err) {
+      if (!m.datos.respaldo?.length) throw err
+      return respaldoTortugas(ticker, m.datos.respaldo, ahora, err)
+    }
   }
   // `hasta` a la hora en punto: la caché de memoria acierta dentro de la hora
   const hasta = Math.floor(ahora / 3600) * 3600
@@ -2970,6 +2981,51 @@ async function velasDiariasTortugas(ticker) {
   const zona = m.datos.zona ?? m.zona
   return velas.map(v => ({ date: fechaEnZona(v.time, zona), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
 }
+// El oro y la plata sin histórico de IG: las velas de 1 h del contado de su respaldo (ver
+// MERCADOS_TORTUGAS), agrupadas en las sesiones del bot, la primera fuente que las dé enteras.
+// Si ninguna, el error lleva el de IG por delante (con el «cupo», el bot reintenta cada hora).
+const SESIONES_QUE_PUEDEN_FALTAR = 6   // Navidad, Año Nuevo y algún festivo sin cotización
+async function respaldoTortugas(ticker, respaldo, ahora, errIg) {
+  const desde = ahora - DIAS_IG_TORTUGAS * 86400
+  const fallos = [errIg.message]
+  for (const r of respaldo) {
+    try {
+      const horas = r.fuente === 'Twelve Data' ? await horasTwelveData(r.simbolo, desde, ahora)
+        : r.fuente === 'Dukascopy' ? await horasDukascopy(r.instrumento, desde, ahora)
+        : []
+      const dias = diariasDeSesiones(ticker, horas)
+      const faltan = sesionesQueFaltan(dias)
+      if (dias.length < 80 || faltan > SESIONES_QUE_PUEDEN_FALTAR) throw new Error(`solo ${dias.length} sesiones${Number.isFinite(faltan) ? `, con ${faltan} huecos` : ''}`)
+      dias.respaldo = r.fuente
+      return dias
+    } catch (err) { fallos.push(`${r.fuente}: ${err.message}`) }
+  }
+  throw new Error(fallos.join('; '))
+}
+
+// Twelve Data: el plan gratuito da el oro al contado (XAU/USD), hasta 5000 velas por petición
+// (unos 208 días de 1 h) y 800 peticiones al día
+async function horasTwelveData(simbolo, desde, hasta) {
+  if (!process.env.TWELVEDATA_API_KEY) throw new Error('falta TWELVEDATA_API_KEY en el servidor')
+  const qs = new URLSearchParams({ symbol: simbolo, interval: '1h', outputsize: '5000', timezone: 'UTC', apikey: process.env.TWELVEDATA_API_KEY })
+  const resp = await fetch(`https://api.twelvedata.com/time_series?${qs}`, { signal: AbortSignal.timeout(30_000) })
+  const json = await resp.json().catch(() => ({}))
+  if (json.status !== 'ok') throw new Error(json.message ?? `HTTP ${resp.status}`)
+  return json.values
+    .map(v => ({ time: Date.parse(`${v.datetime.replace(' ', 'T')}Z`) / 1000, open: +v.open, high: +v.high, low: +v.low, close: +v.close }))
+    .filter(v => v.time >= desde && v.time < hasta && [v.open, v.high, v.low, v.close].every(Number.isFinite))
+    .sort((a, b) => a.time - b.time)
+}
+
+// Dukascopy: un 429 llega como ficheros vacíos, así que si ha limitado durante la descarga,
+// lo bajado no vale
+async function horasDukascopy(instrumento, desde, hasta) {
+  if (dukaCaido() || dukascopyLimitando(DUKA_CIRCUITO_MS)) throw new Error('limita las peticiones (429) o no responde')
+  const velas = await obtenerTramoDukascopy(instrumento, 'h1', desde, hasta)
+  if (dukascopyLimitando()) throw new Error('ha limitado las peticiones (429) a mitad de la descarga')
+  return velas
+}
+
 const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugas, archivo: BOT_TORTUGAS_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botTortugas && BOT_OPERA) botTortugas.arrancar()
 if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)

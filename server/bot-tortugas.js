@@ -48,15 +48,22 @@ import { nivelesTortugas } from './tortugas-niveles.js'
 //     saltan al cambiar de vencimiento y no cotizan como el contado de IG (que va entre dos).
 // En los de 24 horas el plan se hace `esperaPlan` minutos después de abrir, cuando la vela
 // diaria del día anterior ya está cerrada en Yahoo y en IG.
+//
+// El oro y la plata, que son contado (no un CFD entre dos vencimientos), tienen `respaldo` por
+// si IG no da su histórico (se queda sin cupo semanal): las velas de 1 h del contado de otra
+// fuente, agrupadas en las sesiones del bot (diariasDeSesiones). Twelve Data da el oro en su
+// plan gratuito (no la plata) y pide TWELVEDATA_API_KEY; Dukascopy, los dos, cuando no limita.
 const indice = (ticker, grupo) => ({ ...SESIONES_BOT[ticker], grupo, datos: { fuente: 'yahoo', simbolo: ticker } })
 const divisa = (nombre, simbolo) => ({ nombre, grupo: 'Divisas', zona: 'America/New_York', apertura: -7 * 60, cierre: 17 * 60, esperaPlan: 150, datos: { fuente: 'yahoo', simbolo, zona: 'Europe/London' } })
-const materia = (nombre, grupo) => ({ nombre, grupo, zona: 'America/New_York', apertura: -6 * 60, cierre: 17 * 60, esperaPlan: 150, datos: { fuente: 'ig' } })
+const materia = (nombre, grupo, respaldo = []) => ({ nombre, grupo, zona: 'America/New_York', apertura: -6 * 60, cierre: 17 * 60, esperaPlan: 150, datos: { fuente: 'ig', respaldo } })
 export const MERCADOS_TORTUGAS = {
   '^N225': indice('^N225', 'Asia'), '^GDAXI': indice('^GDAXI', 'Europa'), '^FTSE': indice('^FTSE', 'Europa'),
   '^NDX': indice('^NDX', 'EEUU'), '^GSPC': indice('^GSPC', 'EEUU'), '^DJI': indice('^DJI', 'EEUU'), '^RUT': indice('^RUT', 'EEUU'),
   EURUSD: divisa('EUR/USD', 'EURUSD=X'), GBPUSD: divisa('GBP/USD', 'GBPUSD=X'), USDJPY: divisa('USD/JPY', 'JPY=X'),
   AUDUSD: divisa('AUD/USD', 'AUDUSD=X'), USDCAD: divisa('USD/CAD', 'CAD=X'), USDCHF: divisa('USD/CHF', 'CHF=X'),
-  XAUUSD: materia('Oro', 'Metales'), XAGUSD: materia('Plata', 'Metales'), COPPER: materia('Cobre', 'Metales'),
+  XAUUSD: materia('Oro', 'Metales', [{ fuente: 'Twelve Data', simbolo: 'XAU/USD' }, { fuente: 'Dukascopy', instrumento: 'xauusd' }]),
+  XAGUSD: materia('Plata', 'Metales', [{ fuente: 'Dukascopy', instrumento: 'xagusd' }]),
+  COPPER: materia('Cobre', 'Metales'),
   USOIL: materia('Crudo WTI', 'Energía'), UKOIL: materia('Crudo Brent', 'Energía'), NATGAS: materia('Gas natural', 'Energía'),
   COFFEE: materia('Café', 'Blandas'), COCOA: materia('Cacao', 'Blandas'), SUGAR: materia('Azúcar', 'Blandas'), COTTON: materia('Algodón', 'Blandas'),
   CORN: materia('Maíz', 'Granos'), SOYBEAN: materia('Soja', 'Granos'),
@@ -91,6 +98,40 @@ export function proximaAperturaTortugas(ticker, t) {
   return null
 }
 export const SISTEMAS = [1, 2]
+
+// Velas de 1 h (en orden, con `time` al empezar la hora) en las diarias de las sesiones del
+// mercado: cada hora va a la sesión en curso a esa hora, y las de fuera (la pausa de las 17:00
+// de Nueva York, el fin de semana) se quedan fuera
+export function diariasDeSesiones(ticker, velasHora) {
+  const dias = []
+  let ses = null
+  for (const v of velasHora) {
+    if (!ses || v.time < ses.abre || v.time >= ses.cierra) {
+      ses = sesionTortugas(ticker, v.time)
+      if (!ses || v.time < ses.abre || v.time >= ses.cierra) { ses = null; continue }
+    }
+    const d = dias.at(-1)
+    if (d?.date === ses.fecha) {
+      d.high = Math.max(d.high, v.high)
+      d.low = Math.min(d.low, v.low)
+      d.close = v.close
+    } else dias.push({ date: ses.fecha, open: v.open, high: v.high, low: v.low, close: v.close })
+  }
+  return dias
+}
+
+// Las sesiones entre semana que faltan entre la primera y la última: un respaldo a medias
+// (Dukascopy, cuando limita, devuelve ficheros vacíos en vez de un error) daría niveles falsos
+export function sesionesQueFaltan(dias) {
+  if (!dias.length) return Infinity
+  const hay = new Set(dias.map(d => d.date))
+  let faltan = 0
+  for (let f = dias[0].date; f <= dias.at(-1).date; f = masDias(f, 1)) {
+    const dow = new Date(`${f}T12:00:00Z`).getUTCDay()
+    if (dow !== 0 && dow !== 6 && !hay.has(f)) faltan++
+  }
+  return faltan
+}
 
 export const CONFIG_TORTUGAS_BOT = {
   activo:       false,
@@ -330,16 +371,19 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       // sin el cupo semanal de histórico de IG, no tiene sentido pedirlo más a menudo que cada hora
       if (ahora() - avisoSinCupo > 12 * 3600) {
         avisoSinCupo = ahora()
-        avisarSinFallar('Tortugas: IG ha agotado el cupo semanal de histórico, así que las materias primas no tienen niveles hasta que se renueve. Lo reintento cada hora.')
+        avisarSinFallar('Tortugas: IG ha agotado el cupo semanal de histórico, así que las materias primas sin otra fuente no tienen niveles hasta que se renueve. Lo reintento cada hora.')
       }
       return falla(`${fuente} no da el diario: ${err.message}`, { espera: 3600, aviso: false })
     }
+    // si los niveles salen de un respaldo (el oro y la plata sin histórico de IG), de cuál
+    const origen = velas?.respaldo ?? fuente
     const nv = nivelesTortugas((velas ?? []).filter(v => v.date < ses.fecha), { stopN: STOP_N })
-    if (!nv) return falla('No hay bastantes velas diarias para calcular los niveles')
+    if (!nv) return falla(`No hay bastantes velas diarias de ${origen} para calcular los niveles`)
     if ((Date.parse(ses.fecha) - Date.parse(nv.ultimoDia)) / 86_400_000 > DIAS_VIEJO) {
-      return falla(`La última vela diaria de Yahoo es del ${nv.ultimoDia}: sin datos al día no se opera`)
+      return falla(`La última vela diaria de ${origen} es del ${nv.ultimoDia}: sin datos al día no se opera`)
     }
     Object.assign(plan, {
+      ...(velas?.respaldo ? { respaldo: velas.respaldo } : {}),
       ultimoDia: nv.ultimoDia, cierre: nv.cierre, n: nv.n,
       sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s, cfg.filtroS1)])),
     })
@@ -363,7 +407,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     plan.unidad ??= { ok: false, motivo: descartes.join('; ') || 'sin contrato' }
     datos.planes[ticker] = plan
 
-    const partes = [`N ${px(plan.n)}`]
+    const partes = [`N ${px(plan.n)}${plan.respaldo ? ` (niveles de ${plan.respaldo}: IG no da su histórico)` : ''}`]
     for (const s of SISTEMAS) {
       const pos = datos.posiciones[claveDe(ticker, s)]
       const sp = plan.sistemas[s]

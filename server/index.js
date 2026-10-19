@@ -8,10 +8,11 @@ import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
 } from './velas-grafico.js'
 import { limpiarDibujos, claveValida } from './dibujos.js'
-import { crearIG, IG_RESOLUCION } from './ig.js'
+import { crearIG, IG_RESOLUCION, epicDeMercadoIg, intervalosPendientes } from './ig.js'
+import { crearGrabacion, inicioCubo, tramosEnteros } from './grabacion-directo.js'
 import { crearMt5, simbolosDeEnv } from './mt5.js'
 import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
-import { suscribir, resumenTiempoReal } from './tiempo-real.js'
+import { suscribir, resumenTiempoReal, escucharFuente } from './tiempo-real.js'
 import { crearBot } from './bot-srs.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
@@ -1655,20 +1656,24 @@ function excursionesPendientes(reintentar = false) {
   })
 }
 
-// Las velas de 1 min de Yahoo que deja cada mañana recoger_yahoo.py: la reserva cuando
-// Dukascopy no sirve un día que no tiene en caché (ver server/velas-yahoo.js)
-const YAHOO_1MIN_DIR = process.env.YAHOO_1MIN_DIR || 'C:\\Users\\Sergio\\Documents\\Yahoo'
-const velasYahooCache = new Map()   // ticker → { mtime, velas }
-function velasYahooLocales(ticker) {
+// Las velas de 1 y 5 min de Yahoo que deja cada mañana recoger_yahoo.py: la reserva cuando
+// Dukascopy no sirve un día que no tiene en caché (ver server/velas-yahoo.js) y, en el
+// gráfico de IG, para lo que IG no da. En el servidor online están en el volumen, adonde las
+// sube scripts/subir-yahoo.mjs (PUT /api/yahoo/:fichero).
+const YAHOO_DIR = process.env.YAHOO_DIR || process.env.YAHOO_1MIN_DIR
+  || (process.env.NODE_ENV === 'production' ? (existsSync('/data') ? '/data/yahoo' : join(DISK_CACHE_DIR, 'yahoo')) : 'C:\\Users\\Sergio\\Documents\\Yahoo')
+const velasYahooCache = new Map()   // `${ticker}|${intervalo}` → { mtime, velas }
+function velasYahooLocales(ticker, intervalo = '1min') {
   const indice = INDICE_YAHOO[ticker]
   if (!indice) return null
-  const file = join(YAHOO_1MIN_DIR, `${indice}_1min.csv`)
+  const file = join(YAHOO_DIR, `${indice}_${intervalo}.csv`)
+  const clave = `${ticker}|${intervalo}`
   try {
     const mtime = statSync(file).mtimeMs
-    const visto = velasYahooCache.get(ticker)
+    const visto = velasYahooCache.get(clave)
     if (visto?.mtime === mtime) return visto.velas
     const velas = parsearCsvYahoo(readFileSync(file, 'utf8'))
-    velasYahooCache.set(ticker, { mtime, velas })
+    velasYahooCache.set(clave, { mtime, velas })
     return velas
   } catch {
     return null
@@ -2386,6 +2391,102 @@ const mt5 = process.env.NODE_ENV !== 'production' && process.platform === 'win32
   ? crearMt5({ python: process.env.MT5_PYTHON || 'python', simbolos: simbolosDeEnv(process.env.MT5_SIMBOLOS) })
   : null
 
+// Una página del gráfico de IG. Lo grabado del directo (ver la grabación, más abajo) sale de
+// disco sin gastar cupo; los ratos sin grabar, del histórico de IG. Si IG no lo da (sin cupo,
+// casi siempre), el contado de Yahoo de la carpeta de recoger_yahoo.py, que solo trae la
+// sesión y va a la par del CFD salvo en el Dow (+4 de media) y el Nikkei (+40, por eso no
+// está), con lo poco que haya grabado en ese rato encima.
+//
+// IG se deja de pedir media hora si dice que no queda cupo, y un minuto si va muy deprisa:
+// cada petición, aunque falle, cuenta en el límite por minuto que comparten los bots.
+let igHistoricoParado = { hasta: 0, error: null }
+
+async function velasIg(ticker, tf, inicio, fin) {
+  const { minutos } = TEMPORALIDADES[tf]
+  const { res: resolucion } = IG_RESOLUCION[tf]
+  const trozos = []
+  const partes = new Set()
+  let aviso = null
+  let error = null
+  let sinIg = false
+
+  const grabados = []
+  if (grabacion && !epicDeMercadoIg(ticker)) {
+    for (const [a, b] of tramosEnteros(grabacion.cubiertos(ticker), minutos)) {
+      const x = Math.max(a, inicio), y = Math.min(b, fin)
+      if (x < y) grabados.push([x, y])
+    }
+  }
+  for (const [a, b] of grabados) {
+    const velas = grabacion.velas(ticker, minutos, a, b)
+    if (velas.length) { trozos.push(velas); partes.add('directo grabado') }
+  }
+
+  for (const [a, b] of intervalosPendientes(grabados, inicio, fin)) {
+    try {
+      if (Date.now() < igHistoricoParado.hasta) throw igHistoricoParado.error
+      const velas = await ig.velasEntre(ticker, tf, a, b)
+      if (velas.length) { trozos.push(velas); partes.add(`histórico ${resolucion}`) }
+    } catch (err) {
+      if (Date.now() >= igHistoricoParado.hasta) {
+        if (/cupo semanal/.test(err.message)) igHistoricoParado = { hasta: Date.now() + 30 * 60_000, error: err }
+        else if (/limita las peticiones/.test(err.message)) igHistoricoParado = { hasta: Date.now() + 60_000, error: err }
+      }
+      sinIg = true
+      const r = respaldoYahoo(ticker, minutos, a, b)
+      aviso = r.yahoo ? `${err.message}: lo no grabado sale del contado de Yahoo, solo la sesión` : (aviso ?? err.message)
+      if (!r.velas.length) { error = err; continue }
+      trozos.push(r.velas)
+      if (r.grabadas) partes.add('directo grabado')
+      if (r.yahoo) partes.add('contado de Yahoo')
+    }
+  }
+
+  const porHora = new Map()
+  for (const v of trozos.flat()) if (!porHora.has(v.time)) porHora.set(v.time, v)
+  const velas = [...porHora.values()].sort((a, b) => a.time - b.time)
+  return {
+    velas, aviso, error,
+    fuente: `IG (${[...partes].join(' + ') || `histórico ${resolucion}`})`,
+    // sin IG, una página vacía (un fin de semana, con Yahoo, que solo trae la sesión) se salta
+    // de una vez hasta lo último que haya antes
+    previa: sinIg && !velas.length ? previaSinIg(ticker, inicio) : null,
+  }
+}
+
+// La hora de lo último grabado o de Yahoo antes de `t`, o null si no hay nada
+function previaSinIg(ticker, t) {
+  const candidatas = []
+  for (const intervalo of ['1min', '5min']) {
+    const velas = velasYahooLocales(ticker, intervalo) ?? []
+    let lo = 0, hi = velas.length
+    while (lo < hi) { const m = (lo + hi) >> 1; if (velas[m].time < t) lo = m + 1; else hi = m }
+    if (lo > 0) candidatas.push(velas[lo - 1].time)
+  }
+  if (grabacion && !epicDeMercadoIg(ticker)) {
+    const tramo = grabacion.cubiertos(ticker).filter(([a]) => a < t).at(-1)
+    if (tramo) candidatas.push(Math.min(tramo[1], t) - 60)
+  }
+  return candidatas.length ? Math.max(...candidatas) : null
+}
+
+// Velas de [a, b) agrupadas a `minutos` con la rejilla del gráfico de IG: las de Yahoo (de 1
+// min y, más atrás, de 5) hasta la primera grabada del directo, y lo grabado desde ahí
+function respaldoYahoo(ticker, minutos, a, b) {
+  const entre = velas => (velas ?? []).filter(v => v.time >= a && v.time < b)
+  const grabadas = grabacion && !epicDeMercadoIg(ticker) ? grabacion.m1Entre(ticker, a, b) : []
+  const hastaGrabadas = grabadas[0]?.time ?? b
+  const de1 = entre(velasYahooLocales(ticker, '1min')).filter(v => v.time < hastaGrabadas)
+  const de5 = minutos >= 5
+    ? entre(velasYahooLocales(ticker, '5min')).filter(v => v.time < (de1[0]?.time ?? hastaGrabadas))
+    : []
+  return {
+    velas: agruparVelas([...de5, ...de1, ...grabadas], minutos),
+    yahoo: de5.length + de1.length > 0,
+    grabadas: grabadas.length > 0,
+  }
+}
+
 app.get('/api/grafico/velas', async (req, res) => {
   const { ticker, tf = 'm15', fuente = 'duka' } = req.query
   const conf = TEMPORALIDADES[tf]
@@ -2407,19 +2508,25 @@ app.get('/api/grafico/velas', async (req, res) => {
       // el histórico de IG gasta su cupo semanal: en producción, solo con la clave del bot
       if (!claveBotValida(req)) return res.status(401).json({ error: 'Clave del bot incorrecta', necesitaClave: true })
       if (!ig) return res.status(404).json({ error: `IG no está configurado: faltan ${IG_FALTAN.join(', ')} en server/.env` })
-      const { diasPagina } = IG_RESOLUCION[tf]
+      const { diasPagina, res: resolucion } = IG_RESOLUCION[tf]
       let fin = hasta
+      let error = null
       for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
-        const inicio = Math.floor(fin - diasPagina * 86400)
-        const velas = await ig.velasEntre(ticker, tf, inicio, fin)
-        if (velas.length > 0) {
+        // en velas enteras: lo grabado se agrupa aquí, y una vela partida entre dos páginas
+        // se quedaría con la mitad
+        const inicio = inicioCubo(Math.floor(fin - diasPagina * 86400), conf.minutos)
+        const r = await velasIg(ticker, tf, inicio, fin)
+        if (r.velas.length > 0) {
           const { cupo } = ig.estado()
-          const aviso = cupo && cupo.remainingAllowance < 1000 ? `quedan ${cupo.remainingAllowance} puntos de histórico de IG esta semana` : null
-          return res.json({ ticker, tf, fuente: `IG ${IG_RESOLUCION[tf].res}`, velas, hayMas: true, aviso, directo: true })
+          const avisoCupo = cupo && cupo.remainingAllowance < 1000 ? `quedan ${cupo.remainingAllowance} puntos de histórico de IG esta semana` : null
+          return res.json({ ticker, tf, fuente: r.fuente, velas: r.velas, hayMas: true, aviso: r.aviso ?? avisoCupo, directo: true })
         }
-        fin = inicio
+        error = r.error ?? error
+        fin = r.previa != null && r.previa < inicio ? r.previa + 60 : inicio
       }
-      return res.json({ ticker, tf, fuente: `IG ${IG_RESOLUCION[tf].res}`, velas: [], hayMas: false, directo: true })
+      // al ir hacia atrás, el gráfico ya tiene velas: mejor decirle dónde se acaba que un error
+      if (error && !req.query.hasta) throw error
+      return res.json({ ticker, tf, fuente: `IG ${resolucion}`, velas: [], hayMas: false, aviso: error?.message ?? null, directo: true })
     }
 
     if (fuente === 'mt5') {
@@ -2434,14 +2541,14 @@ app.get('/api/grafico/velas', async (req, res) => {
         const { velas: crudas, previa } = await mt5.pagina(ticker, conf.duka, inicio, fin)
         if (crudas.length > 0) {
           const velas = agruparVelas(crudas, conf.minutos)
-          return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas, hayMas: previa != null })
+          return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas, hayMas: previa != null, directo: true })
         }
         // un hueco de semanas (le faltan del 16-jul al 5-sep-2025) se salta de una vez hasta
         // la última vela que haya antes
         if (previa == null) break
         fin = previa + 1
       }
-      return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas: [], hayMas: false })
+      return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas: [], hayMas: false, directo: true })
     }
 
     if (fuente === 'yahoo') {
@@ -2543,14 +2650,58 @@ const ig = IG_FALTAN.length === 0
   : null
 ig?.iniciar()
 
+// Grabación del directo de IG (ver server/grabacion-directo.js): las velas de 1 min de los
+// mercados fijos, a disco; en producción, al volumen. Los mercados sueltos (ig:EPIC) solo
+// llegan con un gráfico abierto, así que no se graban. DIRECTO_GRABAR=0 la apaga.
+const grabacion = ig && process.env.DIRECTO_GRABAR !== '0'
+  ? crearGrabacion({
+      dir: process.env.DIRECTO_DIR
+        || (process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/directo' : join(DISK_CACHE_DIR, 'directo')),
+      tickers: () => Object.keys(ig.estado().epics),
+      // solo cuenta como grabado lo que llega con el streaming conectado y el mercado suscrito
+      activo: ticker => {
+        const e = ig.estado()
+        return /^CONNECTED/.test(e.streaming) && /^(velas de 1 min|cotización suelta)/.test(e.suscripciones?.[ticker] ?? '')
+      },
+    })
+  : null
+if (grabacion) {
+  escucharFuente('ig', (ticker, vela) => { if (!epicDeMercadoIg(ticker)) grabacion.anotar(ticker, vela) })
+  grabacion.iniciar()
+}
+
+// recoger_yahoo.py deja cada mañana en tu PC la sesión de contado de los índices; desde ahí,
+// scripts/subir-yahoo.mjs la sube aquí para que el servidor online la tenga (ver YAHOO_DIR).
+// Solo en producción: en local, YAHOO_DIR es la carpeta de la que salen.
+app.put('/api/yahoo/:fichero', express.text({ type: () => true, limit: '50mb' }), (req, res) => {
+  if (process.env.NODE_ENV !== 'production') return res.status(404).json({ error: 'Solo en el servidor online' })
+  if (!claveBotValida(req)) return res.status(401).json({ error: 'Clave del bot incorrecta' })
+  const { fichero } = req.params
+  const nombres = Object.values(INDICE_YAHOO).join('|')
+  if (!new RegExp(`^(${nombres})_(1|5)min\\.csv$`).test(fichero)) return res.status(400).json({ error: `Fichero desconocido: ${fichero}` })
+  const texto = typeof req.body === 'string' ? req.body : ''
+  const velas = parsearCsvYahoo(texto).length
+  if (!velas) return res.status(400).json({ error: 'El fichero no trae velas' })
+  try {
+    mkdirSync(YAHOO_DIR, { recursive: true })
+    const destino = join(YAHOO_DIR, fichero)
+    writeFileSync(`${destino}.tmp`, texto)
+    renameSync(`${destino}.tmp`, destino)
+    res.json({ ok: true, fichero, velas })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.get('/api/mt5/estado', async (req, res) => {
   if (!mt5) return res.status(404).json({ error: 'MetaTrader 5 solo está en local, con el terminal instalado' })
-  try { res.json(await mt5.estado()) } catch (err) { res.status(503).json({ error: err.message }) }
+  const directo = { ...mt5.directo(), velas: resumenTiempoReal().filter(s => s.fuente === 'mt5') }
+  try { res.json({ ...(await mt5.estado()), directo }) } catch (err) { res.status(503).json({ error: err.message, directo }) }
 })
 
 app.get('/api/ig/estado', (req, res) => {
   if (!ig) return res.json({ configurado: false, faltan: IG_FALTAN })
-  res.json({ ...ig.estado(), directo: resumenTiempoReal().filter(s => s.fuente === 'ig') })
+  res.json({ ...ig.estado(), directo: resumenTiempoReal().filter(s => s.fuente === 'ig'), grabacion: grabacion?.resumen() ?? null })
 })
 
 app.get('/api/ig/buscar', async (req, res) => {
@@ -2597,11 +2748,14 @@ app.get('/api/ig/navegar', async (req, res) => {
 
 // Velas de 1 min en directo para un gráfico abierto (SSE). Al conectarse recibe las últimas
 // cinco, para cubrir lo que haya pasado entre su histórico y este momento. Un mercado suelto
-// de IG (ig:EPIC) se suscribe al abrirse el gráfico y se suelta al cerrarse.
+// de IG (ig:EPIC) se suscribe al abrirse el gráfico y se suelta al cerrarse; con MT5, el
+// terminal se consulta mientras haya algún gráfico abierto.
 app.get('/api/tiempo-real/stream', (req, res) => {
   const { fuente, ticker } = req.query
   if (!fuente || !ticker) return res.status(400).json({ error: 'fuente y ticker requeridos' })
-  const soltar = fuente === 'ig' && ig ? ig.seguir(String(ticker)) : () => {}
+  const soltar = fuente === 'ig' && ig ? ig.seguir(String(ticker))
+    : fuente === 'mt5' && mt5 ? mt5.seguir(String(ticker))
+    : () => {}
   const desconectar = suscribir(res, String(fuente), String(ticker))
   req.on('close', () => { desconectar(); soltar() })
 })

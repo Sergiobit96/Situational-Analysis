@@ -107,3 +107,99 @@ test('los símbolos de server/.env se suman a los de serie', () => {
   assert.equal(s['^FTSE'], 'UK100')
   assert.equal(s['^NDX'], 'USTEC')
 })
+
+// Un puente que contesta a `directo` con lo que diga `velasDe` en cada consulta
+function puenteDirecto(velasDe) {
+  const consultas = []
+  const { spawn } = puenteFalso(pet => {
+    if (pet.op !== 'directo') return { ok: true }
+    consultas.push(pet.simbolos)
+    return { ok: true, velas: velasDe(consultas.length, pet.simbolos), errores: {} }
+  })
+  return { spawn, consultas }
+}
+// deja que el puente falso conteste (setImmediate: setTimeout va con el reloj de mentira)
+const vaciar = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)) }
+const AHORA = 1_800_000_000_000
+const vela = (time, close) => ({ time, open: 10, high: Math.max(10, close), low: Math.min(10, close), close })
+
+test('en directo reparte las velas de 1 min que cambian y deja de preguntar al soltarse', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const t0 = AHORA / 1000 - 30
+  const respuestas = [
+    { DE40: [vela(t0 - 60, 9), vela(t0, 11)] },
+    { DE40: [vela(t0 - 60, 9), vela(t0, 11)] },    // igual que antes: nada
+    { DE40: [vela(t0 - 60, 9), vela(t0, 12)] },    // se mueve la que se está haciendo
+  ]
+  const { spawn, consultas } = puenteDirecto(n => respuestas[Math.min(n, respuestas.length) - 1])
+  const repartidas = []
+  const mt5 = crearMt5({ spawn, log: () => {}, ahora: () => AHORA, registrar: (f, tk, v) => repartidas.push([f, tk, v.time, v.close]) })
+
+  const soltar = mt5.seguir('^GDAXI')
+  await vaciar()
+  assert.deepEqual(consultas, [['DE40']])
+  assert.deepEqual(repartidas, [['mt5', '^GDAXI', t0 - 60, 9], ['mt5', '^GDAXI', t0, 11]])
+
+  t.mock.timers.tick(1000); await vaciar()
+  assert.equal(consultas.length, 2)
+  assert.equal(repartidas.length, 2)
+
+  t.mock.timers.tick(1000); await vaciar()
+  assert.deepEqual(repartidas.at(-1), ['mt5', '^GDAXI', t0, 12])
+
+  soltar()
+  t.mock.timers.tick(5000); await vaciar()
+  assert.equal(consultas.length, 3)
+  assert.deepEqual(mt5.directo().siguiendo, {})
+})
+
+test('en directo no reparte las velas de un mercado cerrado ni sigue lo que MT5 no tiene', async () => {
+  const viejo = AHORA / 1000 - 3600
+  const { spawn, consultas } = puenteDirecto(() => ({ DE40: [vela(viejo - 60, 9), vela(viejo, 11)] }))
+  const repartidas = []
+  const mt5 = crearMt5({ spawn, log: () => {}, ahora: () => AHORA, registrar: (...a) => repartidas.push(a) })
+  mt5.seguir('^FTSE')()
+  assert.equal(consultas.length, 0)
+  const soltar = mt5.seguir('^GDAXI')
+  await vaciar()
+  soltar()
+  assert.equal(consultas.length, 1)
+  assert.equal(repartidas.length, 0)
+  mt5.cerrar()
+})
+
+test('dos gráficos del mismo instrumento van en una sola consulta y hasta soltar los dos no se para', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { spawn, consultas } = puenteDirecto(() => ({}))
+  const mt5 = crearMt5({ spawn, log: () => {}, ahora: () => AHORA, registrar: () => {} })
+  const a = mt5.seguir('^GDAXI')
+  const b = mt5.seguir('^GDAXI')
+  const c = mt5.seguir('^NDX')
+  await vaciar()
+  t.mock.timers.tick(1000); await vaciar()
+  assert.deepEqual(consultas.at(-1), ['DE40', 'USTEC'])
+  a(); a(); c()
+  assert.deepEqual(mt5.directo().siguiendo, { '^GDAXI': 1 })
+  t.mock.timers.tick(1000); await vaciar()
+  assert.deepEqual(consultas.at(-1), ['DE40'])
+  b()
+  const antes = consultas.length
+  t.mock.timers.tick(5000); await vaciar()
+  assert.equal(consultas.length, antes)
+})
+
+test('con el puente fallando, el directo espera 15 s antes de volver a preguntar', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let veces = 0
+  const { spawn } = puenteFalso(pet => { if (pet.op === 'directo') veces++; return { ok: false, error: 'terminal cerrado' } })
+  const mt5 = crearMt5({ spawn, log: () => {}, ahora: () => AHORA, registrar: () => {} })
+  const soltar = mt5.seguir('^GDAXI')
+  await vaciar()
+  assert.equal(veces, 1)
+  assert.equal(mt5.directo().error, 'terminal cerrado')
+  t.mock.timers.tick(5000); await vaciar()
+  assert.equal(veces, 1)
+  t.mock.timers.tick(10_000); await vaciar()
+  assert.equal(veces, 2)
+  soltar()
+})

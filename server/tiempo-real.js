@@ -13,6 +13,7 @@ const AL_CONECTAR = 5             // velas que recibe un gráfico al conectarse,
 
 const series  = new Map()         // `${fuente}|${ticker}` → { velas, actualizado }
 const oyentes = new Set()         // { fuente, ticker, enviar }
+const deFuente = new Set()        // { fuente, alLlegar(ticker, vela) }: todo lo de una fuente
 
 export function registrarVela(fuente, ticker, vela) {
   if (!Number.isFinite(vela?.time)) return
@@ -38,6 +39,10 @@ export function registrarVela(fuente, ticker, vela) {
     if (o.fuente !== fuente || o.ticker !== ticker) continue
     try { o.enviar([vela]) } catch { /* lo suyo es suyo */ }
   }
+  for (const o of deFuente) {
+    if (o.fuente !== fuente) continue
+    try { o.alLlegar(ticker, vela) } catch { /* lo suyo es suyo */ }
+  }
 }
 
 export function ultimasVelas(fuente, ticker, n = AL_CONECTAR) {
@@ -58,6 +63,14 @@ export function escuchar(fuente, ticker, alLlegar) {
   const oyente = { fuente, ticker, enviar: alLlegar }
   oyentes.add(oyente)
   return () => oyentes.delete(oyente)
+}
+
+// Como escuchar, pero cada vela de cualquier instrumento de la fuente, con su ticker (lo usa
+// la grabación del directo). Devuelve la función que deja de avisar.
+export function escucharFuente(fuente, alLlegar) {
+  const oyente = { fuente, alLlegar }
+  deFuente.add(oyente)
+  return () => deFuente.delete(oyente)
 }
 
 // Conecta un gráfico (una respuesta SSE de Express) a una fuente e instrumento. Devuelve la

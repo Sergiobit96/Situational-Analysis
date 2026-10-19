@@ -10,9 +10,14 @@
 // 4-oct-2024 al 6-ene-2025 el feed de los índices se quedó congelado (el puente quita esos
 // días; en EE. UU. quedan algunos a medias). El FTSE (UK100) dejó de cotizar ahí en mayo de
 // 2026 y no hay petróleo.
+//
+// También da la última vela en directo: mientras algún gráfico siga un instrumento, se le
+// pregunta al terminal cada segundo por sus dos últimas velas de 1 min y las que cambian van
+// a tiempo-real.js, igual que las del streaming de IG. No hay cupo que gastar.
 import { spawn as spawnReal } from 'child_process'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
+import { registrarVela } from './tiempo-real.js'
 
 const PUENTE = join(dirname(fileURLToPath(import.meta.url)), 'mt5_puente.py')
 
@@ -33,7 +38,16 @@ export const SIMBOLOS_MT5 = {
 const ESPERA_PRIMERA_MS = 90_000
 const ESPERA_MS = 30_000
 
-export function crearMt5({ python = 'python', env = process.env, simbolos = SIMBOLOS_MT5, spawn = spawnReal, log = console.log } = {}) {
+const CADA_MS       = 1000      // cada cuánto se pregunta por la vela en directo
+const TRAS_ERROR_MS = 15_000    // con el terminal o Python caídos, sin martillear
+// Una vela de 1 min de hace más de diez es de un mercado cerrado (el fin de semana, la pausa
+// de los índices americanos): no se reparte como si fuera directo
+const VIEJA_S = 10 * 60
+
+export function crearMt5({
+  python = 'python', env = process.env, simbolos = SIMBOLOS_MT5, spawn = spawnReal, log = console.log,
+  registrar = registrarVela, ahora = Date.now,
+} = {}) {
   let proc = null
   let siguienteId = 1
   let respondido = false   // el puente ya contestó alguna vez: el terminal está en marcha
@@ -96,8 +110,75 @@ export function crearMt5({ python = 'python', env = process.env, simbolos = SIMB
     })
   }
 
+  // ── Directo ──
+  const seguidos = new Map()   // ticker → gráficos que lo siguen
+  const vistas   = new Map()   // ticker → Map(hora → 'o|h|l|c' de la última vela repartida)
+  let reloj      = null
+  let sondeando  = false
+  let errorDirecto = null
+  let ultimoSondeo = null
+
+  async function sondear() {
+    reloj = null
+    if (!seguidos.size) return
+    sondeando = true
+    let espera = CADA_MS
+    try {
+      const tickers = [...seguidos.keys()]
+      const { velas, errores } = await pedir('directo', { simbolos: tickers.map(t => simbolos[t]) })
+      const viejas = ahora() / 1000 - VIEJA_S
+      for (const ticker of tickers) {
+        let vistasDe = vistas.get(ticker)
+        if (!vistasDe) vistas.set(ticker, vistasDe = new Map())
+        for (const v of velas[simbolos[ticker]] ?? []) {
+          if (v.time < viejas) continue
+          const clave = `${v.open}|${v.high}|${v.low}|${v.close}`
+          if (vistasDe.get(v.time) === clave) continue
+          vistasDe.set(v.time, clave)
+          registrar('mt5', ticker, v)
+        }
+        // basta con recordar las últimas
+        for (const t of [...vistasDe.keys()].sort((a, b) => a - b).slice(0, -4)) vistasDe.delete(t)
+      }
+      const fallos = Object.entries(errores ?? {})
+      errorDirecto = fallos.length ? fallos.map(([s, e]) => `${s}: ${e}`).join('; ') : null
+      ultimoSondeo = ahora()
+    } catch (err) {
+      if (err.message !== errorDirecto) log('[mt5] directo:', err.message)
+      errorDirecto = err.message
+      espera = TRAS_ERROR_MS
+    } finally {
+      sondeando = false
+    }
+    if (seguidos.size && !reloj) reloj = setTimeout(sondear, espera)
+  }
+
   return {
     simboloDe: ticker => simbolos[ticker] ?? null,
+
+    // Un gráfico empieza a seguir la vela en directo de un instrumento. Devuelve la función
+    // que lo suelta; sin nadie siguiendo nada, se deja de preguntar al terminal.
+    seguir(ticker) {
+      if (!simbolos[ticker]) return () => {}
+      seguidos.set(ticker, (seguidos.get(ticker) ?? 0) + 1)
+      if (!reloj && !sondeando) sondear()
+      let soltado = false
+      return () => {
+        if (soltado) return
+        soltado = true
+        const n = seguidos.get(ticker) - 1
+        if (n > 0) { seguidos.set(ticker, n); return }
+        seguidos.delete(ticker)
+        vistas.delete(ticker)
+        if (!seguidos.size) { clearTimeout(reloj); reloj = null }
+      }
+    },
+
+    directo: () => ({
+      siguiendo: Object.fromEntries(seguidos),
+      ultimoSondeo: ultimoSondeo && new Date(ultimoSondeo).toISOString(),
+      error: errorDirecto,
+    }),
 
     // Velas con hora en [desde, hasta) en una temporalidad de MT5 (m1…h1), en UTC, y la
     // hora de la última anterior a `desde` (null: no hay más histórico)
@@ -111,6 +192,9 @@ export function crearMt5({ python = 'python', env = process.env, simbolos = SIMB
     estado: () => pedir('estado'),
 
     cerrar() {
+      seguidos.clear()
+      clearTimeout(reloj)
+      reloj = null
       const p = proc
       proc = null
       p?.kill()

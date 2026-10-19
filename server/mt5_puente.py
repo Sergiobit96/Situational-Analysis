@@ -10,6 +10,10 @@
 # invierno, UTC+3 en verano: comprobado el 19-oct-2026 contra el DAX de contado, también en
 # las semanas en que Europa y EE. UU. cambian la hora en fechas distintas). Aquí se pasa a
 # UTC de verdad en los dos sentidos, para que el servidor no tenga que saberlo.
+#
+# Para el directo, el servidor pide cada segundo las dos últimas velas de 1 min (op
+# `directo`): la de la posición 0 es la que se está haciendo y el terminal la mueve con cada
+# precio (0,2 ms por consulta, comprobado el 19-oct-2026).
 import datetime as dt
 import json
 import os
@@ -132,6 +136,25 @@ def pagina(simbolo, tf, desde, hasta):
     return {'velas': velas, 'previa': previa(simbolo, marco, tf, desde)}
 
 
+def directo(simbolos):
+    """Las dos últimas velas de 1 min de cada símbolo, en UTC: la que se está haciendo y la
+    anterior, cuyo último precio pudo llegar después de la consulta previa. Un símbolo que
+    falla no deja sin las suyas a los demás."""
+    conectar()
+    velas, errores = {}, {}
+    for simbolo in simbolos:
+        try:
+            simbolo_listo(simbolo)
+            r = mt5.copy_rates_from_pos(simbolo, mt5.TIMEFRAME_M1, 0, 2)
+            if r is None:
+                raise RuntimeError(f'MetaTrader 5: {mt5.last_error()}')
+            velas[simbolo] = [{'time': de_servidor(x['time']), 'open': float(x['open']), 'high': float(x['high']),
+                               'low': float(x['low']), 'close': float(x['close'])} for x in r]
+        except Exception as err:  # noqa: BLE001
+            errores[simbolo] = str(err)
+    return {'velas': velas, 'errores': errores}
+
+
 def estado():
     conectar()
     ti, ai = mt5.terminal_info(), mt5.account_info()
@@ -148,6 +171,8 @@ def main():
             pet = json.loads(linea)
             if pet['op'] == 'pagina':
                 r = pagina(pet['simbolo'], pet['tf'], int(pet['desde']), int(pet['hasta']))
+            elif pet['op'] == 'directo':
+                r = directo(pet['simbolos'])
             elif pet['op'] == 'estado':
                 r = estado()
             else:

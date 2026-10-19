@@ -189,7 +189,7 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
     }
     reintentarRef.current = () => cargar(masAntigua ?? undefined)
 
-    // En directo (IG): llegan velas de 1 min que amplían la última del gráfico o abren la
+    // En directo (IG y MT5): llegan velas de 1 min que amplían la última del gráfico o abren la
     // siguiente. El EventSource se reconecta solo si se corta, y al volver el servidor
     // manda las últimas cinco para cubrir el hueco.
     let directo = null

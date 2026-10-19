@@ -17,7 +17,7 @@ export const TEMPORALIDADES = [
 
 export const FUENTES = [
   { id: 'duka',  label: 'Dukascopy', title: 'CFD de Dukascopy: 24 h y años de histórico' },
-  { id: 'mt5',   label: 'MT5',       title: 'CFD de tu MetaTrader 5 (MetaQuotes-Demo), solo en local: 24 h, a 1 min desde 2017 (Russell 2018, Nikkei 2019, Nasdaq 2022, oro 2004). Falta del 16-jul al 5-sep-2025 y de oct-2024 a ene-2025 hay días congelados. Sin FTSE ni petróleo' },
+  { id: 'mt5',   label: 'MT5',       title: 'CFD de tu MetaTrader 5 (MetaQuotes-Demo), solo en local, con la última vela en directo: 24 h, a 1 min desde 2017 (Russell 2018, Nikkei 2019, Nasdaq 2022, oro 2004). Falta del 16-jul al 5-sep-2025 y de oct-2024 a ene-2025 hay días congelados. Sin FTSE ni petróleo' },
   { id: 'yahoo', label: 'Yahoo',     title: 'Contado de los índices (oro, plata y petróleo, con el futuro). Hasta 30 días a 1m, 60 días de 5 a 30m, 2 años en 1h y 4h, y el diario completo' },
   { id: 'csv',   label: 'CSV cash',  title: 'Tu CSV del DAX cash a 5 min: solo sesión, desde 2009' },
   { id: 'ig',    label: 'IG en directo', title: 'Precios de IG (su CFD) con la última vela moviéndose en directo. Necesita las claves de IG en server/.env' },

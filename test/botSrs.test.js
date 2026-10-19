@@ -765,3 +765,25 @@ test('al cierre guarda las velas de la sesión con el directo si están todas', 
     assert.equal(pedidas, 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('para el gráfico de la pestaña, la sesión de hoy lleva las velas de 15 min del directo y el último precio', async () => {
+  // del 7-oct, de 9:00 a 9:31 de Madrid (8:00 en Londres), una vela de 1 min por minuto. Con el
+  // FTSE, al que ninguna otra prueba le mete velas: el directo es uno para todo el fichero
+  // y no admite velas más viejas que la última
+  for (let i = 0; i <= 31; i++) vela1m('^FTSE', madrid(7, 9, i), 25_500 + i, 25_490 + i, 25_495 + i)
+  const ig = igFalso({})
+  const { bot, dir, enHora } = botDePrueba(ig, { instrumentos: { '^N225': false, '^GDAXI': false, '^FTSE': true, '^NDX': false, '^GSPC': false, '^DJI': false } })
+  try {
+    enHora(madrid(7, 9, 31, 30)); await bot._paso()
+    const estado = bot.estado()
+    const hoy = estado.hoy.find(d => d.ticker === '^FTSE')
+    assert.equal(hoy.velasEnDirecto, true)
+    assert.deepEqual(hoy.velas.map(v => v[0]), [madrid(7, 9, 0), madrid(7, 9, 15), madrid(7, 9, 30)])
+    // la de 9:15 junta las de 1 min de 9:15 a 9:29
+    assert.deepEqual(hoy.velas[1], [madrid(7, 9, 15), 25_510, 25_529, 25_505, 25_524])
+    assert.equal(hoy.precio, 25_526)
+    // y no se guarda en el registro: es solo para enseñarlo
+    assert.equal(bot._datos().dias[hoy.clave].velas, undefined)
+    assert.deepEqual(estado.sesiones.find(s => s.ticker === '^FTSE').hoy, { abre: madrid(7, 9, 0), cierra: madrid(7, 17, 30) })
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})

@@ -1035,13 +1035,26 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       if (ses && datos.dias[clave(ses)]) actuales.add(clave(ses))
     }
     for (const d of dias) if (enJuego(d)) actuales.add(d.clave)
+    // Para el gráfico de la pestaña: la sesión que aún no ha guardado sus velas lleva las de 15
+    // min que van del directo, y todas, el último precio (sale de la memoria, no gasta cupo)
+    const conDirecto = d => {
+      const ultima = ultimasVelas('ig', d.ticker, 1).at(-1)
+      const precio = ultima?.close ?? null
+      if (d.velas) return { ...d, precio }
+      const velas = agruparDirecto(directo(d.ticker), d.abre, Math.min(d.cierra, t + 1)).map(v => [v.time, v.open, v.high, v.low, v.close])
+      return { ...d, velas, velasEnDirecto: true, precio }
+    }
     return {
       config: datos.config,
       maxUnidades: MAX_UNIDADES,
-      sesiones: Object.entries(SESIONES_BOT).map(([ticker, s]) => ({
-        ticker, nombre: s.nombre, zona: s.zona, encendido: !!datos.config.instrumentos[ticker], proxima: proximaApertura(ticker, t),
-      })),
-      hoy: dias.filter(d => actuales.has(d.clave)),
+      sesiones: Object.entries(SESIONES_BOT).map(([ticker, s]) => {
+        const ses = sesionDe(ticker, t)
+        return {
+          ticker, nombre: s.nombre, zona: s.zona, encendido: !!datos.config.instrumentos[ticker], proxima: proximaApertura(ticker, t),
+          hoy: ses ? { abre: ses.abre, cierra: ses.cierra } : null,
+        }
+      }),
+      hoy: dias.filter(d => actuales.has(d.clave)).map(conDirecto),
       historial: dias.filter(d => !actuales.has(d.clave)).slice(0, 150),
     }
   }

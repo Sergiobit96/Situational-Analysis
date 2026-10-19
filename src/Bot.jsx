@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { analizarSesion } from './segundaVelaCore'
 import { conClaveBot, guardarClaveBot } from './claveBot'
+import { piernasDe, abiertoSrs, siguienteAnadidoSrs, acumulado } from './botCalculos'
+import { GraficoSesion, Piramide, LineaDelDia, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
 
 // Pestaña Bot: el bot SRS que opera en la demo de IG (server/bot-srs.js) en varias sesiones
@@ -17,6 +19,20 @@ const ESTADOS = {
   'terminado':         'Terminada',
   'sin-operar':        'No opera',
 }
+// Orden de las tarjetas de hoy: lo que tiene algo abierto, lo que espera y lo terminado
+const ORDEN_ESTADO = {
+  'en-posicion': 0, 'entrando': 0, 'esperando-vuelta': 0,
+  'esperando-rotura': 1, 'esperando-bracket': 2,
+  'terminado': 3, 'sin-operar': 3,
+}
+// Lo mismo en corto, para la línea del día
+const ESTADOS_CORTOS = {
+  'esperando-bracket': 'esperando bracket',
+  'esperando-rotura':  'esperando rotura',
+  'entrando':          'entrando…',
+  'esperando-vuelta':  'esperando la vuelta',
+  'sin-operar':        'no opera',
+}
 const MOTIVOS = { stop: 'stop', breakeven: 'break even', cierre: 'cierre', manual: 'a mano', objetivo: 'objetivo', bracket: 'stop' }
 
 const num = (n, dec = 1) => n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec })
@@ -24,6 +40,7 @@ const pts = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n)}`)
 const eur = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n, 0)} €`)
 const precio = n => (n == null ? '—' : num(n))
 const hora = iso => new Date(iso).toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid' })
+const horaMinuto = ts => new Date(ts * 1000).toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit' })
 const fechaHora = ts => new Date(ts * 1000).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
 
@@ -38,8 +55,6 @@ async function pedir(url, opciones = {}) {
   return j
 }
 
-// Las piernas de una sesión: la primera y, si dio la vuelta, la segunda (cada una con sus posiciones)
-const piernasDe = d => [...(d.anteriores ?? []), ...(d.operacion ? [d.operacion] : [])]
 const ladoTexto = lado => (lado === 'largo' ? 'Compra' : 'Venta')
 const describirPiernas = d => piernasDe(d).map(p => `${ladoTexto(p.lado)}${p.unidades?.length > 1 ? ` ×${p.unidades.length}` : ''}`).join(' → ')
 
@@ -73,10 +88,13 @@ export default function Bot() {
   const [ensayo, setEnsayo] = useState(null)
   const [ensayoTicker, setEnsayoTicker] = useState('^GDAXI')
   const [avisoTelegram, setAvisoTelegram] = useState(null)
+  const [ahora, setAhora] = useState(() => Math.floor(Date.now() / 1000))
+  const [abierto, setAbierto] = useState(null)   // la sesión del historial con el gráfico desplegado
 
   const cargar = useCallback(async () => {
     try {
       setDatos(await pedir('/api/bot'))
+      setAhora(Math.floor(Date.now() / 1000))
       setError(null)
       setPideClave(false)
     } catch (err) {
@@ -147,6 +165,47 @@ export default function Bot() {
   const nombre = t => sesiones.find(s => s.ticker === t)?.nombre ?? t
   const operados = historial.filter(d => d.resultadoPts != null)
   const totalEur = operados.reduce((n, d) => n + (d.resultadoEur ?? 0), 0)
+  const maxUnidades = datos.maxUnidades ?? 5
+
+  // Lo de hoy: lo cerrado (piernas terminadas) y lo que va abierto, con el último precio
+  const cuentasHoy = hoy.map(d => {
+    const cerrado = piernasDe(d).reduce((s, p) => s + (p.salida ? (p.resultadoEur ?? 0) : 0), 0)
+    return { d, cerrado, ...abiertoSrs(d) }
+  })
+  const cerradoHoy = cuentasHoy.reduce((s, c) => s + c.cerrado, 0)
+  const abiertoHoy = cuentasHoy.reduce((s, c) => s + (c.abierto ?? 0), 0)
+  const alStopHoy = cuentasHoy.reduce((s, c) => s + (c.alStop ?? 0), 0)
+  const hayAbierto = cuentasHoy.some(c => c.abierto != null)
+  const saldo = hoy.find(d => d.plan?.saldo)?.plan.saldo ?? null
+  const curva = acumulado([...operados].reverse().map(d => ({ etiqueta: `${d.fecha} · ${nombre(d.ticker)}`, valor: d.resultadoEur ?? 0 })))
+  const maxEur = Math.max(0, ...operados.map(d => Math.abs(d.resultadoEur ?? 0)))
+
+  // Una fila por instrumento en la línea del día: su sesión de hoy y cómo va
+  const filasDia = sesiones.map(s => {
+    const d = hoy.find(x => x.ticker === s.ticker)
+    const abre = s.hoy?.abre ?? d?.abre ?? null
+    const cierra = s.hoy?.cierra ?? d?.cierra ?? null
+    const op = d ? piernasDe(d).at(-1) : null
+    const c = cuentasHoy.find(x => x.d === d)
+    const clase = !s.encendido && !d ? 'apagada'
+      : d?.estado === 'en-posicion' ? `dentro ${op?.lado ?? ''}`
+      : d?.estado === 'terminado' ? 'terminada'
+      : d?.estado === 'sin-operar' ? 'sin-operar'
+      : abre != null && ahora >= abre && ahora < cierra ? 'en-curso'
+      : abre != null && ahora >= cierra ? 'terminada'
+      : 'proxima'
+    const resultado = d ? (d.salida ? d.resultadoEur : (c?.cerrado ?? 0) + (c?.abierto ?? 0)) : null
+    const derecha = !s.encendido && !d ? <span className="bot-nota">apagada</span>
+      : d && (d.salida || op) ? <span className={tono(resultado)}>{eur(resultado)}{!d.salida && op ? <small> abierto</small> : null}</span>
+      : d ? <span className="bot-nota">{ESTADOS_CORTOS[d.estado] ?? d.estado}</span>
+      : abre == null || ahora >= cierra ? <span className="bot-nota">abre {fechaHora(s.proxima)}</span>
+      : <span className="bot-nota">{ahora < abre ? `abre ${horaMinuto(abre)}` : 'en curso'}</span>
+    return {
+      clave: s.ticker, nombre: s.nombre, abre, cierra, clase, derecha,
+      control: <input type="checkbox" checked={s.encendido} disabled={ocupado} title={s.encendido ? 'Apagar esta sesión' : 'Encender esta sesión'}
+        onChange={e => guardarConfig({ instrumentos: { [s.ticker]: e.target.checked } })} />,
+    }
+  })
 
   return (
     <div className="bot-page">
@@ -164,26 +223,32 @@ export default function Bot() {
 
       {error && <p className="bot-error">{error}</p>}
 
+      <div className="estr-tiles bot-kpis">
+        <Tile label="Hoy" valor={hoy.length ? eur(cerradoHoy + abiertoHoy) : '—'} tonoValor={tono(cerradoHoy + abiertoHoy)}
+          sub={hoy.length ? `${eur(cerradoHoy)} cerrado${hayAbierto ? ` · ${eur(abiertoHoy)} abierto` : ''}` : 'ninguna sesión empezada'} />
+        <Tile label="Abierto ahora" valor={hayAbierto ? eur(abiertoHoy) : '—'} tonoValor={tono(abiertoHoy)}
+          sub={hayAbierto ? `si saltan los stops: ${eur(alStopHoy)}` : 'nada abierto'} />
+        <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'} sub={`riesgo por operación: ${String(config.riesgoPct ?? 1).replace('.', ',')}%`} />
+        <Tile label="Historial" valor={operados.length ? eur(totalEur) : '—'} tonoValor={tono(totalEur)}
+          sub={`${operados.length} ${operados.length === 1 ? 'sesión' : 'sesiones'} con operación (demo)`} />
+      </div>
+
       <section className="bot-bloque">
-        <h3>Sesiones</h3>
-        <div className="bot-sesiones">
-          {sesiones.map(s => (
-            <label key={s.ticker} className={`bot-sesion ${s.encendido ? 'encendida' : ''}`}>
-              <input type="checkbox" checked={s.encendido} disabled={ocupado}
-                onChange={e => guardarConfig({ instrumentos: { [s.ticker]: e.target.checked } })} />
-              <span className="bot-sesion-nombre">{s.nombre}</span>
-              <span className="bot-sesion-hora">{s.proxima ? `abre ${fechaHora(s.proxima)}` : '—'}</span>
-            </label>
-          ))}
-        </div>
-        <p className="bot-nota">Horas de Madrid. Cada sesión abre a la hora de su bolsa: Tokio 09:00, Fráncfort 09:00, Londres 08:00 y Nueva York 09:30.</p>
+        <h3>El día</h3>
+        <LineaDelDia filas={filasDia} ahora={ahora} />
+        <p className="bot-nota">Horas de Madrid; la raya vertical es ahora. Cada sesión abre a la hora de su bolsa (Tokio 09:00, Fráncfort 09:00, Londres 08:00 y Nueva York 09:30) y la casilla la enciende o la apaga.</p>
       </section>
 
       <section className="bot-bloque">
         <h3>Hoy</h3>
         {hoy.length === 0 ? (
           <p className="bot-nota">{config.activo ? 'Ninguna sesión empezada todavía.' : 'El bot está apagado: enciéndelo para que opere las próximas sesiones.'}</p>
-        ) : hoy.map(d => <SesionHoy key={d.clave} d={d} nombre={nombre(d.ticker)} />)}
+        ) : (
+          <div className="bot-tarjetas">
+            {[...cuentasHoy].sort((a, b) => (ORDEN_ESTADO[a.d.estado] ?? 1) - (ORDEN_ESTADO[b.d.estado] ?? 1) || a.d.abre - b.d.abre)
+              .map(c => <SesionHoy key={c.d.clave} cuentas={c} nombre={nombre(c.d.ticker)} maxUnidades={maxUnidades} ahora={ahora} />)}
+          </div>
+        )}
       </section>
 
       <section className="bot-bloque">
@@ -191,15 +256,17 @@ export default function Bot() {
         {historial.length === 0 ? <p className="bot-nota">Todavía no hay sesiones anteriores.</p> : (
           <>
             <p className="bot-nota">{operados.length} sesiones con operación · resultado del bot <b className={tono(totalEur)}>{eur(totalEur)}</b> (demo)</p>
-            <div className="velas-tabla-wrap">
+            <CurvaResultados puntos={curva} />
+            <div className="velas-tabla-wrap bot-historial-wrap">
               <table className="velas-tabla bot-tabla">
                 <thead>
-                  <tr><th>Sesión</th><th>Instrumento</th><th>Operación</th><th>Entrada</th><th>Deslizamiento</th><th>Salida</th><th>Bot</th><th>€</th><th>Backtest</th><th>Nota</th></tr>
+                  <tr><th>Sesión</th><th>Instrumento</th><th>Operación</th><th>Entrada</th><th>Deslizamiento</th><th>Salida</th><th>Bot</th><th>€</th><th>Backtest</th><th>Nota</th><th /></tr>
                 </thead>
                 <tbody>
                   {historial.map(d => {
                     const bt = d.backtest
-                    return (
+                    const desplegado = abierto === d.clave
+                    return [
                       <tr key={d.clave}>
                         <td>{d.fecha}</td>
                         <td className="bot-celda-texto">{nombre(d.ticker)}</td>
@@ -208,13 +275,24 @@ export default function Bot() {
                         <td>{pts(piernasDe(d)[0]?.deslizamiento)}</td>
                         <td>{d.salida ? `${precio(d.salida.nivel)} (${MOTIVOS[d.salida.motivo] ?? d.salida.motivo}${d.salida.aproximado ? ', aprox.' : ''})` : '—'}</td>
                         <td className={tono(d.resultadoPts)}>{pts(d.resultadoPts)}</td>
-                        <td className={tono(d.resultadoEur)}>{eur(d.resultadoEur)}</td>
+                        <td className={`bot-celda-barra ${tono(d.resultadoEur)}`}><BarraResultado valor={d.resultadoEur} max={maxEur} />{eur(d.resultadoEur)}</td>
                         <td className={tono(bt?.resultadoPts)} title={bt?.valido === false ? bt.motivo : bt?.resumen ?? ''}>
                           {bt == null ? '—' : !bt.valido ? 'no calculable' : bt.resultadoPts == null ? 'sin entrada' : pts(bt.resultadoPts)}
                         </td>
                         <td className="bot-nota-celda">{d.estado === 'sin-operar' ? d.eventos?.at(-1)?.texto : ''}</td>
-                      </tr>
-                    )
+                        <td>{d.velas?.length ? (
+                          <button className="dibujo-btn" onClick={() => setAbierto(desplegado ? null : d.clave)} aria-expanded={desplegado}>{desplegado ? 'ocultar' : 'gráfico'}</button>
+                        ) : null}</td>
+                      </tr>,
+                      desplegado && (
+                        <tr key={`${d.clave}-grafico`} className="bot-fila-grafico">
+                          <td colSpan={11}>
+                            <GraficoSesion velas={d.velas} abre={d.abre} cierra={d.cierra} minutos={d.ventana?.minutosVela ?? 15}
+                              bracket={d.bracket} piernas={piernasDe(d)} decimales={1} />
+                          </td>
+                        </tr>
+                      ),
+                    ]
                   })}
                 </tbody>
               </table>
@@ -318,41 +396,89 @@ export default function Bot() {
   )
 }
 
-function SesionHoy({ d, nombre }) {
+// Una sesión de hoy: cabecera con el estado y el resultado, el gráfico de la sesión y debajo
+// los datos (pirámide, bracket, riesgo, stop) y el registro plegado
+function SesionHoy({ cuentas, nombre, maxUnidades, ahora }) {
+  const { d, cerrado, abierto, alStop } = cuentas
   const { plan } = d
   const piernas = piernasDe(d)
   // la pierna en curso (o la última) y, si dio la vuelta, la de antes
   const op = piernas.at(-1) ?? null
   const antes = piernas.length > 1 ? piernas[0] : null
-  const n = op?.unidades?.length ?? 1
+  const vivas = op && !op.salida ? (op.unidades ?? []).filter(u => !u.salida) : []
+  const contratos = vivas.reduce((s, u) => s + u.tamano, 0)
+  const resultado = d.salida ? d.resultadoEur : (op ? cerrado + (abierto ?? 0) : null)
+  const siguiente = siguienteAnadidoSrs(d, maxUnidades)
+  const ultimo = d.eventos?.at(-1)
+
+  // sin empezar: una línea con cuándo abre y cuál será la vela del bracket
+  if (!d.velas?.length && !d.bracket && !op) {
+    const v = d.ventana ?? { minutosVela: 15, nBracket: 2 }
+    const desdeBracket = d.abre + (v.nBracket - 1) * v.minutosVela * 60
+    return (
+      <article className="bot-tarjeta bot-tarjeta-espera">
+        <div className="bot-tarjeta-titulo">
+          <strong>{nombre}</strong>
+          <span className={`bot-pill estado-${d.estado}`}>{ESTADOS[d.estado] ?? d.estado}</span>
+        </div>
+        <span className="bot-nota">abre a las {horaMinuto(d.abre)} · el bracket es la vela de {horaMinuto(desdeBracket)} a {horaMinuto(desdeBracket + v.minutosVela * 60)}</span>
+      </article>
+    )
+  }
+
   return (
-    <div className="bot-hoy">
-      <div className="bot-hoy-cab">
-        <strong>{nombre}</strong>
-        <span className="bot-nota">{d.fecha} · abre {fechaHora(d.abre)}</span>
-      </div>
-      <div className="estr-tiles">
-        <Tile label="Estado" valor={ESTADOS[d.estado] ?? d.estado} sub={d.recuperada ? 'recuperada de IG al arrancar' : ''} />
-        <Tile label="Bracket" valor={d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : '—'} sub={d.bracket ? `${precio(d.bracket.rango)} puntos` : ''} />
-        <Tile label="Plan" valor={plan ? `${plan.tamano} contratos` : '—'} sub={plan ? `${plan.valorPunto} ${plan.moneda}/punto · ${Math.round(plan.riesgoEur)} € de riesgo${plan.riesgoPct != null ? ` (${String(plan.riesgoPct).replace('.', ',')}% de ${Math.round(plan.saldo).toLocaleString('es-ES')} €)` : ''}` : ''} />
-        {antes && (
-          <Tile label="Primera pierna" valor={`${ladoTexto(antes.lado)} a ${precio(antes.entrada)}`}
-            sub={`salida ${precio(antes.salida?.nivel)} (${MOTIVOS[antes.salida?.motivo] ?? antes.salida?.motivo}) · ${pts(antes.resultadoPts)} · ${eur(antes.resultadoEur)}`} />
+    <article className="bot-tarjeta">
+      <header className="bot-tarjeta-cab">
+        <div className="bot-tarjeta-titulo">
+          <strong>{nombre}</strong>
+          <span className={`bot-pill estado-${d.estado}`}>{ESTADOS[d.estado] ?? d.estado}</span>
+          {op && <span className={`bot-pill ${op.lado}`}>{ladoTexto(op.lado)}</span>}
+          {d.recuperada && <span className="bot-pill">recuperada de IG</span>}
+        </div>
+        <div className="bot-tarjeta-resultado">
+          <span className={`bot-grande ${tono(resultado)}`}>{resultado == null ? '—' : eur(resultado)}</span>
+          <small>{d.salida ? `final · ${pts(d.resultadoPts)} puntos` : op ? 'abierto, con el último precio' : `abre ${fechaHora(d.abre)}`}</small>
+        </div>
+      </header>
+
+      <GraficoSesion velas={d.velas} abre={d.abre} cierra={d.cierra} minutos={d.ventana?.minutosVela ?? 15}
+        bracket={d.bracket} piernas={piernas} stop={op?.stop} be={op?.be} siguiente={siguiente} precio={d.precio} ahora={ahora} decimales={1} />
+
+      <div className="bot-tarjeta-datos">
+        {op && !op.salida && (
+          <div className="bot-dato"><span>Pirámide</span><Piramide n={op.unidades?.length ?? 1} max={maxUnidades} lado={op.lado} />
+            <small>{siguiente != null ? `la siguiente en ${precio(siguiente)}` : 'llena'}</small></div>
         )}
-        <Tile label={antes ? 'La vuelta' : 'Operación'} valor={op ? `${ladoTexto(op.lado)} a ${precio(op.entrada)}` : '—'}
-          sub={!op ? ''
-            : op.salida && !d.salida ? `salida ${precio(op.salida.nivel)} (${MOTIVOS[op.salida.motivo] ?? op.salida.motivo}) · ${pts(op.resultadoPts)}`
-            : `stop ${precio(op.stop)}${op.be ? ' (break even)' : ''} · deslizamiento ${pts(op.deslizamiento)}${n > 1 ? ` · ${n} posiciones` : ''}`} />
-        <Tile label="Resultado" valor={pts(d.resultadoPts)} tonoValor={tono(d.resultadoPts)}
-          sub={d.salida ? `${eur(d.resultadoEur)} · salida ${precio(d.salida.nivel)} (${MOTIVOS[d.salida.motivo] ?? d.salida.motivo})`
-            : d.estado === 'esperando-vuelta' ? 'esperando la vuelta' : op && !op.salida ? 'abierta' : ''} />
+        <div className="bot-dato"><span>Bracket</span><b>{d.bracket ? `${precio(d.bracket.rango)} puntos` : '—'}</b>
+          <small>{d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : 'esperando su vela'}</small></div>
+        <div className="bot-dato"><span>Riesgo</span><b>{plan ? `${Math.round(plan.riesgoEur)} €` : '—'}</b>
+          <small>{plan ? `${num(plan.tamano, 1)} contratos de ${plan.valorPunto} ${plan.moneda}/punto` : ''}</small></div>
+        {antes && (
+          <div className="bot-dato"><span>Primera pierna</span><b className={tono(antes.resultadoEur)}>{eur(antes.resultadoEur)}</b>
+            <small>{ladoTexto(antes.lado)} a {precio(antes.entrada)} · {MOTIVOS[antes.salida?.motivo] ?? antes.salida?.motivo}</small></div>
+        )}
+        {op && (
+          <div className="bot-dato"><span>{antes ? 'La vuelta' : 'Entrada'}</span><b>{precio(op.entrada)}</b>
+            <small>deslizamiento {pts(op.deslizamiento)}{vivas.length > 1 ? ` · ${num(contratos, 1)} contratos` : ''}</small></div>
+        )}
+        {op && !op.salida && (
+          <div className="bot-dato"><span>Stop{op.be ? ' (break even)' : ''}</span><b>{precio(op.stop)}</b>
+            <small className={tono(alStop)}>si salta: {eur(alStop)}</small></div>
+        )}
+        {d.salida && (
+          <div className="bot-dato"><span>Salida</span><b>{precio(d.salida.nivel)}</b><small>{MOTIVOS[d.salida.motivo] ?? d.salida.motivo}</small></div>
+        )}
       </div>
+
       {d.eventos?.length > 0 && (
-        <ul className="bot-eventos">
-          {[...d.eventos].reverse().map((e, i) => <li key={i}><span className="bot-hora">{hora(e.hora)}</span>{e.texto}</li>)}
-        </ul>
+        <details className="bot-registro">
+          <summary><span className="bot-hora">{hora(ultimo.hora)}</span>{ultimo.texto}<small> · registro ({d.eventos.length})</small></summary>
+          <ul className="bot-eventos">
+            {[...d.eventos].reverse().map((e, i) => <li key={i}><span className="bot-hora">{hora(e.hora)}</span>{e.texto}</li>)}
+          </ul>
+        </details>
       )}
-    </div>
+    </article>
   )
 }
 

@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import { peorHastaStops } from './tortugas'
+import { rupturaMasCercana, acumulado } from './botCalculos'
+import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
 
 // Pestaña Bot Tortugas: el bot de las tortugas que opera en la demo de IG
@@ -50,6 +52,7 @@ export default function BotTortugas() {
   const [clave, setClave] = useState('')
   const [form, setForm] = useState(null)
   const [ocupado, setOcupado] = useState(false)
+  const [orden, setOrden] = useState('grupo')   // 'grupo' o 'cercania' (a la ruptura más cercana)
 
   const cargar = useCallback(async () => {
     try {
@@ -124,6 +127,16 @@ export default function BotTortugas() {
     grupos: Object.values(mercados.filter(m => m.encendido).reduce((n, m) => ({ ...n, [m.grupo]: (n[m.grupo] ?? 0) + 1 }), {})),
     maxUnidades: config.maxUnidades, maxGrupo: config.maxGrupo, maxSentido: config.maxSentido, stopN: reglas.stopN, paso: reglas.pasoN,
   })
+  const peorPct = peor.n * config.riesgoPct
+  const alStopPct = saldo && abiertas.length ? (100 * -alStop) / saldo : 0
+
+  // La tabla, por grupos (con su cabecera) o de la ruptura más cercana a la más lejana
+  const cercania = m => rupturaMasCercana(m, config)?.n ?? Infinity
+  const bloques = orden === 'cercania'
+    ? [{ grupo: null, lista: [...mercados].sort((a, b) => cercania(a) - cercania(b)) }]
+    : grupos.map(g => ({ grupo: g, lista: mercados.filter(m => m.grupo === g) }))
+  const curva = acumulado([...operaciones].reverse().map(o => ({ etiqueta: `${o.cerrada} · ${nombre(o.ticker)}`, valor: o.resultadoEur ?? 0 })))
+  const maxEur = Math.max(0, ...operaciones.map(o => Math.abs(o.resultadoEur ?? 0)))
 
   return (
     <div className="bot-page">
@@ -144,48 +157,78 @@ export default function BotTortugas() {
       {error && <p className="bot-error">{error}</p>}
 
       <section className="bot-bloque">
-        <h3>Índices</h3>
+        <h3>Cartera</h3>
+        <div className="tor-medidores">
+          {sistemasCartera.map(s => {
+            const enGrupos = lados.flatMap(lado => grupos
+              .map(g => ({ g, lado, n: unidades(p => p.sistema === s && p.grupo === g && p.lado === lado) }))
+              .filter(x => x.n > 0))
+            return (
+              <Medidor key={s} etiqueta={`Sistema ${s} · unidades por sentido`}
+                filas={lados.map(lado => {
+                  const n = unidades(p => p.sistema === s && p.lado === lado)
+                  return { nombre: lado === 'largo' ? 'largas' : 'cortas', valor: n, max: config.maxSentido, texto: `${n} de ${config.maxSentido}` }
+                })}
+                sub={enGrupos.length ? enGrupos.map(x => `${x.g} ${x.n}/${config.maxGrupo}${lados.length > 1 ? ` ${x.lado === 'largo' ? 'L' : 'C'}` : ''}`).join(' · ') : `ninguna abierta · máximo ${config.maxGrupo} por grupo`} />
+            )
+          })}
+          <Medidor etiqueta="Si saltan los stops" valor={alStopPct} max={peorPct}
+            texto={abiertas.length ? `${eur(alStop)}${saldo ? ` · ${num(alStopPct, 1)}%` : ''}` : '—'}
+            sub={`lo peor con estos límites: −${num(peorPct, 1)}% del saldo${config.lados === 'ambos' ? ' por sentido' : ''}`} />
+          <Medidor etiqueta="Nominal abierto" valor={saldo ? nominal / saldo : 0} max={reglas.apalancamiento}
+            texto={`${num(nominal / 1000, 1)} mil €${saldo ? ` · ${num(nominal / saldo, 1)}×` : ''}`}
+            sub={`máximo ${reglas.apalancamiento} veces el saldo, entre los dos sistemas`} />
+        </div>
+        <div className="estr-tiles">
+          <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'}
+            sub={datos.picoSaldo ? `máximo ${num(datos.picoSaldo, 0)} €${config.reduccionDD ? ' · −20% de unidad por cada −10%' : ''}` : ''} />
+          <Tile label="Operaciones cerradas" valor={eur(operaciones.length ? totalEur : null)} tonoValor={tono(totalEur)}
+            sub={`${operaciones.length} ${operaciones.length === 1 ? 'operación' : 'operaciones'} (demo)`} />
+          <Tile label="Posiciones abiertas" valor={String(abiertas.length)}
+            sub={abiertas.length ? `${unidades(() => true)} unidades en ${new Set(abiertas.map(p => p.ticker)).size} mercados` : 'ninguna'} />
+        </div>
+      </section>
+
+      <section className="bot-bloque">
+        <div className="tor-cab-tabla">
+          <h3>Mercados</h3>
+          <div className="estrategias-nav tor-orden">
+            <button className={`estrategia-chip ${orden === 'grupo' ? 'activo' : ''}`} onClick={() => setOrden('grupo')}>Por grupo</button>
+            <button className={`estrategia-chip ${orden === 'cercania' ? 'activo' : ''}`} onClick={() => setOrden('cercania')}>Más cerca de romper</button>
+          </div>
+        </div>
         <div className="velas-tabla-wrap tor-tabla-wrap">
           <table className="velas-tabla bot-tabla tor-tabla tor-todas">
             <thead>
               <tr>
-                <th>Índice</th><th>Sesión</th><th className="tor-num">N</th><th className="tor-num">Precio</th><th>Unidad</th>
+                <th>Índice</th><th>Sesión</th><th className="tor-num">N</th><th className="tor-num">Precio</th><th>Canal</th><th>Unidad</th>
                 <th>Sistema</th><th>Entrada</th><th>Salida</th><th>Posición</th><th className="tor-num">Abierto</th>
               </tr>
             </thead>
-            {mercados.map(m => <FilasIndice key={m.ticker} m={m} config={config} ocupado={ocupado} reglas={reglas}
-              alternar={si => guardarConfig({ instrumentos: { [m.ticker]: si } })} />)}
+            {bloques.map(b => [
+              b.grupo && (
+                <tbody key={`g-${b.grupo}`} className="tor-grupo">
+                  <tr><td colSpan={11}>{b.grupo}</td></tr>
+                </tbody>
+              ),
+              ...b.lista.map(m => <FilasIndice key={m.ticker} m={m} config={config} ocupado={ocupado} reglas={reglas}
+                alternar={si => guardarConfig({ instrumentos: { [m.ticker]: si } })} />),
+            ])}
           </table>
         </div>
         <p className="bot-nota">
           Los niveles salen del diario de Yahoo de cada índice hasta la sesión anterior, como en el backtest; el precio es el de IG (el CFD de contado, que puede ir unos puntos separado del índice).
+          En «Canal», la pista es el canal de 55 sesiones y la parte clara el de 20; las rayas azules de arriba son las compras (la corta, S1; la larga, S2), las naranjas de abajo las ventas, el punto el precio y una raya roja el stop de una posición abierta. Debajo, lo que le falta al precio para la ruptura más cercana (o para su stop, con posición), en N.
           Cada sistema lleva su posición: un índice puede tener una de cada. Antes de abrir, el plan es provisional: al abrir se rehace con el saldo de ese momento.
           «Abierto» es lo que va ganando la posición; debajo, lo que dejaría si saltara el stop ahora.
         </p>
       </section>
 
       <section className="bot-bloque">
-        <h3>Cartera</h3>
-        <div className="estr-tiles">
-          {sistemasCartera.flatMap(s => lados.map(lado => (
-            <Tile key={`${s}-${lado}`} label={`Sistema ${s} · unidades ${lado === 'largo' ? 'largas' : 'cortas'}`}
-              valor={`${unidades(p => p.sistema === s && p.lado === lado)} de ${config.maxSentido}`}
-              sub={grupos.map(g => `${g} ${unidades(p => p.sistema === s && p.grupo === g && p.lado === lado)}/${config.maxGrupo}`).join(' · ')} />
-          )))}
-          <Tile label="Si saltan los stops" valor={abiertas.length ? eur(alStop) : '—'} tonoValor={tono(alStop)}
-            sub={`${saldo && abiertas.length ? `${num(100 * alStop / saldo, 1)}% del saldo · ` : ''}lo peor con estos límites: −${num(peor.n * config.riesgoPct, 1)}%${config.lados === 'ambos' ? ' por sentido' : ''}`} />
-          <Tile label="Nominal abierto" valor={`${num(nominal / 1000, 1)} mil €`}
-            sub={saldo ? `${num(nominal / saldo, 1)} veces el saldo (máximo ${reglas.apalancamiento}, entre los dos sistemas)` : ''} />
-          <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'}
-            sub={datos.picoSaldo ? `máximo ${num(datos.picoSaldo, 0)} €${config.reduccionDD ? ' · −20% de unidad por cada −10%' : ''}` : ''} />
-          <Tile label="Operaciones cerradas" valor={eur(operaciones.length ? totalEur : null)} tonoValor={tono(totalEur)}
-            sub={`${operaciones.length} ${operaciones.length === 1 ? 'operación' : 'operaciones'} (demo)`} />
-        </div>
-      </section>
-
-      <section className="bot-bloque">
         <h3>Operaciones cerradas</h3>
         {operaciones.length === 0 ? <p className="bot-nota">Todavía no ha cerrado ninguna.</p> : (
+          <>
+          <CurvaResultados puntos={curva} />
           <div className="velas-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-todas">
               <thead>
@@ -204,12 +247,13 @@ export default function BotTortugas() {
                     <td>{px(o.salida)}{o.aproximado ? ' (aprox.)' : ''}</td>
                     <td className="bot-celda-texto">{o.motivo}</td>
                     <td className={tono(o.resultadoN)}>{conSigno(o.resultadoN, 2)}</td>
-                    <td className={tono(o.resultadoEur)}>{eur(o.resultadoEur)}</td>
+                    <td className={`bot-celda-barra ${tono(o.resultadoEur)}`}><BarraResultado valor={o.resultadoEur} max={maxEur} />{eur(o.resultadoEur)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          </>
         )}
       </section>
 
@@ -299,6 +343,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
   const sistemas = reglas.sistemas.filter(s => config.sistemas.includes(s) || m.posiciones[s] || m.intentos[s])
   const filas = sistemas.length ? sistemas : [config.sistemas[0]]
   const n = filas.length
+  const cercana = hoy ? rupturaMasCercana(m, config) : null
   return (
     <tbody className={`tor-indice-grupo ${m.encendido ? '' : 'tor-apagado'}`}>
       {filas.map((s, i) => {
@@ -323,6 +368,14 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
               <td className="bot-celda-texto" rowSpan={n}>{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
               <td className="tor-num" rowSpan={n}>{hoy ? px(hoy.n) : '—'}</td>
               <td className="tor-num" rowSpan={n}>{px(m.precio)}</td>
+              <td rowSpan={n}>
+                {hoy ? <>
+                  <Canal plan={hoy} precio={m.precio} posiciones={m.posiciones} lados={config.lados} fmt={px} />
+                  {cercana && <small className={`tor-sub tor-cercana ${cercana.n <= 0.5 ? 'cerca' : ''}`}>
+                    {cercana.n <= 0 ? `en la ruptura ${cercana.texto.replace(/^de |^del /, '')}` : `a ${num(cercana.n, 1)} N ${cercana.texto}`}
+                  </small>}
+                </> : '—'}
+              </td>
               <td className="bot-celda-texto" rowSpan={n}>
                 {!plan ? '—'
                   : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
@@ -331,7 +384,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
               </td>
             </>}
             <td className="bot-celda-texto"><b>S{s}</b></td>
-            <td className="bot-celda-texto" title={sp ? `Canal de ${sp.k} sesiones${sp.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
+            <td className="bot-celda-texto tor-entrada" title={sp ? `Canal de ${sp.k} sesiones${sp.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
               {entrada}{sp && !pos && juega ? <small> ({sp.k}{sp.filtro ? ', filtro' : ''})</small> : null}
             </td>
             <td>{sp && pos ? <>{px(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></> : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>

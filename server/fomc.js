@@ -36,3 +36,62 @@ export const FOMC = [
 export const HORA_FOMC_NY = 14 * 60
 
 export const ANIOS_FOMC = [...new Set(FOMC.map(f => Number(f.slice(0, 4))))]
+
+// ── El calendario al día, con la página de la Reserva Federal ──
+// La lista de arriba se acaba; el servidor lee cada día la página del calendario
+// (server/calendario-fomc.js) y con lo que saca se arma el calendario que usa el bot de la
+// Rule of 4. Esto no toca el disco: lo carga también la pestaña Estrategias (por src/fomc.js).
+
+const MESES = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+  january: 1, february: 2, march: 3, april: 4, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+}
+const dos = n => String(n).padStart(2, '0')
+
+// Las reuniones ordinarias de la página https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm:
+// cada año va en un panel ("2027 FOMC Meetings") con una fila por reunión, el mes ("January",
+// o "Apr/May" si cruza de mes) y los días ("27-28", "17-18*" con proyecciones, "30-1").
+// El comunicado sale el último día. Fuera las votaciones por escrito ("22 (notation vote)") y
+// las reuniones no programadas, que no tienen comunicado a las 14:00.
+export function parsearCalendarioFed(html) {
+  const anios = [...html.matchAll(/(\d{4}) FOMC Meetings/g)].map(m => ({ en: m.index, anio: Number(m[1]) }))
+  const fechas = []
+  for (const m of html.matchAll(/fomc-meeting__month[^>]*>\s*<strong>([^<]+)<\/strong>[\s\S]*?fomc-meeting__date[^>]*>([^<]+)</g)) {
+    const anio = anios.filter(a => a.en < m.index).at(-1)?.anio
+    const textoDias = m[2].trim()
+    if (!anio || /notation|unscheduled|conference call/i.test(textoDias)) continue
+    const meses = m[1].trim().toLowerCase().split('/').map(x => MESES[x.trim()])
+    const dias = [...textoDias.matchAll(/\d+/g)].map(x => Number(x[0]))
+    if (!dias.length || meses.some(x => !x)) continue
+    // el último día es del último mes ("30-1" en "Apr/May" es el 1 de mayo)
+    const ultimo = dias.at(-1)
+    if (ultimo < 1 || ultimo > 31) continue
+    fechas.push(`${anio}-${dos(meses.at(-1))}-${dos(ultimo)}`)
+  }
+  return [...new Set(fechas)].sort()
+}
+
+// Un año de la página cuenta entero si trae al menos estas reuniones (son ocho al año): con
+// menos se sospecha que la página ha cambiado y se lee a medias, y no se le quita nada a la lista
+const REUNIONES_MIN_ANIO = 6
+
+// Lo de la página manda en los años que trae enteros (corrige una reunión movida); en los
+// demás, la lista de arriba. Lo que solo esté en una de las dos y en otro año, se suma.
+export function combinarCalendario(base, deLaFed) {
+  const porAnio = new Map()
+  for (const f of deLaFed) porAnio.set(f.slice(0, 4), [...(porAnio.get(f.slice(0, 4)) ?? []), f])
+  const enteros = new Set([...porAnio].filter(([, fs]) => fs.length >= REUNIONES_MIN_ANIO).map(([a]) => a))
+  return [...new Set([...base.filter(f => !enteros.has(f.slice(0, 4))), ...deLaFed])].sort()
+}
+
+let calendario = FOMC
+let diasDelCalendario = new Set(FOMC)
+
+// Las fechas leídas de la Reserva Federal (o [] para volver a la lista de arriba)
+export function usarCalendarioFed(fechas) {
+  calendario = combinarCalendario(FOMC, fechas ?? [])
+  diasDelCalendario = new Set(calendario)
+  return calendario
+}
+export const diasFomc = () => calendario
+export const esDiaFomc = fecha => diasDelCalendario.has(fecha)

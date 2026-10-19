@@ -43,7 +43,7 @@ import { offsetMadrid } from './velas-grafico.js'
 import { fechaEnZona, diaSemanaEnZona, instanteEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
-import { FOMC, HORA_FOMC_NY } from './fomc.js'
+import { HORA_FOMC_NY, diasFomc, esDiaFomc } from './fomc.js'
 
 // Apertura y cierre de cada sesión en la hora de su bolsa (minutos desde medianoche)
 export const SESIONES_BOT = {
@@ -137,22 +137,22 @@ export function proximaApertura(ticker, t) {
 // La sesión empieza con el comunicado, a las 14:00 de Nueva York (las 20:00 de Madrid casi
 // siempre; las 19:00 o las 21:00 las semanas en que los dos no han cambiado aún la hora), y
 // dura dos horas, hasta el cierre de Wall Street. Igual para todos los instrumentos: el DAX,
-// el FTSE y el Nikkei también cotizan a esa hora. La fecha es la de Nueva York.
-const DIAS_FOMC = new Set(FOMC)
+// el FTSE y el Nikkei también cotizan a esa hora. La fecha es la de Nueva York. El calendario
+// es el de server/fomc.js, que server/calendario-fomc.js tiene al día con la Reserva Federal.
 const ZONA_FOMC = 'America/New_York'
 const comunicado = fecha => instanteEnZona(fecha, HORA_FOMC_NY, ZONA_FOMC)
 
 export function sesionRuleOf4(ticker, t) {
   if (!SESIONES_BOT[ticker]) return null
   const fecha = fechaEnZona(t, ZONA_FOMC)
-  if (!DIAS_FOMC.has(fecha)) return null
+  if (!esDiaFomc(fecha)) return null
   const abre = comunicado(fecha)
   return conBracket(ticker, fecha, abre, abre + 120 * 60, 10, 4)
 }
 
-// El próximo comunicado a partir de `t`, o null si el calendario (server/fomc.js) se acaba
+// El próximo comunicado a partir de `t`, o null si el calendario se acaba
 export function proximaRuleOf4(ticker, t) {
-  for (const fecha of FOMC) {
+  for (const fecha of diasFomc()) {
     const abre = comunicado(fecha)
     if (abre > t) return abre
   }

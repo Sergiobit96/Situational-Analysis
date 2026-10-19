@@ -14,6 +14,7 @@ import { crearMt5, simbolosDeEnv } from './mt5.js'
 import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
 import { suscribir, resumenTiempoReal, escucharFuente } from './tiempo-real.js'
 import { crearBot, RULE_OF_4 } from './bot-srs.js'
+import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
@@ -2876,13 +2877,20 @@ app.post('/api/bot/ensayo', async (req, res) => {
 // bot, con su registro y sus referencias (R4-…), que opera donde opera el SRS (BOT_OPERA=1),
 // avisa por el mismo Telegram y va bajo /api/bot, con la misma clave. Nace apagado.
 const BOT_RULE4_PATH = process.env.BOT_RULE4 || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-rule-of-4.json' : 'Bot Rule of 4.json')
+// Su calendario, al día con la Reserva Federal (server/calendario-fomc.js): se lee al arrancar y
+// cada día, y se guarda junto al registro en producción (en local, en la caché)
+const calendarioFomc = crearCalendarioFomc({
+  archivo: process.env.NODE_ENV === 'production' ? join(dirname(BOT_PATH), 'fomc-calendario.json') : join(DISK_CACHE_DIR, 'fomc-calendario.json'),
+  avisar: BOT_OPERA ? telegram.enviar : undefined,
+})
+calendarioFomc.iniciar()
 const botRule4 = bot ? crearBot({ ig, archivo: BOT_RULE4_PATH, estrategia: RULE_OF_4, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botRule4 && BOT_OPERA) botRule4.arrancar()
 if (botRule4) console.log(`[rule of 4] registro en ${BOT_RULE4_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
 app.get('/api/bot/rule-of-4', (req, res) => {
   if (!botRule4) return sinBot(res)
-  res.json({ archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botRule4.estado() })
+  res.json({ archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, calendario: calendarioFomc.estado(), ...botRule4.estado() })
 })
 
 app.put('/api/bot/rule-of-4/config', (req, res) => {

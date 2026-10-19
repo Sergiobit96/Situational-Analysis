@@ -244,6 +244,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
         <h3>El día</h3>
         <LineaDelDia filas={filasDia} ahora={ahora} />
         <p className="bot-nota">{notaDia}</p>
+        {datos.calendario && <CalendarioFomc c={datos.calendario} />}
       </section>
 
       <section className="bot-bloque">
@@ -491,6 +492,22 @@ function SesionHoy({ cuentas, nombre, maxUnidades, ahora }) {
         </details>
       )}
     </article>
+  )
+}
+
+// Hasta dónde llega el calendario del FOMC del bot de la Rule of 4, que el servidor pone al día
+// cada día con la página de la Reserva Federal
+function CalendarioFomc({ c }) {
+  const dia = f => new Date(`${f}T12:00:00Z`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })
+  return (
+    <p className="bot-nota">
+      Calendario del FOMC: {c.quedan} {c.quedan === 1 ? 'reunión' : 'reuniones'} por delante, hasta el {c.hasta ? dia(c.hasta) : '—'}
+      {c.proximas?.length ? ` (las próximas: ${c.proximas.map(dia).join(', ')})` : ''}.{' '}
+      {c.actualizado
+        ? `Leído de la Reserva Federal el ${new Date(c.actualizado).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}; se vuelve a leer cada día.`
+        : 'Aún sin leer de la Reserva Federal: vale la lista que trae el servidor.'}
+      {c.error && <span className="bot-error"> Último intento: {c.error}</span>}
+    </p>
   )
 }
 

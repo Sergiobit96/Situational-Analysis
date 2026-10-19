@@ -196,3 +196,61 @@ test('lo peor hasta los stops con dos pirámides por índice, una por sistema', 
   assert.deepEqual(peorHastaStops({ grupos: [1], maxUnidades: 6, maxGrupo: 2, maxSentido: 2, sistemas: 2 }), { n: 4, unidades: 2 })
   assert.deepEqual(peorHastaStops({ grupos: [1], maxUnidades: 6, maxGrupo: 2, maxSentido: 2 }), { n: 3.5, unidades: 2 })
 })
+
+// ── Acciones ──
+
+// la misma ruptura en una acción: comisión por acción con mínimo por orden, acciones enteras
+const ACCION = { ...INFO, comision: { porAccion: 0.02, minimo: 15 }, lote: 1 }
+const RUPTURA_Y_STOP = () => conFechas([...base(), RUPTURA, vela(103, 103.5, 99, 99.5)])
+
+test('acciones: cada unidad paga su comisión al entrar y al salir, con 15 $ como mínimo por orden', () => {
+  const op = backtestTortugas([prepararMercado(ACCION, RUPTURA_Y_STOP())], SIN_TIPO, LIMPIO).operaciones[0]
+  // 100 acciones por unidad: 2 $ por orden, así que manda el mínimo; 4 entradas y 4 salidas
+  assert.equal(op.comision, 8 * 15)
+  assert.equal(op.neto, -1000 - 120)
+  assert.equal(op.acciones, 400)
+  // con 2.000 acciones por unidad pasa del mínimo: 40 $ por orden
+  const grande = backtestTortugas([prepararMercado(ACCION, RUPTURA_Y_STOP())], SIN_TIPO, { ...LIMPIO, capital: 2_000_000 }).operaciones[0]
+  assert.equal(grande.comision, 8 * 40)
+  const sin = backtestTortugas([prepararMercado(ACCION, RUPTURA_Y_STOP())], SIN_TIPO, { ...LIMPIO, comisiones: false }).operaciones[0]
+  assert.equal(sin.comision, 0)
+  assert.equal(sin.neto, -1000)
+})
+
+test('acciones: la unidad va en acciones enteras de las de entonces (la serie está ajustada por splits)', () => {
+  // un split de 4 por 1 después: cada acción de entonces son 4 de la serie
+  const velas = RUPTURA_Y_STOP().map(v => ({ ...v, f: 4 }))
+  const info = { ...ACCION, comision: { porAccion: 1, minimo: 0 } }
+  // 0,2 % de 101.000 / 2 = 101 de la serie: 25 de entonces, que son 100 de la serie
+  const op = backtestTortugas([prepararMercado(info, velas)], SIN_TIPO, { ...LIMPIO, capital: 101_000 }).operaciones[0]
+  assert.deepEqual(op.tamanos, [100, 100, 100, 100])
+  assert.equal(op.acciones, 100)
+  assert.equal(op.comision, 8 * 25)                  // 1 $ por cada acción de entonces
+  // si no llega a una acción entera, no entra
+  const poco = backtestTortugas([prepararMercado(info, velas)], SIN_TIPO, { ...LIMPIO, capital: 3_000 })
+  assert.equal(poco.operaciones.length + poco.abiertas.length, 0)
+})
+
+test('acciones: con «solo desde que entró en el índice» no abre antes de esa fecha', () => {
+  const velas = RUPTURA_Y_STOP()
+  const info = { ...ACCION, alta: velas[71].date }   // entra en el índice el día después de la ruptura
+  assert.equal(backtestTortugas([prepararMercado(info, velas)], SIN_TIPO, LIMPIO).operaciones.length, 0)
+  assert.equal(backtestTortugas([prepararMercado(info, velas)], SIN_TIPO, { ...LIMPIO, soloEnIndice: false }).operaciones.length, 1)
+})
+
+test('acciones: el largo cobra el dividendo el día que la acción cotiza sin él', () => {
+  const velas = RUPTURA_Y_STOP()
+  velas[71] = { ...velas[71], div: 0.5 }
+  // con el tipo y el recargo a 0, la financiación es solo el dividendo: 400 acciones × 0,5
+  const op = backtestTortugas([prepararMercado({ ...ACCION, comision: undefined }, velas)], SIN_TIPO, { ...LIMPIO, financiacion: true, recargo: 0 }).operaciones[0]
+  assert.equal(op.financiacion, -200)
+  assert.equal(op.neto, -800)
+})
+
+test('prepararMercado: el dividendo de una vela sin rango pasa a la siguiente', () => {
+  const velas = conFechas([...base(), { ...vela(100, 100, 100, 100), div: 1 }, vela(100, 101, 99, 100)])
+  const m = prepararMercado(INFO, velas)
+  assert.equal(m.fechas.length, 71)
+  assert.equal(m.div[70], 1)
+  assert.equal(prepararMercado(INFO, conFechas(base())).div, null)
+})

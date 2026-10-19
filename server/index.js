@@ -22,6 +22,8 @@ import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
 import { crearTelegram } from './telegram.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
+import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
+import { gzipSync } from 'zlib'
 import Anthropic from '@anthropic-ai/sdk'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
 import { join, dirname, relative, resolve, sep, basename, extname } from 'path'
@@ -2711,6 +2713,39 @@ async function obtenerRangoYahoo(simbolo, intervalo, desde, hasta) {
   toCache(clave, velas)
   return velas
 }
+
+// ── Tortugas en acciones de EE. UU.: el diario del S&P 500 (ver server/acciones-eeuu.js) ──
+// La pestaña Estrategias pide el universo y después las series por tandas de 40, para ir
+// enseñando cuántas lleva. En producción se guardan en el volumen. Van comprimidas: el S&P 500
+// entero, cada una desde un año antes de entrar en el índice, son 15 MB así (medido el
+// 19-oct-2026; con su historia entera desde 1990, unos 25) y cuatro veces más sin comprimir.
+const accionesEeuu = crearAccionesEeuu({
+  dir: process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/acciones-eeuu' : join(DISK_CACHE_DIR, 'acciones-eeuu'),
+  pedirYahoo: async url => {
+    const auth = await getYFAuth()
+    const resp = await fetch(`${url}${auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''}`, { headers: auth ? { ...YF_HEADERS, Cookie: auth.cookie } : YF_HEADERS })
+    if (!resp.ok) throw new Error(`Yahoo: HTTP ${resp.status}`)
+    return resp.json()
+  },
+})
+
+app.get('/api/tortugas/acciones/universo', (req, res) => res.json(accionesEeuu.universo()))
+
+app.get('/api/tortugas/acciones', async (req, res) => {
+  const tickers = String(req.query.tickers ?? '').split(',').map(t => t.trim()).filter(Boolean)
+  const desde = String(req.query.desde ?? '1990-01-01')
+  if (!tickers.length || tickers.length > MAX_ACCIONES_PETICION) return res.status(400).json({ error: `Entre 1 y ${MAX_ACCIONES_PETICION} tickers` })
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) return res.status(400).json({ error: 'desde: YYYY-MM-DD' })
+  try {
+    const datos = await accionesEeuu.series(tickers, { desde, soloAlta: req.query.alta === '1' })
+    const cuerpo = Buffer.from(JSON.stringify(datos))
+    res.set('Content-Type', 'application/json; charset=utf-8')
+    if (!/\bgzip\b/.test(req.get('Accept-Encoding') ?? '')) return res.send(cuerpo)
+    res.set({ 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' }).send(gzipSync(cuerpo))
+  } catch (err) {
+    res.status(400).json({ error: err.message })
+  }
+})
 
 // ── IG: precios en tiempo real (ver server/ig.js) ──
 // Arranca solo si están las credenciales en server/.env; sin ellas la fuente "IG" del

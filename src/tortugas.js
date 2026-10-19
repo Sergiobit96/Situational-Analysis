@@ -24,6 +24,15 @@
 // defecto, solo largos y un riesgo de 0,2 % por unidad. Dentro de la vela se supone el camino
 // apertura → mínimo → máximo → cierre si cierra por encima de la apertura, y apertura →
 // máximo → mínimo → cierre si no.
+//
+// Acciones de EE. UU. (el S&P 500, cada sector un grupo): lo que el mercado trae en su `info`
+// las adapta. `comision` es la de IG en CFD de acciones americanas (2 centavos por acción y
+// 15 $ como mínimo en cada orden; cada unidad es una orden al entrar y otra al salir), `lote`
+// redondea la unidad a acciones enteras (sin acciones no entra) y `alta`, la fecha en que entró
+// en el índice: con `soloEnIndice` no se abre nada antes. Los dividendos van en `div` de cada
+// vela, el día que cotiza sin él: el largo lo cobra y el corto lo paga, con la financiación.
+// Como los precios de Yahoo están ajustados por los splits, `f` en cada vela dice cuántas
+// acciones de la serie eran una de entonces: la comisión y las acciones enteras se cuentan así.
 
 // En el orden en que abren en el día: así, el mismo día, Asia se procesa antes que Europa.
 // `desde` es el primer día con máximos y mínimos de verdad en Yahoo; `spread`, el del CFD en
@@ -59,6 +68,8 @@ export const CONFIG_TORTUGAS = {
   financiacion: true,   // false = sin coste por noche, como un futuro sin base
   media: 0,            // solo a favor de la media de tantas sesiones (0 = sin filtro)
   reduccionDD: true,
+  soloEnIndice: true,   // acciones: no abrir antes de la fecha en que entró en el índice (`alta`)
+  comisiones: true,     // acciones: la comisión de cada orden (`comision` del mercado)
   apalancamiento: 10,   // nominal total máximo / capital (0 = sin tope)
   capital: 100_000,
   desde: '1990-01-01',
@@ -91,9 +102,12 @@ function wilder(x, k) {
   return n
 }
 
-// Extremo de las k sesiones anteriores a cada una (sin contarla): lo que se conoce al abrir
-function extremoPrevio(x, k, f) {
-  const r = new Array(x.length).fill(NaN)
+// Extremo de las k sesiones anteriores a cada una (sin contarla): lo que se conoce al abrir.
+// `vacia(n)` da el array del resultado (uno normal o, para ahorrar memoria, un Float32Array)
+const vaciaNormal = n => new Array(n).fill(NaN)
+const vacia32 = n => new Float32Array(n).fill(NaN)
+function extremoPrevio(x, k, f, vacia = vaciaNormal) {
+  const r = vacia(x.length)
   for (let i = k; i < x.length; i++) {
     let e = x[i - k]
     for (let j = i - k + 1; j < i; j++) e = f(e, x[j])
@@ -114,20 +128,55 @@ function mediaPrevia(x, k) {
 }
 
 // Serie de un índice con los niveles que se conocen al empezar cada sesión. `velas` va en
-// orden, con `date` (YYYY-MM-DD) y OHLC; se quitan las de antes de `info.desde` y las que no
-// tienen rango (Yahoo trae años enteros con máximo = mínimo).
-export function prepararMercado(info, velas) {
-  const vs = velas.filter(v => v.date >= info.desde && v.high > v.low)
-  const o = vs.map(v => v.open), h = vs.map(v => v.high), l = vs.map(v => v.low), c = vs.map(v => v.close)
-  const tr = vs.map((v, i) => i === 0 ? v.high - v.low
-    : Math.max(v.high - v.low, Math.abs(v.high - c[i - 1]), Math.abs(v.low - c[i - 1])))
-  const nCierre = wilder(tr, 20)
+// orden, con `date` (YYYY-MM-DD) y OHLC (y, en las acciones, `div`, el dividendo, y `f`, las
+// acciones de la serie que eran una de entonces); se quitan las de antes de `info.desde` y las
+// que no tienen rango (Yahoo trae años enteros con máximo = mínimo). El dividendo de una vela
+// quitada pasa a la siguiente.
+export function prepararMercado(info, velas, opciones) {
+  return prepararColumnas(info, {
+    fechas: velas.map(v => v.date), o: velas.map(v => v.open), h: velas.map(v => v.high), l: velas.map(v => v.low), c: velas.map(v => v.close),
+    div: velas.some(v => v.div) ? velas.map(v => v.div ?? 0) : null,
+    f: velas.some(v => v.f) ? velas.map(v => v.f ?? 1) : null,
+  }, opciones)
+}
+
+// Lo mismo con las velas en columnas ({ fechas, o, h, l, c, div?, f? }; `div` puede ser un
+// objeto con solo los días que hay). Con `compacto`, las series van en Float32Array: la mitad
+// de memoria, para las acciones, que son millones de velas (los precios pierden decimales más
+// allá de la séptima cifra, que no cambian nada).
+export function prepararColumnas(info, cols, { compacto = false } = {}) {
+  const idx = []
+  for (let i = 0; i < cols.fechas.length; i++) if (cols.fechas[i] >= info.desde && cols.h[i] > cols.l[i]) idx.push(i)
+  const serie = x => (compacto ? Float32Array.from(idx, i => x[i]) : idx.map(i => x[i]))
+  const o = serie(cols.o), h = serie(cols.h), l = serie(cols.l), c = serie(cols.c)
+  const tr = idx.map((_, i) => i === 0 ? h[i] - l[i]
+    : Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1])))
+  const nW = wilder(tr, 20)
+  const nCierre = compacto ? Float32Array.from(nW) : nW
+  const n = compacto ? Float32Array.from(nW, (_, i) => (i ? nW[i - 1] : NaN)) : [NaN, ...nW.slice(0, -1)]
+  const vacia = compacto ? vacia32 : vaciaNormal
   const medias = new Map()
+  // el dividendo, solo en los días que lo hay
+  let div = null
+  if (cols.div) {
+    div = {}
+    let pendiente = 0, k = 0
+    for (let i = 0; i < cols.fechas.length; i++) {
+      if (cols.fechas[i] < info.desde) continue
+      pendiente += cols.div[i] ?? 0
+      if (cols.h[i] > cols.l[i]) {
+        if (pendiente) div[k] = pendiente
+        pendiente = 0
+        k++
+      }
+    }
+  }
   return {
-    info, fechas: vs.map(v => v.date), o, h, l, c, nCierre,
-    n: [NaN, ...nCierre.slice(0, -1)],
-    alto: Object.fromEntries([10, 20, 55].map(k => [k, extremoPrevio(h, k, Math.max)])),
-    bajo: Object.fromEntries([10, 20, 55].map(k => [k, extremoPrevio(l, k, Math.min)])),
+    info, fechas: idx.map(i => cols.fechas[i]), o, h, l, c, nCierre, n, div,
+    // acciones de la serie por acción de verdad (los splits posteriores; ver src/accionesEeuu.js)
+    factor: cols.f ? Float32Array.from(idx, i => cols.f[i]) : null,
+    alto: Object.fromEntries([10, 20, 55].map(k => [k, extremoPrevio(h, k, Math.max, vacia)])),
+    bajo: Object.fromEntries([10, 20, 55].map(k => [k, extremoPrevio(l, k, Math.min, vacia)])),
     media(k) {
       if (!medias.has(k)) medias.set(k, mediaPrevia(c, k))
       return medias.get(k)
@@ -157,7 +206,9 @@ function bisectIzq(arr, x) {
 export function backtestTortugas(mercados, tipos, parcial = {}) {
   const cfg = { ...CONFIG_TORTUGAS, ...parcial }
   const hasta = cfg.hasta || '9999-12-31'
-  const fechas = [...new Set(mercados.flatMap(m => m.fechas.filter(f => f >= cfg.desde && f <= hasta)))].sort()
+  const todas = new Set()
+  for (const m of mercados) for (const f of m.fechas) if (f >= cfg.desde && f <= hasta) todas.add(f)
+  const fechas = [...todas].sort()
   const fechasTipo = tipos?.length ? tipos.map(t => t.date) : null
   const fechasSet = new Set(fechas)
   // el tipo del último día con dato hasta esa fecha
@@ -168,15 +219,40 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   }
   const arranque = Math.max(60, cfg.media + 1)
 
-  const est = mercados.map(m => {
+  const est = mercados.map((m, k) => {
     const ptr = bisectIzq(m.fechas, cfg.desde)
-    return { m, ptr, pos: { 1: null, 2: null }, virtual: null, gano: false, ultimo: ptr > 0 ? m.c[ptr - 1] : NaN, i: -1 }
+    return { m, k, ptr, pos: { 1: null, 2: null }, virtual: null, gano: false, ultimo: ptr > 0 ? m.c[ptr - 1] : NaN, i: -1 }
   })
   let efectivo = cfg.capital, valorAyer = cfg.capital, pico = cfg.capital, nominal = cfg.capital
   const operaciones = [], curva = [], exposicion = []
 
-  const valor = () => efectivo + est.reduce((s, e) => s + abiertasDe(e).reduce((t, p) => t + resultadoDe(p, e.ultimo), 0), 0)
-  const tamano = e => cfg.riesgo * nominal / e.m.n[e.i]
+  // Los mercados con alguna posición abierta, en el orden de `est`. Las cuentas de la cartera
+  // (valor, límites, nominal) solo recorren estos: con cientos de acciones, recorrerlos todos
+  // en cada orden era lo que más tardaba. Como van en el mismo orden y los demás sumaban 0,
+  // dan lo mismo al céntimo.
+  const abiertos = []
+  const marcar = e => {
+    const dentro = abiertasDe(e).length > 0
+    const k = abiertos.indexOf(e)
+    if (dentro && k < 0) {
+      let j = 0
+      while (j < abiertos.length && abiertos[j].k < e.k) j++
+      abiertos.splice(j, 0, e)
+    } else if (!dentro && k >= 0) abiertos.splice(k, 1)
+  }
+
+  const valor = () => efectivo + abiertos.reduce((s, e) => s + abiertasDe(e).reduce((t, p) => t + resultadoDe(p, e.ultimo), 0), 0)
+  // En acciones (`lote`), la unidad se redondea hacia abajo a acciones enteras de las de ese
+  // día (`factor`: las de la serie, ajustada por splits, que hacían una)
+  const tamano = e => {
+    const t = cfg.riesgo * nominal / e.m.n[e.i]
+    const lote = e.m.info.lote && e.m.info.lote * (e.m.factor?.[e.i] ?? 1)
+    return lote ? Math.floor(t / lote + 1e-9) * lote : t
+  }
+  // La comisión de una orden de `tam` el día i: un tanto por acción (de las de ese día) con un
+  // mínimo por orden
+  const comisionDe = (m, tam, i) => (cfg.comisiones && m.info.comision
+    ? Math.max(m.info.comision.porAccion * tam / (m.factor?.[i] ?? 1), m.info.comision.minimo) : 0)
 
   const fijarCapital = () => {
     const v = valorAyer
@@ -188,6 +264,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
 
   const permite = (e, lado) => {
     if (cfg.lados !== 'ambos' && (cfg.lados === 'largos') !== (lado > 0)) return false
+    if (cfg.soloEnIndice && e.m.info.alta && e.m.fechas[e.i] < e.m.info.alta) return false
     if (cfg.media) {
       const media = e.m.media(cfg.media)[e.i], pc = e.m.c[e.i - 1]
       return lado > 0 ? pc > media : pc < media
@@ -196,9 +273,9 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   }
 
   const cabe = (e, lado) => {
-    if (nominal <= 0) return false
+    if (nominal <= 0 || !(tamano(e) > 0)) return false
     let grupo = 0, total = 0
-    for (const x of est) {
+    for (const x of abiertos) {
       for (const p of abiertasDe(x)) {
         if (p.lado !== lado) continue
         total += p.unidades.length
@@ -208,7 +285,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     if (grupo >= cfg.maxGrupo || total >= cfg.maxSentido) return false
     if (cfg.apalancamiento) {
       let nom = 0
-      for (const x of est) for (const p of abiertasDe(x)) nom += tamDe(p) * x.ultimo
+      for (const x of abiertos) for (const p of abiertasDe(x)) nom += tamDe(p) * x.ultimo
       nom += tamano(e) * e.m.c[e.i - 1]
       if (nom > cfg.apalancamiento * valorAyer) return false
     }
@@ -216,7 +293,10 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   }
 
   // Órdenes stop vivas en esa dirección: [nivel, prioridad, acción]. La cartera real va antes
-  // que la ruptura virtual, para que el filtro mire la ruptura anterior y no esta.
+  // que la ruptura virtual, para que el filtro mire la ruptura anterior y no esta. Las que
+  // suman unidades (`limitada`) solo valen si caben en la cartera, pero eso se mira en recorrer
+  // y solo si el precio llega a su nivel: con cientos de acciones, mirarlo en todas era lo que
+  // más tardaba, y como no se ejecuta nada entre una cosa y otra, da lo mismo.
   const ordenes = (e, sube) => {
     const { m, i } = e
     const lado = sube ? 1 : -1
@@ -232,10 +312,10 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
       const p = e.pos[s]
       if (!p) {
         const k = entradaDe(cfg, e, s)
-        if (k && permite(e, lado) && cabe(e, lado)) res.push([canal[k][i], 0, { tipo: 'entra', sis: s, lado, k }])
+        if (k && permite(e, lado)) res.push([canal[k][i], 0, { tipo: 'entra', sis: s, lado, k, limitada: true }])
       } else if (p.lado === lado) {
-        if (p.unidades.length < cfg.maxUnidades && cabe(e, lado)) {
-          res.push([p.unidades.at(-1).ref + lado * cfg.paso * p.n0, 0, { tipo: 'anade', sis: s }])
+        if (p.unidades.length < cfg.maxUnidades) {
+          res.push([p.unidades.at(-1).ref + lado * cfg.paso * p.n0, 0, { tipo: 'anade', sis: s, limitada: true }])
         }
       } else {
         const k = s === 1 ? 10 : 20
@@ -247,13 +327,15 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   }
 
   const apunte = (e, p, fecha, salida, motivo, bruto) => {
-    const neto = bruto - p.financiacion
+    const neto = bruto - p.financiacion - p.comision
     return {
       indice: e.m.info.id, sistema: p.sis, lado: p.lado > 0 ? 'largo' : 'corto', ruptura: p.ruptura,
       entrada: p.abierta, salida: fecha, dias: fecha ? noches(p.abierta, fecha) : null,
       n: p.n0, unidades: p.unidades.length, tamano: tamDe(p), nominal: tamDe(p) * precioMedio(p),
       tamanos: p.unidades.map(u => u.tam), precioEntrada: precioMedio(p), precioSalida: salida, motivo,
-      bruto, financiacion: p.financiacion, neto, pctCapital: 100 * neto / p.capital,
+      bruto, financiacion: p.financiacion, comision: p.comision, neto, pctCapital: 100 * neto / p.capital,
+      // en acciones, cuántas eran de las de entonces (la serie está ajustada por los splits)
+      ...(e.m.info.lote ? { acciones: p.unidades.reduce((s, u) => s + u.tam / (u.f ?? 1), 0) } : {}),
     }
   }
 
@@ -271,19 +353,28 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     }
     const coste = m.info.spread * precio / 2 + cfg.deslizN * n
     if (accion.tipo === 'entra') {
-      e.pos[accion.sis] = { sis: accion.sis, lado: accion.lado, n0: n, abierta: fecha, capital: valorAyer, ruptura: accion.k, stop: NaN, unidades: [], financiacion: 0 }
+      e.pos[accion.sis] = { sis: accion.sis, lado: accion.lado, n0: n, abierta: fecha, capital: valorAyer, ruptura: accion.k, stop: NaN, unidades: [], financiacion: 0, comision: 0 }
+      marcar(e)
     }
     const p = e.pos[accion.sis]
     if (accion.tipo === 'entra' || accion.tipo === 'anade') {
-      p.unidades.push({ fecha, ref: precio, precio: precio + p.lado * coste, tam: tamano(e) })
+      const tam = tamano(e)
+      p.unidades.push({ fecha, ref: precio, precio: precio + p.lado * coste, tam, ...(m.factor ? { f: m.factor[e.i] } : {}) })
       p.stop = precio - p.lado * cfg.stopN * p.n0
+      const comision = comisionDe(m, tam, e.i)
+      efectivo -= comision
+      p.comision += comision
       return
     }
     const salida = precio - p.lado * coste
     const bruto = resultadoDe(p, salida)
-    efectivo += bruto
+    // cada unidad es una posición en IG y se cierra con su propia orden
+    const comision = p.unidades.reduce((s, u) => s + comisionDe(m, u.tam, e.i), 0)
+    efectivo += bruto - comision
+    p.comision += comision
     operaciones.push(apunte(e, p, fecha, salida, accion.motivo, bruto))
     e.pos[accion.sis] = null
+    marcar(e)
   }
 
   // Lleva el precio de a a b y ejecuta, de la más cercana a la más lejana, las órdenes que
@@ -293,8 +384,10 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const sube = b > a
     for (let vuelta = 0; vuelta < 20; vuelta++) {
       let mejor = null
+      let cabeAqui = null
       for (const [nivel, prioridad, accion] of ordenes(e, sube)) {
         if (Number.isNaN(nivel) || (sube && nivel > b) || (!sube && nivel < b)) continue
+        if (accion.limitada && !(cabeAqui ??= cabe(e, sube ? 1 : -1))) continue
         const dist = Math.max(sube ? nivel - a : a - nivel, 0)
         if (!mejor || dist < mejor.dist || (dist === mejor.dist && prioridad < mejor.prioridad)) {
           mejor = { dist, prioridad, nivel, accion }
@@ -316,6 +409,12 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
       const coste = tamDe(p) * m.c[i - 1] * tasa * noches(m.fechas[i - 1], m.fechas[i]) / 365
       efectivo -= coste
       p.financiacion += coste
+      // el día que cotiza sin el dividendo: el largo lo cobra y el corto lo paga
+      if (m.div?.[i]) {
+        const dividendo = p.lado * tamDe(p) * m.div[i]
+        efectivo += dividendo
+        p.financiacion -= dividendo
+      }
     }
   }
 
@@ -340,7 +439,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const v = valor()
     curva.push({ date: f, valor: v })
     let nom = 0
-    for (const e of est) for (const p of abiertasDe(e)) nom += tamDe(p) * e.ultimo
+    for (const e of abiertos) for (const p of abiertasDe(e)) nom += tamDe(p) * e.ultimo
     exposicion.push(nom / Math.max(v, 1e-9))
     valorAyer = v
   }
@@ -359,6 +458,10 @@ export function metricasTortugas(res) {
   if (eq.length < 2) return null
   const anios = noches(res.curva[0].date, res.curva.at(-1).date) / 365.25
   const cagr = eq.at(-1) > 0 ? (eq.at(-1) / eq[0]) ** (1 / anios) - 1 : -1
+  // el día que la cuenta se queda a cero (con las comisiones de las acciones puede pasar): desde
+  // ahí ya no abre nada, y el apalancamiento solo se mide mientras queda algo
+  const k0 = eq.findIndex(v => v <= 0)
+  const exposicion = k0 < 0 ? res.exposicion : res.exposicion.slice(0, k0)
   let pico = -Infinity, maxDD = 0, racha = 0, peorRacha = 0, desde = null, peor = null
   eq.forEach((v, k) => {
     if (v > pico) { pico = v; desde = res.curva[k].date }
@@ -388,8 +491,11 @@ export function metricasTortugas(res) {
     diasMedios: media(ops.map(o => o.dias)),
     financiacion: suma(ops.map(o => o.financiacion)),
     financiacionPct: brutoPositivo > 0 ? 100 * suma(ops.map(o => o.financiacion)) / brutoPositivo : NaN,
-    apalancamientoMedio: media(res.exposicion),
-    apalancamientoMax: Math.max(...res.exposicion),
+    comisiones: suma(ops.map(o => o.comision ?? 0)),
+    comisionesPct: brutoPositivo > 0 ? 100 * suma(ops.map(o => o.comision ?? 0)) / brutoPositivo : NaN,
+    apalancamientoMedio: media(exposicion),
+    apalancamientoMax: exposicion.reduce((a, x) => Math.max(a, x), -Infinity),
+    quiebra: k0 < 0 ? null : res.curva[k0].date,
   }
 }
 
@@ -415,17 +521,23 @@ export function rentabilidadAnual(res) {
 
 export function resumenPorIndice(res) {
   const ini = res.curva[0]?.date, fin = res.curva.at(-1)?.date
+  const porIndice = new Map()
+  for (const x of res.operaciones) {
+    if (!porIndice.has(x.indice)) porIndice.set(x.indice, [])
+    porIndice.get(x.indice).push(x)
+  }
   return res.estados.map(({ m }) => {
-    const o = res.operaciones.filter(x => x.indice === m.info.id)
+    const o = porIndice.get(m.info.id) ?? []
     const netoDe = xs => suma(xs.map(x => x.neto))
-    const cs = m.c.filter((_, k) => m.fechas[k] >= ini && m.fechas[k] <= fin)
-    const fs = m.fechas.filter(f => f >= ini && f <= fin)
+    // las sesiones del periodo son un tramo seguido de la serie
+    const a = bisectIzq(m.fechas, ini), b = bisectIzq(m.fechas, fin + '\uffff')
     let pico = -Infinity, dd = 0
-    for (const v of cs) { pico = Math.max(pico, v); dd = Math.min(dd, v / pico - 1) }
-    const anios = fs.length > 1 ? noches(fs[0], fs.at(-1)) / 365.25 : NaN
+    for (let k = a; k < b; k++) { pico = Math.max(pico, m.c[k]); dd = Math.min(dd, m.c[k] / pico - 1) }
+    const anios = b - a > 1 ? noches(m.fechas[a], m.fechas[b - 1]) / 365.25 : NaN
     return {
-      indice: m.info.id, nombre: m.info.nombre, desde: fs[0] ?? null,
+      indice: m.info.id, nombre: m.info.nombre, grupo: m.info.grupo, desde: b > a ? m.fechas[a] : null,
       operaciones: o.length,
+      ganan: o.filter(x => x.neto > 0).length,
       acierto: o.length ? 100 * o.filter(x => x.neto > 0).length / o.length : NaN,
       neto: netoDe(o),
       largos: netoDe(o.filter(x => x.lado === 'largo')),
@@ -433,10 +545,25 @@ export function resumenPorIndice(res) {
       s1: netoDe(o.filter(x => x.sistema === 1)),
       s2: netoDe(o.filter(x => x.sistema === 2)),
       financiacion: suma(o.map(x => x.financiacion)),
-      compraCagr: cs.length > 1 ? 100 * ((cs.at(-1) / cs[0]) ** (1 / anios) - 1) : NaN,
+      comision: suma(o.map(x => x.comision ?? 0)),
+      compraCagr: b - a > 1 ? 100 * ((m.c[b - 1] / m.c[a]) ** (1 / anios) - 1) : NaN,
       compraDD: 100 * dd,
     }
   })
+}
+
+// Lo mismo, sumado por grupo (en acciones, por sector), con cuántos mercados tiene y en
+// cuántos llegó a operar. `filas`: las de resumenPorIndice, si ya están hechas
+export function resumenPorGrupo(res, filas = resumenPorIndice(res)) {
+  const grupos = new Map()
+  for (const f of filas) {
+    const g = grupos.get(f.grupo) ?? { grupo: f.grupo, mercados: 0, conOperaciones: 0, operaciones: 0, ganan: 0, neto: 0, largos: 0, cortos: 0, s1: 0, s2: 0, financiacion: 0, comision: 0 }
+    g.mercados++
+    if (f.operaciones) g.conOperaciones++
+    for (const k of ['operaciones', 'ganan', 'neto', 'largos', 'cortos', 's1', 's2', 'financiacion', 'comision']) g[k] += f[k]
+    grupos.set(f.grupo, g)
+  }
+  return [...grupos.values()].map(g => ({ ...g, acierto: g.operaciones ? 100 * g.ganan / g.operaciones : NaN })).sort((a, b) => b.neto - a.neto)
 }
 
 // Cuánto deja cada operación según hasta dónde llegó la pirámide
@@ -501,9 +628,10 @@ export function ordenesManana(res, capital) {
     const { m } = e
     const n = m.nCierre.at(-1)
     const alto = k => Math.max(...m.h.slice(-k)), bajo = k => Math.min(...m.l.slice(-k))
+    const unidad = cfg.riesgo * capital / n, lote = m.info.lote && m.info.lote * (m.factor?.at(-1) ?? 1)
     const fila = {
-      indice: m.info.id, sistema: s, nombre: m.info.nombre, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
-      unidad: cfg.riesgo * capital / n,
+      indice: m.info.id, sistema: s, nombre: m.info.nombre, grupo: m.info.grupo, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
+      unidad: lote ? Math.floor(unidad / lote + 1e-9) * lote : unidad,
       posicion: null, compra: null, venta: null, salida: null, filtro: false,
     }
     const p = e.pos[s]

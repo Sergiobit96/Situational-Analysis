@@ -50,8 +50,8 @@ const ESTRATEGIAS = [
     id:          'tortugas-1',
     nombre:      'Tortugas S1',
     titular:     'Tortugas · sistema 1: ruptura de 20 sesiones, salida en la de 10',
-    descripcion: 'El sistema de Richard Dennis (Market Wizards) llevado a los índices, en velas diarias y ' +
-                 'durmiendo con la posición abierta. Compra al romper el máximo de las últimas 20 sesiones ' +
+    descripcion: 'El sistema de Richard Dennis (Market Wizards) llevado a los índices o a las acciones del ' +
+                 'S&P 500, en velas diarias y durmiendo con la posición abierta. Compra al romper el máximo de las últimas 20 sesiones ' +
                  'y sale al romper el mínimo de las últimas 10. Si la ruptura anterior habría ganado, se la ' +
                  'salta y espera a la de 55. Cada ½ N a favor añade una unidad, hasta 6, y el stop de todas ' +
                  'va a 2 N de la última. N es el rango medio de 20 sesiones, y cada unidad se dimensiona para ' +

@@ -3,8 +3,9 @@ import { createChart, AreaSeries, HistogramSeries, PriceScaleMode, CrosshairMode
 import { madridOffsetAt } from './timezone'
 import {
   INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, backtestTortugas,
-  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
+  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, resumenPorGrupo, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
 } from './tortugas'
+import { prepararAccion, COMISION_ACCIONES_EEUU } from './accionesEeuu'
 import './Tortugas.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -85,6 +86,41 @@ const datosEnCache = () => Object.fromEntries(
   [...cacheDiario].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
 )
 
+// Las acciones del S&P 500: la lista (con sector y fecha de entrada en el índice) y el diario
+// de cada una, que el servidor baja de Yahoo y guarda hasta el siguiente cierre. Van por
+// tandas de 40, dos a la vez, y cada tanda se prepara para el motor nada más llegar (son
+// millones de velas: no se guardan ni las velas ni lo que manda el servidor). `completas`: con
+// toda su historia; si no, solo desde un año antes de entrar en el índice, que es lo que hace
+// falta para operar desde que entró.
+let cacheAcciones = null            // { universo, mercados: { ticker: serie del motor }, completas, cuando }
+const TANDA_ACCIONES = 40
+const accionesEnCache = () => (cacheAcciones && Date.now() - cacheAcciones.cuando < VIGENCIA_MS ? cacheAcciones : null)
+
+async function bajarAcciones({ completas, signal, alAvanzar }) {
+  const universo = await pedirJson(`${API}/api/tortugas/acciones/universo`, signal)
+  const tickers = universo.acciones.map(a => a.ticker)
+  const tandas = []
+  for (let k = 0; k < tickers.length; k += TANDA_ACCIONES) tandas.push(tickers.slice(k, k + TANDA_ACCIONES))
+  const porTicker = new Map(universo.acciones.map(a => [a.ticker, a]))
+  const mercados = {}, fallos = [], avisos = []
+  let siguiente = 0, hechas = 0
+  const trabajador = async () => {
+    while (siguiente < tandas.length && !signal.aborted) {
+      const tanda = tandas[siguiente++]
+      const j = await pedirJson(`${API}/api/tortugas/acciones?tickers=${tanda.map(encodeURIComponent).join(',')}&desde=${PRIMER_ANIO}-01-01&alta=${completas ? 0 : 1}`, signal)
+      for (const s of j.series) if (s.p.length) mercados[s.ticker] = prepararAccion(porTicker.get(s.ticker), s)
+      fallos.push(...j.fallos.map(f => `${f.ticker} (${f.error})`))
+      avisos.push(...j.avisos)
+      hechas += tanda.length
+      alAvanzar(hechas, tickers.length)
+    }
+  }
+  await Promise.all([trabajador(), trabajador()])
+  if (signal.aborted) throw new DOMException('Cancelado', 'AbortError')
+  cacheAcciones = { universo, mercados, completas, cuando: Date.now() }
+  return { datos: cacheAcciones, fallos, avisos }
+}
+
 // ── Ajustes ─────────────────────────────────────────────────────────────────
 
 const AJUSTES_INICIALES = {
@@ -102,15 +138,36 @@ const AJUSTES_INICIALES = {
   reduccionDD: true,
   capital: 20_000,
 }
-const CLAVE_LS = 'sa.tortugas'
+// En acciones, cada una con sus propios ajustes: con 500 mercados, los límites de los índices
+// (15 unidades por sentido) se llenan con las primeras rupturas de una unidad y la pirámide no
+// llega a crecer nunca. Por defecto, una unidad pequeña y límites que dejan unas 50 abiertas.
+const AJUSTES_ACCIONES = {
+  ...AJUSTES_INICIALES,
+  riesgo: 0.1,
+  maxGrupo: 15,
+  maxSentido: 50,
+  sectoresFuera: [],
+  soloEnIndice: CONFIG_TORTUGAS.soloEnIndice,
+  comisiones: CONFIG_TORTUGAS.comisiones,
+}
+const UNIVERSOS = {
+  indices:  { clave: 'sa.tortugas', iniciales: AJUSTES_INICIALES },
+  acciones: { clave: 'sa.tortugas.acciones', iniciales: AJUSTES_ACCIONES },
+}
+const CLAVE_UNIVERSO = 'sa.tortugas.universo'
+const PRIMER_ANIO = 1990
 
-function leerAjustes() {
+function leerAjustes(universo) {
+  const { clave, iniciales } = UNIVERSOS[universo]
   try {
-    const guardados = JSON.parse(localStorage.getItem(CLAVE_LS) ?? 'null')
-    return guardados ? { ...AJUSTES_INICIALES, ...guardados } : AJUSTES_INICIALES
+    const guardados = JSON.parse(localStorage.getItem(clave) ?? 'null')
+    return guardados ? { ...iniciales, ...guardados } : iniciales
   } catch {
-    return AJUSTES_INICIALES
+    return iniciales
   }
+}
+function leerUniverso() {
+  try { return localStorage.getItem(CLAVE_UNIVERSO) === 'acciones' ? 'acciones' : 'indices' } catch { return 'indices' }
 }
 
 const LADOS = [
@@ -119,6 +176,7 @@ const LADOS = [
   { v: 'cortos', label: 'Solo cortos', nota: 'Solo las rupturas a la baja' },
 ]
 const RIESGOS = [0.1, 0.2, 0.3, 0.5, 1]
+const RIESGOS_ACCIONES = [0.02, 0.05, 0.1, 0.2, 0.5]
 const UNIDADES = [1, 4, 6, 7]
 const DESLICES = [0, 0.02, 0.05, 0.1]
 const RECARGOS = [2.5, 3.5]
@@ -132,6 +190,8 @@ const sgn = (v, dec = 1) => Number.isFinite(v) ? `${v > 0 ? '+' : v < 0 ? '−' 
 const eur = (v, dec = 0) => Number.isFinite(v) ? `${v < 0 ? '−' : ''}${nf(Math.abs(v), dec)} €` : '—'
 const pct = (v, dec = 1) => Number.isFinite(v) ? `${sgn(v, dec)} %` : '—'
 const dia = f => f ? f.split('-').reverse().join('/') : '—'
+// un precio con los decimales que pide su tamaño (las acciones ajustadas por splits valían céntimos)
+const nfp = v => nf(v, Math.abs(v) >= 100 ? 1 : Math.abs(v) >= 1 ? 2 : 4)
 const tono = v => v > 0 ? 'positivo' : v < 0 ? 'negativo' : ''
 const nombreSistema = s => (s === '1+2' ? 'S1 + S2' : `S${s}`)
 
@@ -167,8 +227,13 @@ function Numero({ valor, onCambio, min, max, step = 1, titulo }) {
 export default function EstrategiaTortugas({ estrategiaId }) {
   const sistema = estrategiaId === 'tortugas-2' ? 2 : estrategiaId === 'tortugas-12' ? '1+2' : 1
   const juntos = sistema === '1+2'
-  const [ajustes, setAjustes] = useState(leerAjustes)
+  const [universo, setUniverso] = useState(leerUniverso)
+  const acciones = universo === 'acciones'
+  const [todosAjustes, setTodosAjustes] = useState(() => ({ indices: leerAjustes('indices'), acciones: leerAjustes('acciones') }))
+  const ajustes = todosAjustes[universo]
+  const setAjustes = f => setTodosAjustes(t => ({ ...t, [universo]: f(t[universo]) }))
   const [datos, setDatos] = useState(datosEnCache)
+  const [datosAcciones, setDatosAcciones] = useState(accionesEnCache)
   const [cargando, setCargando] = useState(false)
   const [progreso, setProgreso] = useState(null)
   const [error, setError] = useState(null)
@@ -179,8 +244,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
   useEffect(() => () => abortRef.current?.abort(), [])
   useEffect(() => {
-    try { localStorage.setItem(CLAVE_LS, JSON.stringify(ajustes)) } catch { /* sin almacenamiento */ }
-  }, [ajustes])
+    try {
+      for (const [u, a] of Object.entries(todosAjustes)) localStorage.setItem(UNIVERSOS[u].clave, JSON.stringify(a))
+      localStorage.setItem(CLAVE_UNIVERSO, universo)
+    } catch { /* sin almacenamiento */ }
+  }, [todosAjustes, universo])
 
   const poner = (campo, valor) => setAjustes(a => ({ ...a, [campo]: valor }))
   const alternarIndice = id => setAjustes(a => {
@@ -188,6 +256,24 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     if (s.has(id)) { if (s.size > 1) s.delete(id) } else s.add(id)
     return { ...a, indices: INDICES_TORTUGAS.map(i => i.id).filter(x => s.has(x)) }
   })
+  const lista = useMemo(() => datosAcciones?.universo?.acciones ?? [], [datosAcciones])
+  const sectores = useMemo(() => [...new Set(lista.map(a => a.sector))].sort((a, b) => a.localeCompare(b, 'es')), [lista])
+  const alternarSector = sector => setAjustes(a => {
+    const fuera = new Set(a.sectoresFuera)
+    if (fuera.has(sector)) fuera.delete(sector)
+    else if (sectores.filter(s => !fuera.has(s)).length > 1) fuera.add(sector)
+    return { ...a, sectoresFuera: [...fuera] }
+  })
+  const cambiarUniverso = u => {
+    if (u === universo) return
+    abortRef.current?.abort()
+    setCargando(false)
+    setProgreso(null)
+    setError(null)
+    setVariantes(null)
+    setMostradas(25)
+    setUniverso(u)
+  }
 
   const cfg = useMemo(() => ({
     ...CONFIG_TORTUGAS,
@@ -204,8 +290,10 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     media: ajustes.media,
     reduccionDD: ajustes.reduccionDD,
     capital: ajustes.capital,
+    soloEnIndice: ajustes.soloEnIndice ?? CONFIG_TORTUGAS.soloEnIndice,
+    comisiones: ajustes.comisiones ?? CONFIG_TORTUGAS.comisiones,
   }), [ajustes, sistema])
-  const claveCfg = JSON.stringify([cfg, ajustes.indices])
+  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera])
 
   // los indicadores solo dependen de los datos: se calculan una vez por índice
   const preparados = useMemo(() => {
@@ -215,11 +303,23 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     }
     return r
   }, [datos])
+  // las acciones ya llegan preparadas (bajarAcciones), en el orden de la lista
+  const accionesPreparadas = useMemo(() => (acciones && datosAcciones
+    ? datosAcciones.universo.acciones.map(a => datosAcciones.mercados[a.ticker]).filter(Boolean) : []), [acciones, datosAcciones])
   const tipos = datos[TICKER_TIPO] ?? null
-  const mercados = useMemo(() => ajustes.indices.map(id => preparados[id]).filter(Boolean), [preparados, ajustes.indices])
-  const faltan = ajustes.indices.filter(id => !preparados[id])
+  const mercados = useMemo(() => {
+    if (!acciones) return ajustes.indices.map(id => preparados[id]).filter(Boolean)
+    const fuera = new Set(ajustes.sectoresFuera)
+    return accionesPreparadas.filter(x => !fuera.has(x.info.grupo))
+  }, [acciones, preparados, ajustes.indices, accionesPreparadas, ajustes.sectoresFuera])
+  // con «solo desde que entró», el servidor manda cada acción desde un año antes de entrar en
+  // el índice: sin esa casilla hace falta su historia entera
+  const faltan = !acciones ? ajustes.indices.filter(id => !preparados[id])
+    : !datosAcciones || (!cfg.soloEnIndice && !datosAcciones.completas) ? ['las acciones'] : []
 
-  const res = useMemo(() => mercados.length ? backtestTortugas(mercados, tipos, cfg) : null, [mercados, tipos, cfg])
+  // en índices se prueba con los que haya (y se avisa de los que faltan); en acciones, con todas
+  const listo = mercados.length > 0 && (!acciones || !faltan.length)
+  const res = useMemo(() => listo ? backtestTortugas(mercados, tipos, cfg) : null, [listo, mercados, tipos, cfg])
   const m = useMemo(() => res && metricasTortugas(res), [res])
   const ordenes = useMemo(() => res ? ordenesManana(res, ajustes.capital) : [], [res, ajustes.capital])
 
@@ -229,6 +329,28 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     abortRef.current = ctrl
     setCargando(true)
     setError(null)
+    if (acciones) {
+      setProgreso({ hechos: 0, total: null })
+      try {
+        const [{ datos: nuevas, fallos, avisos }, tipo] = await Promise.all([
+          bajarAcciones({ completas: !cfg.soloEnIndice, signal: ctrl.signal, alAvanzar: (hechos, total) => setProgreso({ hechos, total }) }),
+          bajarDiario(TICKER_TIPO, ctrl.signal).catch(e => { if (e.name === 'AbortError') throw e; return null }),
+        ])
+        if (ctrl.signal.aborted) return
+        setDatosAcciones(nuevas)
+        if (tipo) setDatos(d => ({ ...d, [TICKER_TIPO]: tipo }))
+        const avisosTexto = [fallos.length && `Yahoo no dio ${fallos.length}: ${fallos.slice(0, 8).join(' · ')}${fallos.length > 8 ? '…' : ''}`,
+          avisos.length && `${avisos.length} con datos de días anteriores`, !tipo && 'sin el tipo de la financiación (se usa un 3 %)'].filter(Boolean)
+        if (avisosTexto.length) setError(avisosTexto.join('. '))
+      } catch (e) {
+        if (e.name === 'AbortError') return
+        setError(`No se pudieron bajar las acciones: ${e.message}`)
+      }
+      setCargando(false)
+      setProgreso(null)
+      setMostradas(25)
+      return
+    }
     const tickers = [...INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.ticker), TICKER_TIPO]
     setProgreso({ hechos: 0, total: tickers.length })
     const nuevos = {}
@@ -257,9 +379,10 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
   function comparar() {
     setComparando(true)
-    // un respiro para que se pinte el aviso antes de los doce backtests
+    // un respiro para que se pinte el aviso antes de los backtests. En acciones cada uno tarda
+    // unos segundos: solo los sistemas y los lados, con la pirámide de ahora
     setTimeout(() => {
-      const unidades = [...new Set([1, 4, cfg.maxUnidades])].sort((a, b) => a - b)
+      const unidades = acciones ? [cfg.maxUnidades] : [...new Set([1, 4, cfg.maxUnidades])].sort((a, b) => a - b)
       const filas = []
       for (const s of [1, 2, '1+2']) for (const lados of ['largos', 'ambos']) for (const u of unidades) {
         const r = backtestTortugas(mercados, tipos, { ...cfg, sistema: s, lados, maxUnidades: u })
@@ -274,30 +397,99 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   // Lo que se pierde: 1 N en contra de todas las unidades, y hasta los stops (a 2 N de la última
   // unidad de cada pirámide), con el peor reparto de las unidades que caben. Con los dos
   // sistemas, cada índice puede llevar dos pirámides.
+  const gruposDe = xs => Object.values(xs.reduce((n, g) => ({ ...n, [g]: (n[g] ?? 0) + 1 }), {}))
   const peor = peorHastaStops({
-    grupos: Object.values(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).reduce((n, i) => ({ ...n, [i.grupo]: (n[i.grupo] ?? 0) + 1 }), {})),
+    grupos: acciones
+      ? gruposDe(lista.filter(a => !ajustes.sectoresFuera.includes(a.sector)).map(a => a.sector))
+      : gruposDe(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.grupo)),
     maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
     sistemas: sistemasDe(sistema).length,
   })
-  // la N y la unidad son las mismas para los dos sistemas: una caja por índice
-  const nPorIndice = ordenes.filter((f, k) => ordenes.findIndex(x => x.indice === f.indice) === k)
+  // la N y la unidad son las mismas para los dos sistemas: una caja por índice (en acciones,
+  // solo las que tienen posición: son cientos)
+  const conPosicion = new Set(ordenes.filter(f => f.posicion).map(f => f.indice))
+  const nPorIndice = ordenes.filter((f, k) => ordenes.findIndex(x => x.indice === f.indice) === k && (!acciones || conPosicion.has(f.indice)))
 
   return (
     <div className="estrategia-panel tortugas">
       <div className="filtro-controls">
         <div className="filtro-group">
           <label className="filtro-label">
-            Índices
-            <span className="filtro-valor">{ajustes.indices.length} de {INDICES_TORTUGAS.length} · la ventaja sale de diversificar</span>
+            Mercados
+            <span className="filtro-valor">
+              {acciones
+                ? 'cada acción con sus ajustes; los de los índices se guardan aparte'
+                : 'los índices o las acciones del S&P 500, cada uno con sus ajustes'}
+            </span>
           </label>
           <div className="filtro-presets">
-            {INDICES_TORTUGAS.map(i => (
-              <button key={i.id} className={`chip ${ajustes.indices.includes(i.id) ? 'activo' : ''}`}
-                title={`${i.ticker} · grupo ${i.grupo} · datos desde ${i.desde.slice(0, 4)}`}
-                onClick={() => alternarIndice(i.id)}>{i.nombre}</button>
-            ))}
+            <Chips opciones={[
+              { v: 'indices', label: 'Índices', nota: 'Los ocho índices de contado' },
+              { v: 'acciones', label: 'Acciones de EE. UU.', nota: 'Las 503 del S&P 500, cada sector un grupo' },
+            ]} valor={universo} onCambio={cambiarUniverso} />
           </div>
         </div>
+
+        {!acciones && (
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Índices
+              <span className="filtro-valor">{ajustes.indices.length} de {INDICES_TORTUGAS.length} · la ventaja sale de diversificar</span>
+            </label>
+            <div className="filtro-presets">
+              {INDICES_TORTUGAS.map(i => (
+                <button key={i.id} className={`chip ${ajustes.indices.includes(i.id) ? 'activo' : ''}`}
+                  title={`${i.ticker} · grupo ${i.grupo} · datos desde ${i.desde.slice(0, 4)}`}
+                  onClick={() => alternarIndice(i.id)}>{i.nombre}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {acciones && (
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Sectores
+              <span className="filtro-valor">
+                {lista.length
+                  ? `${nf(mercados.length)} acciones de ${nf(lista.length)} · cada sector es un grupo para el límite de unidades`
+                  : 'las 503 acciones del S&P 500 por sector GICS: carga los datos para elegir'}
+              </span>
+            </label>
+            <div className="filtro-presets">
+              {sectores.map(s => (
+                <button key={s} className={`chip ${ajustes.sectoresFuera.includes(s) ? '' : 'activo'}`}
+                  title={`${lista.filter(a => a.sector === s).length} acciones`}
+                  onClick={() => alternarSector(s)}>{s}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {acciones && (
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Acciones
+              <span className="filtro-valor">
+                {ajustes.soloEnIndice
+                  ? 'cada una solo desde que entró en el S&P 500: sin eso, el backtest compraría las ganadoras antes de que lo fueran'
+                  : 'cada una con toda su historia: es la lista de hoy, así que se compran las que ya se sabe que acabarían en el índice'}
+                {' · '}
+                {ajustes.comisiones
+                  ? `comisión de IG: ${nf(100 * COMISION_ACCIONES_EEUU.porAccion)} centavos por acción, ${nf(COMISION_ACCIONES_EEUU.minimo)} $ como mínimo por orden (cada unidad es una al entrar y otra al salir)`
+                  : 'sin comisiones'}
+              </span>
+            </label>
+            <div className="filtro-presets">
+              <button className={`chip ${ajustes.soloEnIndice ? 'activo' : ''}`}
+                title="No abre una acción antes de la fecha en que entró en el índice (según Wikipedia)"
+                onClick={() => poner('soloEnIndice', !ajustes.soloEnIndice)}>Solo desde que entró en el índice</button>
+              <button className={`chip ${ajustes.comisiones ? 'activo' : ''}`}
+                title="CFD de acciones de EE. UU. en IG: 0,02 $ por acción y 15 $ como mínimo por orden"
+                onClick={() => poner('comisiones', !ajustes.comisiones)}>Comisión de IG</button>
+            </div>
+          </div>
+        )}
 
         <div className="filtro-group">
           <label className="filtro-label">
@@ -317,7 +509,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </span>
           </label>
           <div className="filtro-presets">
-            <Chips opciones={RIESGOS.map(r => ({ v: r, label: `${nf(r, 1)} %`, nota: r === 1 ? 'El de las tortugas, pensado para futuros poco correlacionados' : undefined }))}
+            <Chips opciones={(acciones ? RIESGOS_ACCIONES : RIESGOS).map(r => ({ v: r, label: `${nf(r, r < 0.1 ? 2 : 1)} %`, nota: r === 1 ? 'El de las tortugas, pensado para futuros poco correlacionados' : undefined }))}
               valor={ajustes.riesgo} onCambio={v => poner('riesgo', v)} />
             <Numero valor={ajustes.riesgo} min={0.01} max={5} step={0.05} titulo="% del capital por N y unidad" onCambio={v => poner('riesgo', v)} />
           </div>
@@ -327,7 +519,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Pirámide
             <span className="filtro-valor">
-              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por índice{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
+              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
             </span>
           </label>
           <div className="filtro-presets">
@@ -340,13 +532,17 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         <div className="filtro-group">
           <label className="filtro-label">
             Límites de cartera
-            <span className="filtro-valor">unidades por grupo (EE. UU., Europa, Asia) y por sentido en total</span>
+            <span className="filtro-valor">
+              {acciones
+                ? 'unidades por sector y por sentido en total: con cientos de acciones, si se llenan con rupturas de una unidad, la pirámide no crece'
+                : 'unidades por grupo (EE. UU., Europa, Asia) y por sentido en total'}
+            </span>
           </label>
           <div className="filtro-presets tortugas-limites">
             <span>grupo</span>
-            <Numero valor={ajustes.maxGrupo} min={1} max={60} titulo="Unidades máximas por grupo y sentido" onCambio={v => poner('maxGrupo', Math.round(v))} />
+            <Numero valor={ajustes.maxGrupo} min={1} max={acciones ? 300 : 60} titulo={`Unidades máximas por ${acciones ? 'sector' : 'grupo'} y sentido`} onCambio={v => poner('maxGrupo', Math.round(v))} />
             <span>sentido</span>
-            <Numero valor={ajustes.maxSentido} min={1} max={100} titulo="Unidades máximas por sentido" onCambio={v => poner('maxSentido', Math.round(v))} />
+            <Numero valor={ajustes.maxSentido} min={1} max={acciones ? 1000 : 100} titulo="Unidades máximas por sentido" onCambio={v => poner('maxSentido', Math.round(v))} />
           </div>
         </div>
 
@@ -355,7 +551,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             Overnight
             <span className="filtro-valor">
               {ajustes.financiacion
-                ? `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % menos el dividendo (el viernes, 3 noches)`
+                ? acciones
+                  ? `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % (el viernes, 3 noches) y cobra los dividendos el día que la acción cotiza sin ellos; el corto, al revés`
+                  : `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % menos el dividendo (el viernes, 3 noches)`
                 : 'sin coste por dormir con la posición: lo que se ganaría con un futuro sin base'}
             </span>
           </label>
@@ -409,7 +607,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         {cargando && progreso && (
           <div className="velas-cargando">
             <span className="spinner" />
-            Diario de Yahoo… {progreso.hechos}/{progreso.total}
+            {acciones
+              ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
+              : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
           </div>
         )}
         {error && <div className="error-global">{error}</div>}
@@ -419,7 +619,12 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         <div className="estr-vacio">
           <p className="estr-vacio-tit">Pulsa <strong>Cargar datos y probar</strong></p>
           <p className="estr-vacio-sub">
-            Baja el diario de Yahoo de cada índice desde 1988 (unos segundos) y, a partir de ahí, cada ajuste recalcula al momento.
+            {acciones
+              ? <>Baja el diario de Yahoo de las 503 acciones del S&P 500{ajustes.soloEnIndice ? ', cada una desde un año antes de entrar en el índice' : ' con toda su historia'}. La
+                  primera vez del día, el servidor tarda un minuto en traerlas de Yahoo; después, unos segundos. Cada ajuste
+                  recalcula en un par de segundos.{datosAcciones && !datosAcciones.completas && !ajustes.soloEnIndice
+                  ? ' Las cargadas son solo desde que entró cada una en el índice: hay que bajarlas otra vez enteras.' : ''}</>
+              : 'Baja el diario de Yahoo de cada índice desde 1988 (unos segundos) y, a partir de ahí, cada ajuste recalcula al momento.'}
           </p>
         </div>
       )}
@@ -432,23 +637,36 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </p>
           )}
           <Resumen m={m} res={res} />
-          <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} />
+          <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} acciones={acciones} />
           <CurvaTortugas res={res} />
           <Anual res={res} />
-          <PorIndice res={res} />
+          {acciones ? <PorSector res={res} /> : <PorIndice res={res} />}
           <Piramide res={res} />
-          <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} />
-          <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} />
-          <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} />
-          <p className="estr-nota">
-            Velas diarias del contado (Yahoo). Las órdenes son stop y se ejecutan en su nivel, o en la apertura si la
-            noche ya lo ha saltado; dentro de la vela se supone el camino apertura → mínimo → máximo → cierre si cierra
-            por encima de la apertura, y al revés si no. El tipo de la financiación es la letra del Tesoro de EE. UU. a
-            3 meses para todos los índices (el euro estuvo en negativo de 2015 a 2022). Yahoo trae el FTSE siempre con
-            la apertura igual al cierre anterior, y el S&P y el Russell así en muchas sesiones antes de 2007: ahí el
-            hueco de la noche no se ve. Los CFD cotizan casi 24 h, así que un stop puede saltar de noche en un nivel que
-            el contado no llega a marcar.
-          </p>
+          <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
+          <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} />
+          <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} />
+          {acciones ? (
+            <p className="estr-nota">
+              Velas diarias de Yahoo, ajustadas por los splits (por eso las de hace años salen a céntimos; la comisión
+              y las acciones enteras se cuentan con las acciones de entonces). La lista es la de hoy del S&P 500 (Wikipedia, con la fecha
+              de entrada de cada una): no están las que salieron del índice ni las que dejaron de cotizar, así que, aun
+              operando cada una solo desde que entró, el resultado sale mejor de lo que habría sido. Las escisiones
+              (spin-offs) no vienen ajustadas: el día que se separa la filial parece una caída. Las órdenes son stop y se
+              ejecutan en su nivel, o en la apertura si la noche ya lo ha saltado (los huecos de los resultados trimestrales
+              pasan los stops); dentro de la vela se supone el camino apertura → mínimo → máximo → cierre si cierra por
+              encima de la apertura, y al revés si no. Spread de 4 puntos básicos y las cuentas en euros como si fueran dólares.
+            </p>
+          ) : (
+            <p className="estr-nota">
+              Velas diarias del contado (Yahoo). Las órdenes son stop y se ejecutan en su nivel, o en la apertura si la
+              noche ya lo ha saltado; dentro de la vela se supone el camino apertura → mínimo → máximo → cierre si cierra
+              por encima de la apertura, y al revés si no. El tipo de la financiación es la letra del Tesoro de EE. UU. a
+              3 meses para todos los índices (el euro estuvo en negativo de 2015 a 2022). Yahoo trae el FTSE siempre con
+              la apertura igual al cierre anterior, y el S&P y el Russell así en muchas sesiones antes de 2007: ahí el
+              hueco de la noche no se ve. Los CFD cotizan casi 24 h, así que un stop puede saltar de noche en un nivel que
+              el contado no llega a marcar.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -459,7 +677,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
 function Resumen({ m, res }) {
   const tiles = [
-    { label: 'Capital final', valor: eur(m.capitalFinal), sub: `desde ${eur(res.cfg.capital)} el ${dia(res.curva[0].date)}` },
+    { label: 'Capital final', valor: eur(m.capitalFinal), sub: m.quiebra ? `la cuenta se quedó a cero el ${dia(m.quiebra)}` : `desde ${eur(res.cfg.capital)} el ${dia(res.curva[0].date)}`, ...(m.quiebra ? { marca: '▼', tono: 'rojo' } : {}) },
     { label: 'Rentabilidad anual', valor: pct(m.cagr), sub: 'compuesta (CAGR)', marca: m.cagr >= 0 ? '▲' : '▼', tono: m.cagr >= 0 ? 'verde' : 'rojo' },
     { label: 'Máximo drawdown', valor: pct(m.maxDD), sub: m.peorDD ? `${dia(m.peorDD.desde)} → ${dia(m.peorDD.hasta)}` : '—', marca: '▼', tono: 'rojo' },
     { label: 'Rentabilidad / drawdown', valor: nf(m.mar, 2), sub: `MAR · Sharpe ${nf(m.sharpe, 2)}` },
@@ -467,6 +685,7 @@ function Resumen({ m, res }) {
     { label: 'Operaciones', valor: nf(m.operaciones), sub: `${nf(m.acierto, 1)} % ganadoras · ${nf(m.diasMedios, 0)} días de media` },
     { label: 'Profit factor', valor: nf(m.profitFactor, 2), sub: `la ganadora media es ${nf(m.ganadoraPerdedora, 1)} veces la perdedora` },
     { label: 'Financiación overnight', valor: eur(-m.financiacion), sub: `${nf(m.financiacionPct, 1)} % de lo ganado en bruto` },
+    ...(m.comisiones > 0 ? [{ label: 'Comisiones', valor: eur(-m.comisiones), sub: `${nf(m.comisionesPct, 1)} % de lo ganado en bruto` }] : []),
     { label: 'Apalancamiento', valor: `${nf(m.apalancamientoMedio, 2)}×`, sub: `nominal / capital · máximo ${nf(m.apalancamientoMax, 1)}×` },
   ]
   return (
@@ -490,22 +709,25 @@ function Resumen({ m, res }) {
 // La volatilidad con la que se mide todo: N de cada índice al último cierre, en puntos y en %
 // del precio, con lo que sale de él (cada cuánto se añade, a qué distancia va el stop y el
 // tamaño de una unidad)
-function NDeHoy({ filas, paso, stopN }) {
+function NDeHoy({ filas, paso, stopN, acciones }) {
+  if (acciones && !filas.length) return null
+  const pts = acciones ? '$' : 'pts'
+  const dec = acciones ? 2 : 1
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
-        <strong>N de cada índice</strong>
+        <strong>{acciones ? 'N de las acciones con posición' : 'N de cada índice'}</strong>
         <span className="estr-nota">ATR de Wilder de 20 sesiones, al último cierre</span>
       </div>
       <div className="tortugas-n">
         {filas.map(f => (
           <div key={f.indice} className="tortugas-n-caja" title={`${f.nombre} · cierre ${nf(f.cierre, 2)} el ${dia(f.ultimoDia)}`}>
-            <span className="tortugas-n-nombre">{f.nombre}</span>
-            <span className="tortugas-n-valor">{nf(f.n, 1)} <small>pts</small></span>
+            <span className="tortugas-n-nombre">{acciones ? f.indice : f.nombre}</span>
+            <span className="tortugas-n-valor">{nf(f.n, dec)} <small>{pts}</small></span>
             <span className="tortugas-n-sub">{nf(100 * f.n / f.cierre, 2)} % del precio</span>
-            <span className="tortugas-n-sub">añade cada {nf(paso * f.n, 1)} pts</span>
-            <span className="tortugas-n-sub">stop a {nf(stopN * f.n, 1)} pts</span>
-            <span className="tortugas-n-sub">unidad {nf(f.unidad, 2)} €/pt</span>
+            <span className="tortugas-n-sub">añade cada {nf(paso * f.n, dec)} {pts}</span>
+            <span className="tortugas-n-sub">stop a {nf(stopN * f.n, dec)} {pts}</span>
+            <span className="tortugas-n-sub">unidad {acciones ? `${nf(f.unidad)} acciones` : `${nf(f.unidad, 2)} €/pt`}</span>
           </div>
         ))}
       </div>
@@ -535,7 +757,8 @@ function CurvaTortugas({ res }) {
       lineColor: '#3fb950', topColor: 'rgba(63,185,80,0.28)', bottomColor: 'rgba(63,185,80,0.02)',
       lineWidth: 2, priceLineVisible: false,
     })
-    capital.setData(puntos.map(p => ({ time: p.date, value: p.valor })))
+    // en escala logarítmica no cabe un capital de cero o menos: desde ahí, la línea se corta
+    capital.setData(puntos.map(p => (p.valor > 0 ? { time: p.date, value: p.valor } : { time: p.date })))
     const dd = chart.addSeries(HistogramSeries, {
       color: 'rgba(248,81,73,0.55)', priceScaleId: 'dd', priceLineVisible: false, lastValueVisible: false,
       priceFormat: { type: 'custom', formatter: v => `${v.toFixed(0)} %` },
@@ -637,6 +860,76 @@ function PorIndice({ res }) {
   )
 }
 
+// En acciones, en vez de una fila por mercado (son cientos): lo de cada sector y las acciones
+// que más dejaron y más quitaron
+function PorSector({ res }) {
+  const porAccion = useMemo(() => resumenPorIndice(res), [res])
+  const sectores = useMemo(() => resumenPorGrupo(res, porAccion), [res, porAccion])
+  const acciones = useMemo(() => porAccion.filter(f => f.operaciones).sort((a, b) => b.neto - a.neto), [porAccion])
+  const hayCortos = res.cfg.lados !== 'largos'
+  const hayLargos = res.cfg.lados !== 'cortos'
+  const juntos = res.cfg.sistema === '1+2'
+  const mejores = acciones.slice(0, 10)
+  const peores = acciones.slice(-10).reverse().filter(f => !mejores.includes(f))
+  const filaAccion = f => (
+    <tr key={f.indice}>
+      <th title={f.nombre}>{f.indice}</th>
+      <td className="tortugas-izq">{f.grupo}</td>
+      <td>{nf(f.operaciones)}</td>
+      <td>{nf(f.acierto, 1)} %</td>
+      <td className={tono(f.neto)}>{eur(f.neto)}</td>
+      <td>{eur(-f.comision)}</td>
+      <td>{pct(f.compraCagr)} al año</td>
+    </tr>
+  )
+  return (
+    <div className="estr-resumen">
+      <div className="tortugas-tabla-wrap">
+        <table className="estr-mitades-tabla tortugas-tabla">
+          <thead>
+            <tr>
+              <th>Por sector</th><th>Acciones</th><th>Operaciones</th><th>Ganadoras</th><th>Neto</th>
+              {hayLargos && hayCortos && <><th>Largos</th><th>Cortos</th></>}
+              {juntos && <><th>Sistema 1</th><th>Sistema 2</th></>}
+              <th>Financiación</th><th>Comisiones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sectores.map(g => (
+              <tr key={g.grupo}>
+                <th>{g.grupo}</th>
+                <td title={`${g.conOperaciones} con alguna operación`}>{nf(g.mercados)}</td>
+                <td>{nf(g.operaciones)}</td>
+                <td>{nf(g.acierto, 1)} %</td>
+                <td className={tono(g.neto)}>{eur(g.neto)}</td>
+                {hayLargos && hayCortos && <><td className={tono(g.largos)}>{eur(g.largos)}</td><td className={tono(g.cortos)}>{eur(g.cortos)}</td></>}
+                {juntos && <><td className={tono(g.s1)}>{eur(g.s1)}</td><td className={tono(g.s2)}>{eur(g.s2)}</td></>}
+                <td>{eur(-g.financiacion)}</td>
+                <td>{eur(-g.comision)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {[['Las que más dejan', mejores], ['Las que más quitan', peores]].filter(([, filas]) => filas.length).map(([titulo, filas]) => (
+        <div key={titulo} className="tortugas-tabla-wrap">
+          <table className="estr-mitades-tabla tortugas-tabla">
+            <thead>
+              <tr><th>{titulo}</th><th>Sector</th><th>Operaciones</th><th>Ganadoras</th><th>Neto</th><th>Comisiones</th><th>Comprar y mantener</th></tr>
+            </thead>
+            <tbody>{filas.map(filaAccion)}</tbody>
+          </table>
+        </div>
+      ))}
+      <p className="estr-nota">
+        La financiación ya descuenta los dividendos cobrados. Comprar y mantener es la acción sin dividendos desde
+        su primer día en el periodo (o desde que hay datos de ella). {nf(acciones.length)} acciones llegaron a tener
+        alguna operación.
+      </p>
+    </div>
+  )
+}
+
 function Piramide({ res }) {
   const filas = useMemo(() => porUnidades(res), [res])
   const total = filas.reduce((s, f) => s + f.neto, 0)
@@ -670,7 +963,7 @@ function Piramide({ res }) {
 
 const LADO_CORTO = { largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }
 
-function Variantes({ variantes, vigente, comparando, onComparar }) {
+function Variantes({ variantes, vigente, comparando, onComparar, acciones }) {
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
@@ -706,7 +999,7 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
         {variantes && !vigente
           ? <strong>Los ajustes han cambiado desde la comparación: vuelve a calcularla. </strong>
           : null}
-        Los dos sistemas, por separado y juntos (el 2 con las rupturas que el 1 se salta), con y sin cortos y con distintas pirámides, con el resto de ajustes como están.
+        Los dos sistemas, por separado y juntos (el 2 con las rupturas que el 1 se salta), con y sin cortos{acciones ? ' (con la pirámide de ahora: con cientos de acciones cada backtest tarda unos segundos)' : ' y con distintas pirámides'}, con el resto de ajustes como están.
         La fila resaltada es la que se ve arriba. Fíjate más en el MAR (rentabilidad anual entre el peor drawdown)
         que en la rentabilidad: subir el riesgo sube las dos cosas a la vez.
       </p>
@@ -714,8 +1007,22 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
   )
 }
 
-function Ordenes({ filas, juntos, capital, ultimoDato }) {
-  const nivel = o => o ? `${nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
+// En acciones, de las cientos que hay: las que tienen posición y las que tienen la ruptura más
+// cerca (en N desde el último cierre)
+const CERCANAS = 25
+const distanciaN = f => Math.min(
+  f.compra && !f.posicion ? (f.compra.nivel - f.cierre) / f.n : Infinity,
+  f.venta && !f.posicion ? (f.cierre - f.venta.nivel) / f.n : Infinity,
+)
+
+function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones }) {
+  const filas = useMemo(() => {
+    if (!acciones) return todas
+    const conPosicion = todas.filter(f => f.posicion)
+    const cercanas = todas.filter(f => !f.posicion && Number.isFinite(distanciaN(f))).sort((a, b) => distanciaN(a) - distanciaN(b)).slice(0, CERCANAS)
+    return [...conPosicion, ...cercanas]
+  }, [todas, acciones])
+  const nivel = o => o ? `${acciones ? nfp(o.nivel) : nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
   const fuera = f => {
     if (!juntos) return f.filtro ? 'fuera · la última de 20 ganó: espera la de 55' : 'fuera'
     if (f.sistema === 1) return f.filtro ? 'fuera · la última de 20 ganó: se la salta y la coge el S2' : 'fuera'
@@ -725,46 +1032,53 @@ function Ordenes({ filas, juntos, capital, ultimoDato }) {
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
         <strong>Órdenes stop para la próxima sesión</strong>
-        <span className="estr-nota">con el último cierre de cada índice ({dia(ultimoDato)} el más reciente) y {eur(capital)}</span>
+        <span className="estr-nota">con el último cierre de cada {acciones ? 'acción' : 'índice'} ({dia(ultimoDato)} el más reciente) y {eur(capital)}</span>
       </div>
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th>{juntos && <th>Sistema</th>}<th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th><th>Compra stop</th><th>Venta stop</th><th>Salida stop</th></tr>
+            <tr>
+              <th>{acciones ? 'Acción' : 'Índice'}</th>{juntos && <th>Sistema</th>}<th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th>
+              {acciones && <th title="Lo que le falta al precio para llegar a la ruptura, en N">A cuánto</th>}
+              <th>Compra stop</th><th>Venta stop</th><th>Salida stop</th>
+            </tr>
           </thead>
           <tbody>
             {filas.map(f => (
               <tr key={`${f.indice}-${f.sistema}`}>
-                <th>{f.nombre}</th>
+                <th title={acciones ? `${f.nombre} · ${f.grupo}` : undefined}>{acciones ? f.indice : f.nombre}</th>
                 {juntos && <td>S{f.sistema}</td>}
-                <td title={dia(f.ultimoDia)}>{nf(f.cierre, 2)}</td>
-                <td>{nf(f.n, 1)}</td>
-                <td>{nf(f.unidad, 2)} €/pt</td>
+                <td title={dia(f.ultimoDia)}>{acciones ? nfp(f.cierre) : nf(f.cierre, 2)}</td>
+                <td>{nf(f.n, acciones ? 2 : 1)}</td>
+                <td>{acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
                 <td className="tortugas-izq">
                   {f.posicion
-                    ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${nf(f.posicion.medio, 1)}`
+                    ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${acciones ? nfp(f.posicion.medio) : nf(f.posicion.medio, 1)}`
                     : fuera(f)}
                 </td>
+                {acciones && <td>{f.posicion ? '' : `${nf(distanciaN(f), 2)} N`}</td>}
                 <td>{nivel(f.compra)}</td>
                 <td>{nivel(f.venta)}</td>
-                <td>{f.salida != null ? nf(f.salida, 2) : ''}</td>
+                <td>{f.salida != null ? (acciones ? nfp(f.salida) : nf(f.salida, 2)) : ''}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
       <p className="estr-nota">
+        {acciones && <>De las {nf(todas.length / (juntos ? 2 : 1))} acciones, las que tienen posición y las {CERCANAS} filas con la ruptura más cerca. </>}
         Es la posición que tendría hoy el backtest. Entre paréntesis, las sesiones de la ruptura. La salida es el más
-        cercano entre el stop de 2 N y el canal contrario{juntos ? ' (de 10 en el S1 y de 20 en el S2)' : ''}. La unidad es riesgo · capital / N: si sale por debajo del
-        mínimo del broker, hace falta más capital o más riesgo por unidad.
+        cercano entre el stop de 2 N y el canal contrario{juntos ? ' (de 10 en el S1 y de 20 en el S2)' : ''}. La unidad es riesgo · capital / N
+        {acciones ? ', en acciones enteras: si sale 0, hace falta más capital o más riesgo por unidad.' : ': si sale por debajo del mínimo del broker, hace falta más capital o más riesgo por unidad.'}
       </p>
     </div>
   )
 }
 
-function Operaciones({ res, mostradas, onMas }) {
+function Operaciones({ res, mostradas, onMas, acciones }) {
   const filas = useMemo(() => [...res.abiertas, ...[...res.operaciones].reverse()], [res])
   const juntos = res.cfg.sistema === '1+2'
+  const precio = acciones ? nfp : v => nf(v, 1)
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
@@ -774,7 +1088,11 @@ function Operaciones({ res, mostradas, onMas }) {
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th title="Todas las unidades juntas, en € por punto">Tamaño</th><th title="Tamaño por precio medio de entrada">Nominal</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
+            <tr>
+              <th>{acciones ? 'Acción' : 'Índice'}</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th>
+              <th title={acciones ? 'Todas las unidades juntas, en acciones de las de entonces' : 'Todas las unidades juntas, en € por punto'}>Tamaño</th><th title="Tamaño por precio medio de entrada">Nominal</th>
+              <th title={acciones ? 'Ajustado por los splits posteriores' : undefined}>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th>{acciones && <th>Comisiones</th>}<th>% capital</th>
+            </tr>
           </thead>
           <tbody>
             {filas.slice(0, mostradas).map((o, k) => (
@@ -785,15 +1103,18 @@ function Operaciones({ res, mostradas, onMas }) {
                 <td>{dia(o.entrada)}</td>
                 <td>{o.salida ? dia(o.salida) : 'abierta'}</td>
                 <td>{o.dias ?? ''}</td>
-                <td>{nf(o.n, 1)}</td>
+                <td>{acciones ? nfp(o.n) : nf(o.n, 1)}</td>
                 <td>{o.unidades}</td>
-                <td title={o.tamanos.length > 1 ? `Unidades: ${o.tamanos.map(t => nf(t, 2)).join(' + ')} €/pt` : undefined}>{nf(o.tamano, 2)} €/pt</td>
+                {acciones
+                  ? <td>{nf(o.acciones)} acc.</td>
+                  : <td title={o.tamanos.length > 1 ? `Unidades: ${o.tamanos.map(t => nf(t, 2)).join(' + ')} €/pt` : undefined}>{nf(o.tamano, 2)} €/pt</td>}
                 <td>{eur(o.nominal)}</td>
-                <td>{nf(o.precioEntrada, 1)}</td>
-                <td>{nf(o.precioSalida, 1)}</td>
+                <td>{precio(o.precioEntrada)}</td>
+                <td>{precio(o.precioSalida)}</td>
                 <td>{o.motivo === 'abierta' ? '—' : o.motivo}</td>
                 <td className={tono(o.neto)}>{eur(o.neto)}</td>
                 <td>{eur(-o.financiacion)}</td>
+                {acciones && <td>{eur(-o.comision)}</td>}
                 <td className={tono(o.pctCapital)}>{pct(o.pctCapital, 2)}</td>
               </tr>
             ))}

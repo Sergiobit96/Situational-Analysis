@@ -1,0 +1,3024 @@
+{
+ "fuente": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+ "fecha": "2026-10-19",
+ "acciones": [
+  {
+   "ticker": "A",
+   "nombre": "Agilent Technologies",
+   "sector": "Salud",
+   "alta": "2000-06-05"
+  },
+  {
+   "ticker": "AAPL",
+   "nombre": "Apple Inc.",
+   "sector": "Tecnología",
+   "alta": "1982-11-30"
+  },
+  {
+   "ticker": "ABBV",
+   "nombre": "AbbVie",
+   "sector": "Salud",
+   "alta": "2012-12-31"
+  },
+  {
+   "ticker": "ABNB",
+   "nombre": "Airbnb",
+   "sector": "Consumo discrecional",
+   "alta": "2023-09-18"
+  },
+  {
+   "ticker": "ABT",
+   "nombre": "Abbott Laboratories",
+   "sector": "Salud",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "ACGL",
+   "nombre": "Arch Capital Group",
+   "sector": "Financiero",
+   "alta": "2022-11-01"
+  },
+  {
+   "ticker": "ACN",
+   "nombre": "Accenture",
+   "sector": "Tecnología",
+   "alta": "2011-07-06"
+  },
+  {
+   "ticker": "ADBE",
+   "nombre": "Adobe Inc.",
+   "sector": "Tecnología",
+   "alta": "1997-05-05"
+  },
+  {
+   "ticker": "ADI",
+   "nombre": "Analog Devices",
+   "sector": "Tecnología",
+   "alta": "1999-10-12"
+  },
+  {
+   "ticker": "ADM",
+   "nombre": "Archer Daniels Midland",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "ADP",
+   "nombre": "Automatic Data Processing",
+   "sector": "Industria",
+   "alta": "1981-03-31"
+  },
+  {
+   "ticker": "ADSK",
+   "nombre": "Autodesk",
+   "sector": "Tecnología",
+   "alta": "1989-12-01"
+  },
+  {
+   "ticker": "AEE",
+   "nombre": "Ameren",
+   "sector": "Servicios públicos",
+   "alta": "1991-09-19"
+  },
+  {
+   "ticker": "AEP",
+   "nombre": "American Electric Power",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "AES",
+   "nombre": "AES Corporation",
+   "sector": "Servicios públicos",
+   "alta": "1998-10-02"
+  },
+  {
+   "ticker": "AFL",
+   "nombre": "Aflac",
+   "sector": "Financiero",
+   "alta": "1999-05-28"
+  },
+  {
+   "ticker": "AIG",
+   "nombre": "American International Group",
+   "sector": "Financiero",
+   "alta": "1980-03-31"
+  },
+  {
+   "ticker": "AIZ",
+   "nombre": "Assurant",
+   "sector": "Financiero",
+   "alta": "2007-04-10"
+  },
+  {
+   "ticker": "AJG",
+   "nombre": "Arthur J. Gallagher & Co.",
+   "sector": "Financiero",
+   "alta": "2016-05-31"
+  },
+  {
+   "ticker": "AKAM",
+   "nombre": "Akamai Technologies",
+   "sector": "Tecnología",
+   "alta": "2007-07-12"
+  },
+  {
+   "ticker": "ALB",
+   "nombre": "Albemarle Corporation",
+   "sector": "Materiales",
+   "alta": "2016-07-01"
+  },
+  {
+   "ticker": "ALGN",
+   "nombre": "Align Technology",
+   "sector": "Salud",
+   "alta": "2017-06-19"
+  },
+  {
+   "ticker": "ALL",
+   "nombre": "Allstate",
+   "sector": "Financiero",
+   "alta": "1995-07-13"
+  },
+  {
+   "ticker": "ALLE",
+   "nombre": "Allegion",
+   "sector": "Industria",
+   "alta": "2013-12-02"
+  },
+  {
+   "ticker": "AMAT",
+   "nombre": "Applied Materials",
+   "sector": "Tecnología",
+   "alta": "1995-03-16"
+  },
+  {
+   "ticker": "AMCR",
+   "nombre": "Amcor",
+   "sector": "Materiales",
+   "alta": "2019-06-07"
+  },
+  {
+   "ticker": "AMD",
+   "nombre": "Advanced Micro Devices",
+   "sector": "Tecnología",
+   "alta": "2017-03-20"
+  },
+  {
+   "ticker": "AME",
+   "nombre": "Ametek",
+   "sector": "Industria",
+   "alta": "2013-09-23"
+  },
+  {
+   "ticker": "AMGN",
+   "nombre": "Amgen",
+   "sector": "Salud",
+   "alta": "1992-01-02"
+  },
+  {
+   "ticker": "AMP",
+   "nombre": "Ameriprise Financial",
+   "sector": "Financiero",
+   "alta": "2005-10-03"
+  },
+  {
+   "ticker": "AMT",
+   "nombre": "American Tower",
+   "sector": "Inmobiliario",
+   "alta": "2007-11-19"
+  },
+  {
+   "ticker": "AMZN",
+   "nombre": "Amazon",
+   "sector": "Consumo discrecional",
+   "alta": "2005-11-18"
+  },
+  {
+   "ticker": "ANET",
+   "nombre": "Arista Networks",
+   "sector": "Tecnología",
+   "alta": "2018-08-28"
+  },
+  {
+   "ticker": "AON",
+   "nombre": "Aon plc",
+   "sector": "Financiero",
+   "alta": "1996-04-23"
+  },
+  {
+   "ticker": "AOS",
+   "nombre": "A. O. Smith",
+   "sector": "Industria",
+   "alta": "2017-07-26"
+  },
+  {
+   "ticker": "APA",
+   "nombre": "APA Corporation",
+   "sector": "Energía",
+   "alta": "1997-07-28"
+  },
+  {
+   "ticker": "APD",
+   "nombre": "Air Products",
+   "sector": "Materiales",
+   "alta": "1985-04-30"
+  },
+  {
+   "ticker": "APH",
+   "nombre": "Amphenol",
+   "sector": "Tecnología",
+   "alta": "2008-09-30"
+  },
+  {
+   "ticker": "APO",
+   "nombre": "Apollo Global Management",
+   "sector": "Financiero",
+   "alta": "2024-12-23"
+  },
+  {
+   "ticker": "APP",
+   "nombre": "AppLovin",
+   "sector": "Comunicaciones",
+   "alta": "2025-09-22"
+  },
+  {
+   "ticker": "APTV",
+   "nombre": "Aptiv",
+   "sector": "Consumo discrecional",
+   "alta": "2012-12-24"
+  },
+  {
+   "ticker": "ARE",
+   "nombre": "Alexandria Real Estate Equities",
+   "sector": "Inmobiliario",
+   "alta": "2017-03-20"
+  },
+  {
+   "ticker": "ARES",
+   "nombre": "Ares Management",
+   "sector": "Financiero",
+   "alta": "2025-12-11"
+  },
+  {
+   "ticker": "ATO",
+   "nombre": "Atmos Energy",
+   "sector": "Servicios públicos",
+   "alta": "2019-02-15"
+  },
+  {
+   "ticker": "AVGO",
+   "nombre": "Broadcom",
+   "sector": "Tecnología",
+   "alta": "2014-05-08"
+  },
+  {
+   "ticker": "AVY",
+   "nombre": "Avery Dennison",
+   "sector": "Materiales",
+   "alta": "1987-12-31"
+  },
+  {
+   "ticker": "AWK",
+   "nombre": "American Water Works",
+   "sector": "Servicios públicos",
+   "alta": "2016-03-04"
+  },
+  {
+   "ticker": "AXON",
+   "nombre": "Axon Enterprise",
+   "sector": "Industria",
+   "alta": "2023-05-04"
+  },
+  {
+   "ticker": "AXP",
+   "nombre": "American Express",
+   "sector": "Financiero",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "AZO",
+   "nombre": "AutoZone",
+   "sector": "Consumo discrecional",
+   "alta": "1997-01-02"
+  },
+  {
+   "ticker": "BA",
+   "nombre": "Boeing",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "BAC",
+   "nombre": "Bank of America",
+   "sector": "Financiero",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "BALL",
+   "nombre": "Ball Corporation",
+   "sector": "Materiales",
+   "alta": "1984-10-31"
+  },
+  {
+   "ticker": "BAX",
+   "nombre": "Baxter International",
+   "sector": "Salud",
+   "alta": "1972-09-30"
+  },
+  {
+   "ticker": "BBY",
+   "nombre": "Best Buy",
+   "sector": "Consumo discrecional",
+   "alta": "1999-06-29"
+  },
+  {
+   "ticker": "BDX",
+   "nombre": "Becton Dickinson",
+   "sector": "Salud",
+   "alta": "1972-09-30"
+  },
+  {
+   "ticker": "BE",
+   "nombre": "Bloom Energy",
+   "sector": "Industria",
+   "alta": "2026-09-21"
+  },
+  {
+   "ticker": "BEN",
+   "nombre": "Franklin Resources",
+   "sector": "Financiero",
+   "alta": "1998-04-30"
+  },
+  {
+   "ticker": "BF.B",
+   "nombre": "Brown–Forman",
+   "sector": "Consumo básico",
+   "alta": "1982-10-31"
+  },
+  {
+   "ticker": "BG",
+   "nombre": "Bunge Global",
+   "sector": "Consumo básico",
+   "alta": "2023-03-15"
+  },
+  {
+   "ticker": "BIIB",
+   "nombre": "Biogen",
+   "sector": "Salud",
+   "alta": "2003-11-13"
+  },
+  {
+   "ticker": "BKNG",
+   "nombre": "Booking Holdings",
+   "sector": "Consumo discrecional",
+   "alta": "2009-11-06"
+  },
+  {
+   "ticker": "BKR",
+   "nombre": "Baker Hughes",
+   "sector": "Energía",
+   "alta": "2017-07-07"
+  },
+  {
+   "ticker": "BLK",
+   "nombre": "BlackRock",
+   "sector": "Financiero",
+   "alta": "2011-04-04"
+  },
+  {
+   "ticker": "BMY",
+   "nombre": "Bristol Myers Squibb",
+   "sector": "Salud",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "BNY",
+   "nombre": "BNY Mellon",
+   "sector": "Financiero",
+   "alta": "1995-03-31"
+  },
+  {
+   "ticker": "BR",
+   "nombre": "Broadridge Financial Solutions",
+   "sector": "Industria",
+   "alta": "2018-06-18"
+  },
+  {
+   "ticker": "BRK.B",
+   "nombre": "Berkshire Hathaway",
+   "sector": "Financiero",
+   "alta": "2010-02-16"
+  },
+  {
+   "ticker": "BRO",
+   "nombre": "Brown & Brown",
+   "sector": "Financiero",
+   "alta": "2021-09-20"
+  },
+  {
+   "ticker": "BSX",
+   "nombre": "Boston Scientific",
+   "sector": "Salud",
+   "alta": "1995-02-24"
+  },
+  {
+   "ticker": "BX",
+   "nombre": "Blackstone Inc.",
+   "sector": "Financiero",
+   "alta": "2023-09-18"
+  },
+  {
+   "ticker": "BXP",
+   "nombre": "BXP, Inc.",
+   "sector": "Inmobiliario",
+   "alta": "2006-04-03"
+  },
+  {
+   "ticker": "C",
+   "nombre": "Citigroup",
+   "sector": "Financiero",
+   "alta": "1988-05-31"
+  },
+  {
+   "ticker": "CAH",
+   "nombre": "Cardinal Health",
+   "sector": "Salud",
+   "alta": "1997-05-27"
+  },
+  {
+   "ticker": "CARR",
+   "nombre": "Carrier Global",
+   "sector": "Industria",
+   "alta": "2020-04-03"
+  },
+  {
+   "ticker": "CASY",
+   "nombre": "Casey's",
+   "sector": "Consumo básico",
+   "alta": "2026-04-09"
+  },
+  {
+   "ticker": "CAT",
+   "nombre": "Caterpillar Inc.",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "CB",
+   "nombre": "Chubb Limited",
+   "sector": "Financiero",
+   "alta": "2010-07-15"
+  },
+  {
+   "ticker": "CBOE",
+   "nombre": "Cboe Global Markets",
+   "sector": "Financiero",
+   "alta": "2017-03-01"
+  },
+  {
+   "ticker": "CBRE",
+   "nombre": "CBRE Group",
+   "sector": "Inmobiliario",
+   "alta": "2006-11-10"
+  },
+  {
+   "ticker": "CCI",
+   "nombre": "Crown Castle",
+   "sector": "Inmobiliario",
+   "alta": "2012-03-14"
+  },
+  {
+   "ticker": "CCL",
+   "nombre": "Carnival Corporation",
+   "sector": "Consumo discrecional",
+   "alta": "1998-12-22"
+  },
+  {
+   "ticker": "CDNS",
+   "nombre": "Cadence Design Systems",
+   "sector": "Tecnología",
+   "alta": "2017-09-18"
+  },
+  {
+   "ticker": "CDW",
+   "nombre": "CDW Corporation",
+   "sector": "Tecnología",
+   "alta": "2019-09-23"
+  },
+  {
+   "ticker": "CEG",
+   "nombre": "Constellation Energy",
+   "sector": "Servicios públicos",
+   "alta": "2022-02-02"
+  },
+  {
+   "ticker": "CF",
+   "nombre": "CF Industries",
+   "sector": "Materiales",
+   "alta": "2008-08-27"
+  },
+  {
+   "ticker": "CFG",
+   "nombre": "Citizens Financial Group",
+   "sector": "Financiero",
+   "alta": "2016-01-29"
+  },
+  {
+   "ticker": "CHD",
+   "nombre": "Church & Dwight",
+   "sector": "Consumo básico",
+   "alta": "2015-12-29"
+  },
+  {
+   "ticker": "CHRW",
+   "nombre": "C.H. Robinson",
+   "sector": "Industria",
+   "alta": "2007-03-02"
+  },
+  {
+   "ticker": "CHTR",
+   "nombre": "Charter Communications",
+   "sector": "Comunicaciones",
+   "alta": "2016-09-08"
+  },
+  {
+   "ticker": "CI",
+   "nombre": "Cigna",
+   "sector": "Salud",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "CIEN",
+   "nombre": "Ciena",
+   "sector": "Tecnología",
+   "alta": "2026-02-09"
+  },
+  {
+   "ticker": "CINF",
+   "nombre": "Cincinnati Financial",
+   "sector": "Financiero",
+   "alta": "1997-12-18"
+  },
+  {
+   "ticker": "CL",
+   "nombre": "Colgate-Palmolive",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "CLX",
+   "nombre": "Clorox",
+   "sector": "Consumo básico",
+   "alta": "1969-03-31"
+  },
+  {
+   "ticker": "CMCSA",
+   "nombre": "Comcast",
+   "sector": "Comunicaciones",
+   "alta": "2002-11-19"
+  },
+  {
+   "ticker": "CME",
+   "nombre": "CME Group",
+   "sector": "Financiero",
+   "alta": "2006-08-11"
+  },
+  {
+   "ticker": "CMG",
+   "nombre": "Chipotle Mexican Grill",
+   "sector": "Consumo discrecional",
+   "alta": "2011-04-28"
+  },
+  {
+   "ticker": "CMI",
+   "nombre": "Cummins",
+   "sector": "Industria",
+   "alta": "1965-03-31"
+  },
+  {
+   "ticker": "CMS",
+   "nombre": "CMS Energy",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "CNC",
+   "nombre": "Centene Corporation",
+   "sector": "Salud",
+   "alta": "2016-03-30"
+  },
+  {
+   "ticker": "CNP",
+   "nombre": "CenterPoint Energy",
+   "sector": "Servicios públicos",
+   "alta": "1985-07-31"
+  },
+  {
+   "ticker": "COF",
+   "nombre": "Capital One",
+   "sector": "Financiero",
+   "alta": "1998-07-01"
+  },
+  {
+   "ticker": "COHR",
+   "nombre": "Coherent Corp.",
+   "sector": "Tecnología",
+   "alta": "2026-03-23"
+  },
+  {
+   "ticker": "COIN",
+   "nombre": "Coinbase",
+   "sector": "Financiero",
+   "alta": "2025-05-19"
+  },
+  {
+   "ticker": "COO",
+   "nombre": "Cooper Companies (The)",
+   "sector": "Salud",
+   "alta": "2016-09-23"
+  },
+  {
+   "ticker": "COP",
+   "nombre": "ConocoPhillips",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "COR",
+   "nombre": "Cencora",
+   "sector": "Salud",
+   "alta": "2001-08-30"
+  },
+  {
+   "ticker": "COST",
+   "nombre": "Costco",
+   "sector": "Consumo básico",
+   "alta": "1993-10-01"
+  },
+  {
+   "ticker": "CPAY",
+   "nombre": "Corpay",
+   "sector": "Financiero",
+   "alta": "2018-06-20"
+  },
+  {
+   "ticker": "CPRT",
+   "nombre": "Copart",
+   "sector": "Industria",
+   "alta": "2018-07-02"
+  },
+  {
+   "ticker": "CPT",
+   "nombre": "Camden Property Trust",
+   "sector": "Inmobiliario",
+   "alta": "2022-04-04"
+  },
+  {
+   "ticker": "CRH",
+   "nombre": "CRH plc",
+   "sector": "Materiales",
+   "alta": "2025-12-22"
+  },
+  {
+   "ticker": "CRL",
+   "nombre": "Charles River Laboratories",
+   "sector": "Salud",
+   "alta": "2021-05-14"
+  },
+  {
+   "ticker": "CRM",
+   "nombre": "Salesforce",
+   "sector": "Tecnología",
+   "alta": "2008-09-15"
+  },
+  {
+   "ticker": "CRWD",
+   "nombre": "CrowdStrike",
+   "sector": "Tecnología",
+   "alta": "2024-06-24"
+  },
+  {
+   "ticker": "CSCO",
+   "nombre": "Cisco",
+   "sector": "Tecnología",
+   "alta": "1993-12-01"
+  },
+  {
+   "ticker": "CSGP",
+   "nombre": "CoStar Group",
+   "sector": "Inmobiliario",
+   "alta": "2022-09-19"
+  },
+  {
+   "ticker": "CSX",
+   "nombre": "CSX Corporation",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "CTAS",
+   "nombre": "Cintas",
+   "sector": "Industria",
+   "alta": "2001-03-01"
+  },
+  {
+   "ticker": "CTSH",
+   "nombre": "Cognizant",
+   "sector": "Tecnología",
+   "alta": "2006-11-17"
+  },
+  {
+   "ticker": "CVNA",
+   "nombre": "Carvana",
+   "sector": "Consumo discrecional",
+   "alta": "2025-12-22"
+  },
+  {
+   "ticker": "CVS",
+   "nombre": "CVS Health",
+   "sector": "Salud",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "CVX",
+   "nombre": "Chevron Corporation",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "D",
+   "nombre": "Dominion Energy",
+   "sector": "Servicios públicos",
+   "alta": "2016-11-30"
+  },
+  {
+   "ticker": "DAL",
+   "nombre": "Delta Air Lines",
+   "sector": "Industria",
+   "alta": "2013-09-11"
+  },
+  {
+   "ticker": "DASH",
+   "nombre": "DoorDash",
+   "sector": "Consumo discrecional",
+   "alta": "2025-03-24"
+  },
+  {
+   "ticker": "DD",
+   "nombre": "DuPont",
+   "sector": "Industria",
+   "alta": "2019-06-03"
+  },
+  {
+   "ticker": "DDOG",
+   "nombre": "Datadog",
+   "sector": "Tecnología",
+   "alta": "2025-07-09"
+  },
+  {
+   "ticker": "DE",
+   "nombre": "Deere & Company",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "DECK",
+   "nombre": "Deckers Brands",
+   "sector": "Consumo discrecional",
+   "alta": "2024-03-18"
+  },
+  {
+   "ticker": "DELL",
+   "nombre": "Dell Technologies",
+   "sector": "Tecnología",
+   "alta": "2024-09-23"
+  },
+  {
+   "ticker": "DG",
+   "nombre": "Dollar General",
+   "sector": "Consumo básico",
+   "alta": "2012-12-03"
+  },
+  {
+   "ticker": "DGX",
+   "nombre": "Quest Diagnostics",
+   "sector": "Salud",
+   "alta": "2002-12-12"
+  },
+  {
+   "ticker": "DHI",
+   "nombre": "D. R. Horton",
+   "sector": "Consumo discrecional",
+   "alta": "2005-06-22"
+  },
+  {
+   "ticker": "DHR",
+   "nombre": "Danaher Corporation",
+   "sector": "Salud",
+   "alta": "1998-11-18"
+  },
+  {
+   "ticker": "DIS",
+   "nombre": "Walt Disney Company (The)",
+   "sector": "Comunicaciones",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "DLR",
+   "nombre": "Digital Realty",
+   "sector": "Inmobiliario",
+   "alta": "2016-05-18"
+  },
+  {
+   "ticker": "DLTR",
+   "nombre": "Dollar Tree",
+   "sector": "Consumo básico",
+   "alta": "2011-12-19"
+  },
+  {
+   "ticker": "DOC",
+   "nombre": "Healthpeak Properties",
+   "sector": "Inmobiliario",
+   "alta": "2008-03-31"
+  },
+  {
+   "ticker": "DOV",
+   "nombre": "Dover Corporation",
+   "sector": "Industria",
+   "alta": "1985-10-31"
+  },
+  {
+   "ticker": "DOW",
+   "nombre": "Dow Inc.",
+   "sector": "Materiales",
+   "alta": "2019-04-01"
+  },
+  {
+   "ticker": "DPZ",
+   "nombre": "Domino's",
+   "sector": "Consumo discrecional",
+   "alta": "2020-05-12"
+  },
+  {
+   "ticker": "DRI",
+   "nombre": "Darden Restaurants",
+   "sector": "Consumo discrecional",
+   "alta": "1995-05-31"
+  },
+  {
+   "ticker": "DTE",
+   "nombre": "DTE Energy",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "DUK",
+   "nombre": "Duke Energy",
+   "sector": "Servicios públicos",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "DVA",
+   "nombre": "DaVita",
+   "sector": "Salud",
+   "alta": "2008-07-31"
+  },
+  {
+   "ticker": "DVN",
+   "nombre": "Devon Energy",
+   "sector": "Energía",
+   "alta": "2000-08-30"
+  },
+  {
+   "ticker": "DXCM",
+   "nombre": "Dexcom",
+   "sector": "Salud",
+   "alta": "2020-05-12"
+  },
+  {
+   "ticker": "EBAY",
+   "nombre": "eBay Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "2002-07-22"
+  },
+  {
+   "ticker": "ECHO",
+   "nombre": "EchoStar",
+   "sector": "Comunicaciones",
+   "alta": "2026-03-23"
+  },
+  {
+   "ticker": "ECL",
+   "nombre": "Ecolab",
+   "sector": "Materiales",
+   "alta": "1989-01-31"
+  },
+  {
+   "ticker": "ED",
+   "nombre": "Consolidated Edison",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "EFX",
+   "nombre": "Equifax",
+   "sector": "Industria",
+   "alta": "1997-06-19"
+  },
+  {
+   "ticker": "EG",
+   "nombre": "Everest Group",
+   "sector": "Financiero",
+   "alta": "2017-06-19"
+  },
+  {
+   "ticker": "EIX",
+   "nombre": "Edison International",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "EL",
+   "nombre": "Estée Lauder Companies (The)",
+   "sector": "Consumo básico",
+   "alta": "2006-01-05"
+  },
+  {
+   "ticker": "ELV",
+   "nombre": "Elevance Health",
+   "sector": "Salud",
+   "alta": "2002-07-25"
+  },
+  {
+   "ticker": "EME",
+   "nombre": "Emcor",
+   "sector": "Industria",
+   "alta": "2025-09-22"
+  },
+  {
+   "ticker": "EMR",
+   "nombre": "Emerson Electric",
+   "sector": "Industria",
+   "alta": "1965-03-31"
+  },
+  {
+   "ticker": "EOG",
+   "nombre": "EOG Resources",
+   "sector": "Energía",
+   "alta": "2000-11-02"
+  },
+  {
+   "ticker": "EQIX",
+   "nombre": "Equinix",
+   "sector": "Inmobiliario",
+   "alta": "2015-03-20"
+  },
+  {
+   "ticker": "EQT",
+   "nombre": "EQT Corporation",
+   "sector": "Energía",
+   "alta": "2022-10-03"
+  },
+  {
+   "ticker": "ERIE",
+   "nombre": "Erie Indemnity",
+   "sector": "Financiero",
+   "alta": "2024-09-23"
+  },
+  {
+   "ticker": "ES",
+   "nombre": "Eversource Energy",
+   "sector": "Servicios públicos",
+   "alta": "2009-07-24"
+  },
+  {
+   "ticker": "ESS",
+   "nombre": "Essex Property Trust",
+   "sector": "Inmobiliario",
+   "alta": "2014-04-02"
+  },
+  {
+   "ticker": "ETN",
+   "nombre": "Eaton Corporation",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "ETR",
+   "nombre": "Entergy",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "EVRG",
+   "nombre": "Evergy",
+   "sector": "Servicios públicos",
+   "alta": "2018-06-05"
+  },
+  {
+   "ticker": "EW",
+   "nombre": "Edwards Lifesciences",
+   "sector": "Salud",
+   "alta": "2011-04-01"
+  },
+  {
+   "ticker": "EXC",
+   "nombre": "Exelon",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "EXE",
+   "nombre": "Expand Energy",
+   "sector": "Energía",
+   "alta": "2025-03-24"
+  },
+  {
+   "ticker": "EXPD",
+   "nombre": "Expeditors International",
+   "sector": "Industria",
+   "alta": "2007-10-10"
+  },
+  {
+   "ticker": "EXPE",
+   "nombre": "Expedia Group",
+   "sector": "Consumo discrecional",
+   "alta": "2007-10-02"
+  },
+  {
+   "ticker": "EXR",
+   "nombre": "Extra Space Storage",
+   "sector": "Inmobiliario",
+   "alta": "2016-01-19"
+  },
+  {
+   "ticker": "F",
+   "nombre": "Ford Motor Company",
+   "sector": "Consumo discrecional",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "FANG",
+   "nombre": "Diamondback Energy",
+   "sector": "Energía",
+   "alta": "2018-12-03"
+  },
+  {
+   "ticker": "FAST",
+   "nombre": "Fastenal",
+   "sector": "Industria",
+   "alta": "2008-09-15"
+  },
+  {
+   "ticker": "FCX",
+   "nombre": "Freeport-McMoRan",
+   "sector": "Materiales",
+   "alta": "2011-07-01"
+  },
+  {
+   "ticker": "FDS",
+   "nombre": "FactSet",
+   "sector": "Financiero",
+   "alta": "2021-12-20"
+  },
+  {
+   "ticker": "FDX",
+   "nombre": "FedEx",
+   "sector": "Industria",
+   "alta": "1980-12-31"
+  },
+  {
+   "ticker": "FDXF",
+   "nombre": "FedEx Freight",
+   "sector": "Industria",
+   "alta": "2026-06-01"
+  },
+  {
+   "ticker": "FE",
+   "nombre": "FirstEnergy",
+   "sector": "Servicios públicos",
+   "alta": "1997-11-28"
+  },
+  {
+   "ticker": "FERG",
+   "nombre": "Ferguson Enterprises",
+   "sector": "Industria",
+   "alta": "2026-08-05"
+  },
+  {
+   "ticker": "FFIV",
+   "nombre": "F5, Inc.",
+   "sector": "Tecnología",
+   "alta": "2010-12-20"
+  },
+  {
+   "ticker": "FICO",
+   "nombre": "Fair Isaac",
+   "sector": "Tecnología",
+   "alta": "2023-03-20"
+  },
+  {
+   "ticker": "FIS",
+   "nombre": "Fidelity National Information Services",
+   "sector": "Financiero",
+   "alta": "2006-11-10"
+  },
+  {
+   "ticker": "FISV",
+   "nombre": "Fiserv",
+   "sector": "Financiero",
+   "alta": "2001-04-02"
+  },
+  {
+   "ticker": "FITB",
+   "nombre": "Fifth Third Bancorp",
+   "sector": "Financiero",
+   "alta": "1996-03-29"
+  },
+  {
+   "ticker": "FIX",
+   "nombre": "Comfort Systems USA",
+   "sector": "Industria",
+   "alta": "2025-12-22"
+  },
+  {
+   "ticker": "FLEX",
+   "nombre": "Flex Ltd.",
+   "sector": "Tecnología",
+   "alta": "2026-06-22"
+  },
+  {
+   "ticker": "FOX",
+   "nombre": "Fox Corporation (Class B)",
+   "sector": "Comunicaciones",
+   "alta": "2019-03-19"
+  },
+  {
+   "ticker": "FOXA",
+   "nombre": "Fox Corporation (Class A)",
+   "sector": "Comunicaciones",
+   "alta": "2019-03-19"
+  },
+  {
+   "ticker": "FRT",
+   "nombre": "Federal Realty Investment Trust",
+   "sector": "Inmobiliario",
+   "alta": "2016-02-01"
+  },
+  {
+   "ticker": "FSLR",
+   "nombre": "First Solar",
+   "sector": "Tecnología",
+   "alta": "2022-12-19"
+  },
+  {
+   "ticker": "FTNT",
+   "nombre": "Fortinet",
+   "sector": "Tecnología",
+   "alta": "2018-10-11"
+  },
+  {
+   "ticker": "FTV",
+   "nombre": "Fortive",
+   "sector": "Industria",
+   "alta": "2016-07-01"
+  },
+  {
+   "ticker": "GD",
+   "nombre": "General Dynamics",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "GDDY",
+   "nombre": "GoDaddy",
+   "sector": "Tecnología",
+   "alta": "2024-06-24"
+  },
+  {
+   "ticker": "GE",
+   "nombre": "GE Aerospace",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "GEHC",
+   "nombre": "GE HealthCare",
+   "sector": "Salud",
+   "alta": "2023-01-04"
+  },
+  {
+   "ticker": "GEN",
+   "nombre": "Gen Digital",
+   "sector": "Tecnología",
+   "alta": "2003-03-25"
+  },
+  {
+   "ticker": "GEV",
+   "nombre": "GE Vernova",
+   "sector": "Industria",
+   "alta": "2024-04-02"
+  },
+  {
+   "ticker": "GILD",
+   "nombre": "Gilead Sciences",
+   "sector": "Salud",
+   "alta": "2004-07-01"
+  },
+  {
+   "ticker": "GIS",
+   "nombre": "General Mills",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "GL",
+   "nombre": "Globe Life",
+   "sector": "Financiero",
+   "alta": "1989-04-30"
+  },
+  {
+   "ticker": "GLW",
+   "nombre": "Corning Inc.",
+   "sector": "Tecnología",
+   "alta": "1995-02-27"
+  },
+  {
+   "ticker": "GM",
+   "nombre": "General Motors",
+   "sector": "Consumo discrecional",
+   "alta": "2013-06-06"
+  },
+  {
+   "ticker": "GNRC",
+   "nombre": "Generac",
+   "sector": "Industria",
+   "alta": "2021-03-22"
+  },
+  {
+   "ticker": "GOOG",
+   "nombre": "Alphabet Inc. (Class C)",
+   "sector": "Comunicaciones",
+   "alta": "2014-04-03"
+  },
+  {
+   "ticker": "GOOGL",
+   "nombre": "Alphabet Inc. (Class A)",
+   "sector": "Comunicaciones",
+   "alta": "2006-04-03"
+  },
+  {
+   "ticker": "GPC",
+   "nombre": "Genuine Parts Company",
+   "sector": "Consumo discrecional",
+   "alta": "1973-12-31"
+  },
+  {
+   "ticker": "GPN",
+   "nombre": "Global Payments",
+   "sector": "Financiero",
+   "alta": "2016-04-25"
+  },
+  {
+   "ticker": "GRMN",
+   "nombre": "Garmin",
+   "sector": "Consumo discrecional",
+   "alta": "2012-12-12"
+  },
+  {
+   "ticker": "GS",
+   "nombre": "Goldman Sachs",
+   "sector": "Financiero",
+   "alta": "2002-07-22"
+  },
+  {
+   "ticker": "GWW",
+   "nombre": "W. W. Grainger",
+   "sector": "Industria",
+   "alta": "1981-06-30"
+  },
+  {
+   "ticker": "HAL",
+   "nombre": "Halliburton",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "HAS",
+   "nombre": "Hasbro",
+   "sector": "Consumo discrecional",
+   "alta": "1984-09-30"
+  },
+  {
+   "ticker": "HBAN",
+   "nombre": "Huntington Bancshares",
+   "sector": "Financiero",
+   "alta": "1997-08-28"
+  },
+  {
+   "ticker": "HCA",
+   "nombre": "HCA Healthcare",
+   "sector": "Salud",
+   "alta": "2015-01-27"
+  },
+  {
+   "ticker": "HD",
+   "nombre": "Home Depot (The)",
+   "sector": "Consumo discrecional",
+   "alta": "1988-03-31"
+  },
+  {
+   "ticker": "HIG",
+   "nombre": "Hartford (The)",
+   "sector": "Financiero",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "HII",
+   "nombre": "Huntington Ingalls Industries",
+   "sector": "Industria",
+   "alta": "2018-01-03"
+  },
+  {
+   "ticker": "HLT",
+   "nombre": "Hilton Worldwide",
+   "sector": "Consumo discrecional",
+   "alta": "2017-06-19"
+  },
+  {
+   "ticker": "HON",
+   "nombre": "Honeywell Technologies",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "HONA",
+   "nombre": "Honeywell Aerospace",
+   "sector": "Industria",
+   "alta": "2026-06-29"
+  },
+  {
+   "ticker": "HOOD",
+   "nombre": "Robinhood Markets",
+   "sector": "Financiero",
+   "alta": "2025-09-22"
+  },
+  {
+   "ticker": "HPE",
+   "nombre": "Hewlett Packard Enterprise",
+   "sector": "Tecnología",
+   "alta": "2015-11-02"
+  },
+  {
+   "ticker": "HPQ",
+   "nombre": "HP Inc.",
+   "sector": "Tecnología",
+   "alta": "1974-12-31"
+  },
+  {
+   "ticker": "HRL",
+   "nombre": "Hormel Foods",
+   "sector": "Consumo básico",
+   "alta": "2009-03-04"
+  },
+  {
+   "ticker": "HSIC",
+   "nombre": "Henry Schein",
+   "sector": "Salud",
+   "alta": "2015-03-17"
+  },
+  {
+   "ticker": "HST",
+   "nombre": "Host Hotels & Resorts",
+   "sector": "Inmobiliario",
+   "alta": "2007-03-20"
+  },
+  {
+   "ticker": "HSY",
+   "nombre": "Hershey Company (The)",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "HUBB",
+   "nombre": "Hubbell Incorporated",
+   "sector": "Industria",
+   "alta": "2023-10-18"
+  },
+  {
+   "ticker": "HUM",
+   "nombre": "Humana",
+   "sector": "Salud",
+   "alta": "2012-12-10"
+  },
+  {
+   "ticker": "HWM",
+   "nombre": "Howmet Aerospace",
+   "sector": "Industria",
+   "alta": "2016-10-21"
+  },
+  {
+   "ticker": "IBKR",
+   "nombre": "Interactive Brokers",
+   "sector": "Financiero",
+   "alta": "2025-08-28"
+  },
+  {
+   "ticker": "IBM",
+   "nombre": "IBM",
+   "sector": "Tecnología",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "ICE",
+   "nombre": "Intercontinental Exchange",
+   "sector": "Financiero",
+   "alta": "2007-09-26"
+  },
+  {
+   "ticker": "IDXX",
+   "nombre": "Idexx Laboratories",
+   "sector": "Salud",
+   "alta": "2017-01-05"
+  },
+  {
+   "ticker": "IEX",
+   "nombre": "IDEX Corporation",
+   "sector": "Industria",
+   "alta": "2019-08-09"
+  },
+  {
+   "ticker": "IFF",
+   "nombre": "International Flavors & Fragrances",
+   "sector": "Materiales",
+   "alta": "1976-03-31"
+  },
+  {
+   "ticker": "ILMN",
+   "nombre": "Illumina, Inc.",
+   "sector": "Salud",
+   "alta": "2026-09-21"
+  },
+  {
+   "ticker": "INCY",
+   "nombre": "Incyte",
+   "sector": "Salud",
+   "alta": "2017-02-28"
+  },
+  {
+   "ticker": "INTC",
+   "nombre": "Intel",
+   "sector": "Tecnología",
+   "alta": "1976-12-31"
+  },
+  {
+   "ticker": "INTU",
+   "nombre": "Intuit",
+   "sector": "Tecnología",
+   "alta": "2000-12-05"
+  },
+  {
+   "ticker": "INVH",
+   "nombre": "Invitation Homes",
+   "sector": "Inmobiliario",
+   "alta": "2022-09-19"
+  },
+  {
+   "ticker": "IP",
+   "nombre": "International Paper",
+   "sector": "Materiales",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "IQV",
+   "nombre": "IQVIA",
+   "sector": "Salud",
+   "alta": "2017-08-29"
+  },
+  {
+   "ticker": "IR",
+   "nombre": "Ingersoll Rand",
+   "sector": "Industria",
+   "alta": "2020-03-03"
+  },
+  {
+   "ticker": "IRM",
+   "nombre": "Iron Mountain",
+   "sector": "Inmobiliario",
+   "alta": "2009-01-06"
+  },
+  {
+   "ticker": "ISRG",
+   "nombre": "Intuitive Surgical",
+   "sector": "Salud",
+   "alta": "2008-06-02"
+  },
+  {
+   "ticker": "IT",
+   "nombre": "Gartner",
+   "sector": "Tecnología",
+   "alta": "2017-04-05"
+  },
+  {
+   "ticker": "ITW",
+   "nombre": "Illinois Tool Works",
+   "sector": "Industria",
+   "alta": "1986-02-28"
+  },
+  {
+   "ticker": "IVZ",
+   "nombre": "Invesco",
+   "sector": "Financiero",
+   "alta": "2008-08-21"
+  },
+  {
+   "ticker": "J",
+   "nombre": "Jacobs Solutions",
+   "sector": "Industria",
+   "alta": "2007-10-26"
+  },
+  {
+   "ticker": "JBHT",
+   "nombre": "J.B. Hunt",
+   "sector": "Industria",
+   "alta": "2015-07-01"
+  },
+  {
+   "ticker": "JBL",
+   "nombre": "Jabil",
+   "sector": "Tecnología",
+   "alta": "2023-12-18"
+  },
+  {
+   "ticker": "JCI",
+   "nombre": "Johnson Controls",
+   "sector": "Industria",
+   "alta": "2010-08-27"
+  },
+  {
+   "ticker": "JKHY",
+   "nombre": "Jack Henry & Associates",
+   "sector": "Financiero",
+   "alta": "2018-11-13"
+  },
+  {
+   "ticker": "JNJ",
+   "nombre": "Johnson & Johnson",
+   "sector": "Salud",
+   "alta": "1973-06-30"
+  },
+  {
+   "ticker": "JPM",
+   "nombre": "JPMorgan Chase",
+   "sector": "Financiero",
+   "alta": "1975-06-30"
+  },
+  {
+   "ticker": "KDP",
+   "nombre": "Keurig Dr Pepper",
+   "sector": "Consumo básico",
+   "alta": "2022-06-21"
+  },
+  {
+   "ticker": "KEY",
+   "nombre": "KeyCorp",
+   "sector": "Financiero",
+   "alta": "1994-03-01"
+  },
+  {
+   "ticker": "KEYS",
+   "nombre": "Keysight Technologies",
+   "sector": "Tecnología",
+   "alta": "2018-11-06"
+  },
+  {
+   "ticker": "KHC",
+   "nombre": "Kraft Heinz",
+   "sector": "Consumo básico",
+   "alta": "2015-07-06"
+  },
+  {
+   "ticker": "KIM",
+   "nombre": "Kimco Realty",
+   "sector": "Inmobiliario",
+   "alta": "2006-04-04"
+  },
+  {
+   "ticker": "KKR",
+   "nombre": "KKR & Co.",
+   "sector": "Financiero",
+   "alta": "2024-06-24"
+  },
+  {
+   "ticker": "KLAC",
+   "nombre": "KLA Corporation",
+   "sector": "Tecnología",
+   "alta": "1997-09-30"
+  },
+  {
+   "ticker": "KMB",
+   "nombre": "Kimberly-Clark",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "KMI",
+   "nombre": "Kinder Morgan",
+   "sector": "Energía",
+   "alta": "2012-05-25"
+  },
+  {
+   "ticker": "KO",
+   "nombre": "Coca-Cola Company (The)",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "KR",
+   "nombre": "Kroger",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "KVUE",
+   "nombre": "Kenvue",
+   "sector": "Consumo básico",
+   "alta": "2023-08-25"
+  },
+  {
+   "ticker": "L",
+   "nombre": "Loews Corporation",
+   "sector": "Financiero",
+   "alta": "1995-05-31"
+  },
+  {
+   "ticker": "LDOS",
+   "nombre": "Leidos",
+   "sector": "Industria",
+   "alta": "2019-08-09"
+  },
+  {
+   "ticker": "LEN",
+   "nombre": "Lennar",
+   "sector": "Consumo discrecional",
+   "alta": "2005-10-04"
+  },
+  {
+   "ticker": "LH",
+   "nombre": "Labcorp",
+   "sector": "Salud",
+   "alta": "2004-11-01"
+  },
+  {
+   "ticker": "LHX",
+   "nombre": "L3Harris",
+   "sector": "Industria",
+   "alta": "2008-09-22"
+  },
+  {
+   "ticker": "LII",
+   "nombre": "Lennox International",
+   "sector": "Industria",
+   "alta": "2024-12-23"
+  },
+  {
+   "ticker": "LIN",
+   "nombre": "Linde plc",
+   "sector": "Materiales",
+   "alta": "1992-07-01"
+  },
+  {
+   "ticker": "LITE",
+   "nombre": "Lumentum",
+   "sector": "Tecnología",
+   "alta": "2026-03-23"
+  },
+  {
+   "ticker": "LLY",
+   "nombre": "Lilly (Eli)",
+   "sector": "Salud",
+   "alta": "1970-12-31"
+  },
+  {
+   "ticker": "LMT",
+   "nombre": "Lockheed Martin",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "LNT",
+   "nombre": "Alliant Energy",
+   "sector": "Servicios públicos",
+   "alta": "2016-07-01"
+  },
+  {
+   "ticker": "LOW",
+   "nombre": "Lowe's",
+   "sector": "Consumo discrecional",
+   "alta": "1984-02-29"
+  },
+  {
+   "ticker": "LRCX",
+   "nombre": "Lam Research",
+   "sector": "Tecnología",
+   "alta": "2012-06-29"
+  },
+  {
+   "ticker": "LULU",
+   "nombre": "Lululemon Athletica",
+   "sector": "Consumo discrecional",
+   "alta": "2023-10-18"
+  },
+  {
+   "ticker": "LUV",
+   "nombre": "Southwest Airlines",
+   "sector": "Industria",
+   "alta": "1994-07-01"
+  },
+  {
+   "ticker": "LVS",
+   "nombre": "Las Vegas Sands",
+   "sector": "Consumo discrecional",
+   "alta": "2019-10-03"
+  },
+  {
+   "ticker": "LYB",
+   "nombre": "LyondellBasell",
+   "sector": "Materiales",
+   "alta": "2012-09-05"
+  },
+  {
+   "ticker": "LYV",
+   "nombre": "Live Nation Entertainment",
+   "sector": "Comunicaciones",
+   "alta": "2019-12-23"
+  },
+  {
+   "ticker": "MA",
+   "nombre": "Mastercard",
+   "sector": "Financiero",
+   "alta": "2008-07-18"
+  },
+  {
+   "ticker": "MAA",
+   "nombre": "Mid-America Apartment Communities",
+   "sector": "Inmobiliario",
+   "alta": "2016-12-02"
+  },
+  {
+   "ticker": "MAR",
+   "nombre": "Marriott International",
+   "sector": "Consumo discrecional",
+   "alta": "1998-05-29"
+  },
+  {
+   "ticker": "MAS",
+   "nombre": "Masco",
+   "sector": "Industria",
+   "alta": "1981-06-30"
+  },
+  {
+   "ticker": "MCD",
+   "nombre": "McDonald's",
+   "sector": "Consumo discrecional",
+   "alta": "1970-06-30"
+  },
+  {
+   "ticker": "MCHP",
+   "nombre": "Microchip Technology",
+   "sector": "Tecnología",
+   "alta": "2007-09-07"
+  },
+  {
+   "ticker": "MCK",
+   "nombre": "McKesson",
+   "sector": "Salud",
+   "alta": "1999-01-13"
+  },
+  {
+   "ticker": "MCO",
+   "nombre": "Moody's Corporation",
+   "sector": "Financiero",
+   "alta": "1998-07-01"
+  },
+  {
+   "ticker": "MDLZ",
+   "nombre": "Mondelez International",
+   "sector": "Consumo básico",
+   "alta": "2012-10-02"
+  },
+  {
+   "ticker": "MDT",
+   "nombre": "Medtronic",
+   "sector": "Salud",
+   "alta": "1986-10-31"
+  },
+  {
+   "ticker": "MET",
+   "nombre": "MetLife",
+   "sector": "Financiero",
+   "alta": "2000-12-11"
+  },
+  {
+   "ticker": "META",
+   "nombre": "Meta Platforms",
+   "sector": "Comunicaciones",
+   "alta": "2013-12-23"
+  },
+  {
+   "ticker": "MGM",
+   "nombre": "MGM Resorts",
+   "sector": "Consumo discrecional",
+   "alta": "2017-07-26"
+  },
+  {
+   "ticker": "MKC",
+   "nombre": "McCormick & Company",
+   "sector": "Consumo básico",
+   "alta": "2003-03-20"
+  },
+  {
+   "ticker": "MLM",
+   "nombre": "Martin Marietta Materials",
+   "sector": "Materiales",
+   "alta": "2014-07-02"
+  },
+  {
+   "ticker": "MMM",
+   "nombre": "3M",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "MNST",
+   "nombre": "Monster Beverage",
+   "sector": "Consumo básico",
+   "alta": "2012-06-28"
+  },
+  {
+   "ticker": "MO",
+   "nombre": "Altria",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "MOS",
+   "nombre": "Mosaic Company (The)",
+   "sector": "Materiales",
+   "alta": "2011-09-26"
+  },
+  {
+   "ticker": "MPC",
+   "nombre": "Marathon Petroleum",
+   "sector": "Energía",
+   "alta": "2011-07-01"
+  },
+  {
+   "ticker": "MPWR",
+   "nombre": "Monolithic Power Systems",
+   "sector": "Tecnología",
+   "alta": "2021-02-12"
+  },
+  {
+   "ticker": "MRK",
+   "nombre": "Merck & Co.",
+   "sector": "Salud",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "MRNA",
+   "nombre": "Moderna",
+   "sector": "Salud",
+   "alta": "2021-07-21"
+  },
+  {
+   "ticker": "MRSH",
+   "nombre": "Marsh McLennan",
+   "sector": "Financiero",
+   "alta": "1987-08-31"
+  },
+  {
+   "ticker": "MRVL",
+   "nombre": "Marvell Technology",
+   "sector": "Tecnología",
+   "alta": "2026-06-22"
+  },
+  {
+   "ticker": "MS",
+   "nombre": "Morgan Stanley",
+   "sector": "Financiero",
+   "alta": "1993-07-29"
+  },
+  {
+   "ticker": "MSCI",
+   "nombre": "MSCI",
+   "sector": "Financiero",
+   "alta": "2018-04-04"
+  },
+  {
+   "ticker": "MSFT",
+   "nombre": "Microsoft",
+   "sector": "Tecnología",
+   "alta": "1994-06-01"
+  },
+  {
+   "ticker": "MSI",
+   "nombre": "Motorola Solutions",
+   "sector": "Tecnología",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "MTB",
+   "nombre": "M&T Bank",
+   "sector": "Financiero",
+   "alta": "2004-02-23"
+  },
+  {
+   "ticker": "MTD",
+   "nombre": "Mettler Toledo",
+   "sector": "Salud",
+   "alta": "2016-09-06"
+  },
+  {
+   "ticker": "MU",
+   "nombre": "Micron Technology",
+   "sector": "Tecnología",
+   "alta": "1994-09-27"
+  },
+  {
+   "ticker": "NCLH",
+   "nombre": "Norwegian Cruise Line Holdings",
+   "sector": "Consumo discrecional",
+   "alta": "2017-10-13"
+  },
+  {
+   "ticker": "NDAQ",
+   "nombre": "Nasdaq, Inc.",
+   "sector": "Financiero",
+   "alta": "2008-10-22"
+  },
+  {
+   "ticker": "NDSN",
+   "nombre": "Nordson Corporation",
+   "sector": "Industria",
+   "alta": "2022-02-15"
+  },
+  {
+   "ticker": "NEE",
+   "nombre": "NextEra Energy",
+   "sector": "Servicios públicos",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "NEM",
+   "nombre": "Newmont",
+   "sector": "Materiales",
+   "alta": "1969-06-30"
+  },
+  {
+   "ticker": "NFLX",
+   "nombre": "Netflix",
+   "sector": "Comunicaciones",
+   "alta": "2010-12-20"
+  },
+  {
+   "ticker": "NI",
+   "nombre": "NiSource",
+   "sector": "Servicios públicos",
+   "alta": "2000-11-02"
+  },
+  {
+   "ticker": "NKE",
+   "nombre": "Nike, Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "1988-11-30"
+  },
+  {
+   "ticker": "NOC",
+   "nombre": "Northrop Grumman",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "NOW",
+   "nombre": "ServiceNow",
+   "sector": "Tecnología",
+   "alta": "2019-11-21"
+  },
+  {
+   "ticker": "NRG",
+   "nombre": "NRG Energy",
+   "sector": "Servicios públicos",
+   "alta": "2010-01-29"
+  },
+  {
+   "ticker": "NSC",
+   "nombre": "Norfolk Southern",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "NTAP",
+   "nombre": "NetApp",
+   "sector": "Tecnología",
+   "alta": "1999-06-25"
+  },
+  {
+   "ticker": "NTRS",
+   "nombre": "Northern Trust",
+   "sector": "Financiero",
+   "alta": "1998-01-30"
+  },
+  {
+   "ticker": "NUE",
+   "nombre": "Nucor",
+   "sector": "Materiales",
+   "alta": "1985-04-30"
+  },
+  {
+   "ticker": "NVDA",
+   "nombre": "Nvidia",
+   "sector": "Tecnología",
+   "alta": "2001-11-30"
+  },
+  {
+   "ticker": "NVR",
+   "nombre": "NVR, Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "2019-09-26"
+  },
+  {
+   "ticker": "NWS",
+   "nombre": "News Corp (Class B)",
+   "sector": "Comunicaciones",
+   "alta": "2015-09-18"
+  },
+  {
+   "ticker": "NWSA",
+   "nombre": "News Corp (Class A)",
+   "sector": "Comunicaciones",
+   "alta": "2013-08-01"
+  },
+  {
+   "ticker": "NXPI",
+   "nombre": "NXP Semiconductors",
+   "sector": "Tecnología",
+   "alta": "2021-03-22"
+  },
+  {
+   "ticker": "O",
+   "nombre": "Realty Income",
+   "sector": "Inmobiliario",
+   "alta": "2015-04-07"
+  },
+  {
+   "ticker": "ODFL",
+   "nombre": "Old Dominion",
+   "sector": "Industria",
+   "alta": "2019-12-09"
+  },
+  {
+   "ticker": "OKE",
+   "nombre": "Oneok",
+   "sector": "Energía",
+   "alta": "2010-03-15"
+  },
+  {
+   "ticker": "OMC",
+   "nombre": "Omnicom Group",
+   "sector": "Comunicaciones",
+   "alta": "1997-12-31"
+  },
+  {
+   "ticker": "ON",
+   "nombre": "ON Semiconductor",
+   "sector": "Tecnología",
+   "alta": "2022-06-21"
+  },
+  {
+   "ticker": "ORCL",
+   "nombre": "Oracle Corporation",
+   "sector": "Tecnología",
+   "alta": "1989-08-31"
+  },
+  {
+   "ticker": "ORLY",
+   "nombre": "O'Reilly Automotive",
+   "sector": "Consumo discrecional",
+   "alta": "2009-03-27"
+  },
+  {
+   "ticker": "OTIS",
+   "nombre": "Otis Worldwide",
+   "sector": "Industria",
+   "alta": "2020-04-03"
+  },
+  {
+   "ticker": "OXY",
+   "nombre": "Occidental Petroleum",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "P",
+   "nombre": "Everpure",
+   "sector": "Tecnología",
+   "alta": "2026-09-21"
+  },
+  {
+   "ticker": "PANW",
+   "nombre": "Palo Alto Networks",
+   "sector": "Tecnología",
+   "alta": "2023-06-20"
+  },
+  {
+   "ticker": "PAYX",
+   "nombre": "Paychex",
+   "sector": "Industria",
+   "alta": "1998-10-01"
+  },
+  {
+   "ticker": "PCAR",
+   "nombre": "Paccar",
+   "sector": "Industria",
+   "alta": "1980-12-31"
+  },
+  {
+   "ticker": "PCG",
+   "nombre": "PG&E Corporation",
+   "sector": "Servicios públicos",
+   "alta": "2022-10-03"
+  },
+  {
+   "ticker": "PEG",
+   "nombre": "Public Service Enterprise Group",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "PEP",
+   "nombre": "PepsiCo",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "PFE",
+   "nombre": "Pfizer",
+   "sector": "Salud",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "PFG",
+   "nombre": "Principal Financial Group",
+   "sector": "Financiero",
+   "alta": "2002-07-22"
+  },
+  {
+   "ticker": "PG",
+   "nombre": "Procter & Gamble",
+   "sector": "Consumo básico",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "PGR",
+   "nombre": "Progressive Corporation",
+   "sector": "Financiero",
+   "alta": "1997-08-04"
+  },
+  {
+   "ticker": "PH",
+   "nombre": "Parker Hannifin",
+   "sector": "Industria",
+   "alta": "1985-11-30"
+  },
+  {
+   "ticker": "PHM",
+   "nombre": "PulteGroup",
+   "sector": "Consumo discrecional",
+   "alta": "1984-04-30"
+  },
+  {
+   "ticker": "PKG",
+   "nombre": "Packaging Corporation of America",
+   "sector": "Materiales",
+   "alta": "2017-07-26"
+  },
+  {
+   "ticker": "PLD",
+   "nombre": "Prologis",
+   "sector": "Inmobiliario",
+   "alta": "2003-07-17"
+  },
+  {
+   "ticker": "PLTR",
+   "nombre": "Palantir Technologies",
+   "sector": "Tecnología",
+   "alta": "2024-09-23"
+  },
+  {
+   "ticker": "PM",
+   "nombre": "Philip Morris International",
+   "sector": "Consumo básico",
+   "alta": "2008-03-31"
+  },
+  {
+   "ticker": "PNC",
+   "nombre": "PNC Financial Services",
+   "sector": "Financiero",
+   "alta": "1988-04-30"
+  },
+  {
+   "ticker": "PNR",
+   "nombre": "Pentair",
+   "sector": "Industria",
+   "alta": "2012-10-01"
+  },
+  {
+   "ticker": "PNW",
+   "nombre": "Pinnacle West Capital",
+   "sector": "Servicios públicos",
+   "alta": "1999-10-04"
+  },
+  {
+   "ticker": "PODD",
+   "nombre": "Insulet Corporation",
+   "sector": "Salud",
+   "alta": "2023-03-15"
+  },
+  {
+   "ticker": "PPG",
+   "nombre": "PPG Industries",
+   "sector": "Materiales",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "PPL",
+   "nombre": "PPL Corporation",
+   "sector": "Servicios públicos",
+   "alta": "2001-10-01"
+  },
+  {
+   "ticker": "PRU",
+   "nombre": "Prudential Financial",
+   "sector": "Financiero",
+   "alta": "2002-07-22"
+  },
+  {
+   "ticker": "PSA",
+   "nombre": "Public Storage",
+   "sector": "Inmobiliario",
+   "alta": "2005-08-19"
+  },
+  {
+   "ticker": "PSX",
+   "nombre": "Phillips 66",
+   "sector": "Energía",
+   "alta": "2012-05-01"
+  },
+  {
+   "ticker": "PTC",
+   "nombre": "PTC Inc.",
+   "sector": "Tecnología",
+   "alta": "2021-04-20"
+  },
+  {
+   "ticker": "PWR",
+   "nombre": "Quanta Services",
+   "sector": "Industria",
+   "alta": "2009-07-01"
+  },
+  {
+   "ticker": "PYPL",
+   "nombre": "PayPal",
+   "sector": "Financiero",
+   "alta": "2015-07-20"
+  },
+  {
+   "ticker": "Q",
+   "nombre": "Qnity Electronics",
+   "sector": "Tecnología",
+   "alta": "2025-11-03"
+  },
+  {
+   "ticker": "QCOM",
+   "nombre": "Qualcomm",
+   "sector": "Tecnología",
+   "alta": "1999-07-22"
+  },
+  {
+   "ticker": "RCL",
+   "nombre": "Royal Caribbean Group",
+   "sector": "Consumo discrecional",
+   "alta": "2014-12-05"
+  },
+  {
+   "ticker": "RDDT",
+   "nombre": "Reddit",
+   "sector": "Comunicaciones",
+   "alta": "2026-08-18"
+  },
+  {
+   "ticker": "REG",
+   "nombre": "Regency Centers",
+   "sector": "Inmobiliario",
+   "alta": "2017-03-02"
+  },
+  {
+   "ticker": "REGN",
+   "nombre": "Regeneron Pharmaceuticals",
+   "sector": "Salud",
+   "alta": "2013-05-01"
+  },
+  {
+   "ticker": "RF",
+   "nombre": "Regions Financial Corporation",
+   "sector": "Financiero",
+   "alta": "1998-08-28"
+  },
+  {
+   "ticker": "RJF",
+   "nombre": "Raymond James Financial",
+   "sector": "Financiero",
+   "alta": "2017-03-20"
+  },
+  {
+   "ticker": "RL",
+   "nombre": "Ralph Lauren Corporation",
+   "sector": "Consumo discrecional",
+   "alta": "2007-02-02"
+  },
+  {
+   "ticker": "RMD",
+   "nombre": "ResMed|",
+   "sector": "Salud",
+   "alta": "2017-07-26"
+  },
+  {
+   "ticker": "ROK",
+   "nombre": "Rockwell Automation",
+   "sector": "Industria",
+   "alta": "2000-03-12"
+  },
+  {
+   "ticker": "ROL",
+   "nombre": "Rollins, Inc.",
+   "sector": "Industria",
+   "alta": "2018-10-01"
+  },
+  {
+   "ticker": "ROP",
+   "nombre": "Roper Technologies",
+   "sector": "Tecnología",
+   "alta": "2009-12-23"
+  },
+  {
+   "ticker": "ROST",
+   "nombre": "Ross Stores",
+   "sector": "Consumo discrecional",
+   "alta": "2009-12-21"
+  },
+  {
+   "ticker": "RSG",
+   "nombre": "Republic Services",
+   "sector": "Industria",
+   "alta": "2008-12-05"
+  },
+  {
+   "ticker": "RTX",
+   "nombre": "RTX Corporation",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "RVTY",
+   "nombre": "Revvity",
+   "sector": "Salud",
+   "alta": "1985-05-31"
+  },
+  {
+   "ticker": "SBAC",
+   "nombre": "SBA Communications",
+   "sector": "Inmobiliario",
+   "alta": "2017-09-01"
+  },
+  {
+   "ticker": "SBUX",
+   "nombre": "Starbucks",
+   "sector": "Consumo discrecional",
+   "alta": "2000-06-07"
+  },
+  {
+   "ticker": "SCHW",
+   "nombre": "Charles Schwab Corporation",
+   "sector": "Financiero",
+   "alta": "1997-06-02"
+  },
+  {
+   "ticker": "SHW",
+   "nombre": "Sherwin-Williams",
+   "sector": "Materiales",
+   "alta": "1964-06-30"
+  },
+  {
+   "ticker": "SJM",
+   "nombre": "J.M. Smucker Company (The)",
+   "sector": "Consumo básico",
+   "alta": "2008-11-06"
+  },
+  {
+   "ticker": "SKYD",
+   "nombre": "Skydance Corporation",
+   "sector": "Comunicaciones",
+   "alta": "1994-09-30"
+  },
+  {
+   "ticker": "SLB",
+   "nombre": "Schlumberger",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "SMCI",
+   "nombre": "Supermicro",
+   "sector": "Tecnología",
+   "alta": "2024-03-18"
+  },
+  {
+   "ticker": "SNA",
+   "nombre": "Snap-on",
+   "sector": "Industria",
+   "alta": "1982-09-30"
+  },
+  {
+   "ticker": "SNDK",
+   "nombre": "Sandisk",
+   "sector": "Tecnología",
+   "alta": "2025-11-28"
+  },
+  {
+   "ticker": "SNPS",
+   "nombre": "Synopsys",
+   "sector": "Tecnología",
+   "alta": "2017-03-16"
+  },
+  {
+   "ticker": "SO",
+   "nombre": "Southern Company",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "SOLV",
+   "nombre": "Solventum",
+   "sector": "Salud",
+   "alta": "2024-04-01"
+  },
+  {
+   "ticker": "SPG",
+   "nombre": "Simon Property Group",
+   "sector": "Inmobiliario",
+   "alta": "2002-06-26"
+  },
+  {
+   "ticker": "SPGI",
+   "nombre": "S&P Global",
+   "sector": "Financiero",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "SRE",
+   "nombre": "Sempra",
+   "sector": "Servicios públicos",
+   "alta": "2017-03-17"
+  },
+  {
+   "ticker": "STE",
+   "nombre": "Steris",
+   "sector": "Salud",
+   "alta": "2019-12-23"
+  },
+  {
+   "ticker": "STLD",
+   "nombre": "Steel Dynamics",
+   "sector": "Materiales",
+   "alta": "2022-12-22"
+  },
+  {
+   "ticker": "STT",
+   "nombre": "State Street Corporation",
+   "sector": "Financiero",
+   "alta": "2003-03-14"
+  },
+  {
+   "ticker": "STX",
+   "nombre": "Seagate Technology",
+   "sector": "Tecnología",
+   "alta": "2012-07-02"
+  },
+  {
+   "ticker": "STZ",
+   "nombre": "Constellation Brands",
+   "sector": "Consumo básico",
+   "alta": "2005-07-01"
+  },
+  {
+   "ticker": "SW",
+   "nombre": "Smurfit Westrock",
+   "sector": "Materiales",
+   "alta": "2024-07-08"
+  },
+  {
+   "ticker": "SWK",
+   "nombre": "Stanley Black & Decker",
+   "sector": "Industria",
+   "alta": "1982-09-30"
+  },
+  {
+   "ticker": "SWKS",
+   "nombre": "Skyworks Solutions",
+   "sector": "Tecnología",
+   "alta": "2015-03-12"
+  },
+  {
+   "ticker": "SYF",
+   "nombre": "Synchrony Financial",
+   "sector": "Financiero",
+   "alta": "2015-11-18"
+  },
+  {
+   "ticker": "SYK",
+   "nombre": "Stryker Corporation",
+   "sector": "Salud",
+   "alta": "2000-12-12"
+  },
+  {
+   "ticker": "SYY",
+   "nombre": "Sysco",
+   "sector": "Consumo básico",
+   "alta": "1986-12-31"
+  },
+  {
+   "ticker": "T",
+   "nombre": "AT&T",
+   "sector": "Comunicaciones",
+   "alta": "1983-11-30"
+  },
+  {
+   "ticker": "TDG",
+   "nombre": "TransDigm Group",
+   "sector": "Industria",
+   "alta": "2016-06-03"
+  },
+  {
+   "ticker": "TDY",
+   "nombre": "Teledyne Technologies",
+   "sector": "Tecnología",
+   "alta": "2020-06-22"
+  },
+  {
+   "ticker": "TECH",
+   "nombre": "Bio-Techne",
+   "sector": "Salud",
+   "alta": "2021-08-30"
+  },
+  {
+   "ticker": "TEL",
+   "nombre": "TE Connectivity",
+   "sector": "Tecnología",
+   "alta": "2011-10-17"
+  },
+  {
+   "ticker": "TER",
+   "nombre": "Teradyne",
+   "sector": "Tecnología",
+   "alta": "2020-09-21"
+  },
+  {
+   "ticker": "TFC",
+   "nombre": "Truist Financial",
+   "sector": "Financiero",
+   "alta": "1997-12-04"
+  },
+  {
+   "ticker": "TGT",
+   "nombre": "Target Corporation",
+   "sector": "Consumo básico",
+   "alta": "1976-12-31"
+  },
+  {
+   "ticker": "TJX",
+   "nombre": "TJX Companies",
+   "sector": "Consumo discrecional",
+   "alta": "1985-09-30"
+  },
+  {
+   "ticker": "TKO",
+   "nombre": "TKO Group Holdings",
+   "sector": "Comunicaciones",
+   "alta": "2025-03-24"
+  },
+  {
+   "ticker": "TMO",
+   "nombre": "Thermo Fisher Scientific",
+   "sector": "Salud",
+   "alta": "2004-08-03"
+  },
+  {
+   "ticker": "TMUS",
+   "nombre": "T-Mobile US",
+   "sector": "Comunicaciones",
+   "alta": "2019-07-15"
+  },
+  {
+   "ticker": "TPL",
+   "nombre": "Texas Pacific Land Corporation",
+   "sector": "Energía",
+   "alta": "2024-11-26"
+  },
+  {
+   "ticker": "TPR",
+   "nombre": "Tapestry, Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "2004-09-01"
+  },
+  {
+   "ticker": "TRGP",
+   "nombre": "Targa Resources",
+   "sector": "Energía",
+   "alta": "2022-10-12"
+  },
+  {
+   "ticker": "TRMB",
+   "nombre": "Trimble Inc.",
+   "sector": "Tecnología",
+   "alta": "2021-01-21"
+  },
+  {
+   "ticker": "TROW",
+   "nombre": "T. Rowe Price",
+   "sector": "Financiero",
+   "alta": "2019-07-29"
+  },
+  {
+   "ticker": "TRV",
+   "nombre": "Travelers Companies (The)",
+   "sector": "Financiero",
+   "alta": "2002-08-21"
+  },
+  {
+   "ticker": "TSCO",
+   "nombre": "Tractor Supply",
+   "sector": "Consumo discrecional",
+   "alta": "2014-01-24"
+  },
+  {
+   "ticker": "TSLA",
+   "nombre": "Tesla, Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "2020-12-21"
+  },
+  {
+   "ticker": "TSN",
+   "nombre": "Tyson Foods",
+   "sector": "Consumo básico",
+   "alta": "2005-08-10"
+  },
+  {
+   "ticker": "TT",
+   "nombre": "Trane Technologies",
+   "sector": "Industria",
+   "alta": "2010-11-17"
+  },
+  {
+   "ticker": "TTWO",
+   "nombre": "Take-Two Interactive",
+   "sector": "Comunicaciones",
+   "alta": "2018-03-19"
+  },
+  {
+   "ticker": "TWLO",
+   "nombre": "Twilio",
+   "sector": "Tecnología",
+   "alta": "2026-10-06"
+  },
+  {
+   "ticker": "TXN",
+   "nombre": "Texas Instruments",
+   "sector": "Tecnología",
+   "alta": "2001-03-12"
+  },
+  {
+   "ticker": "TXT",
+   "nombre": "Textron",
+   "sector": "Industria",
+   "alta": "1978-12-31"
+  },
+  {
+   "ticker": "TYL",
+   "nombre": "Tyler Technologies",
+   "sector": "Tecnología",
+   "alta": "2020-06-22"
+  },
+  {
+   "ticker": "UAL",
+   "nombre": "United Airlines Holdings",
+   "sector": "Industria",
+   "alta": "2015-09-03"
+  },
+  {
+   "ticker": "UBER",
+   "nombre": "Uber",
+   "sector": "Industria",
+   "alta": "2023-12-18"
+  },
+  {
+   "ticker": "UDR",
+   "nombre": "UDR, Inc.",
+   "sector": "Inmobiliario",
+   "alta": "2016-03-07"
+  },
+  {
+   "ticker": "UHS",
+   "nombre": "Universal Health Services",
+   "sector": "Salud",
+   "alta": "2014-09-20"
+  },
+  {
+   "ticker": "ULTA",
+   "nombre": "Ulta Beauty",
+   "sector": "Consumo discrecional",
+   "alta": "2016-04-18"
+  },
+  {
+   "ticker": "UNH",
+   "nombre": "UnitedHealth Group",
+   "sector": "Salud",
+   "alta": "1994-07-01"
+  },
+  {
+   "ticker": "UNP",
+   "nombre": "Union Pacific Corporation",
+   "sector": "Industria",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "UPS",
+   "nombre": "United Parcel Service",
+   "sector": "Industria",
+   "alta": "2002-07-22"
+  },
+  {
+   "ticker": "URI",
+   "nombre": "United Rentals",
+   "sector": "Industria",
+   "alta": "2014-09-20"
+  },
+  {
+   "ticker": "USB",
+   "nombre": "U.S. Bancorp",
+   "sector": "Financiero",
+   "alta": "1999-11-01"
+  },
+  {
+   "ticker": "V",
+   "nombre": "Visa Inc.",
+   "sector": "Financiero",
+   "alta": "2009-12-21"
+  },
+  {
+   "ticker": "VEEV",
+   "nombre": "Veeva Systems",
+   "sector": "Salud",
+   "alta": "2026-05-07"
+  },
+  {
+   "ticker": "VICI",
+   "nombre": "Vici Properties",
+   "sector": "Inmobiliario",
+   "alta": "2022-06-08"
+  },
+  {
+   "ticker": "VLO",
+   "nombre": "Valero Energy",
+   "sector": "Energía",
+   "alta": "2002-12-20"
+  },
+  {
+   "ticker": "VLTO",
+   "nombre": "Veralto",
+   "sector": "Industria",
+   "alta": "2023-10-02"
+  },
+  {
+   "ticker": "VMC",
+   "nombre": "Vulcan Materials Company",
+   "sector": "Materiales",
+   "alta": "1999-06-30"
+  },
+  {
+   "ticker": "VMRK",
+   "nombre": "Vivmark Residential",
+   "sector": "Inmobiliario",
+   "alta": "2001-12-03"
+  },
+  {
+   "ticker": "VRSK",
+   "nombre": "Verisk Analytics",
+   "sector": "Industria",
+   "alta": "2015-10-08"
+  },
+  {
+   "ticker": "VRSN",
+   "nombre": "Verisign",
+   "sector": "Tecnología",
+   "alta": "2006-02-01"
+  },
+  {
+   "ticker": "VRT",
+   "nombre": "Vertiv",
+   "sector": "Industria",
+   "alta": "2026-03-23"
+  },
+  {
+   "ticker": "VRTX",
+   "nombre": "Vertex Pharmaceuticals",
+   "sector": "Salud",
+   "alta": "2013-09-23"
+  },
+  {
+   "ticker": "VST",
+   "nombre": "Vistra Corp.",
+   "sector": "Servicios públicos",
+   "alta": "2024-05-08"
+  },
+  {
+   "ticker": "VTR",
+   "nombre": "Ventas",
+   "sector": "Inmobiliario",
+   "alta": "2009-03-04"
+  },
+  {
+   "ticker": "VTRS",
+   "nombre": "Viatris",
+   "sector": "Salud",
+   "alta": "2004-04-23"
+  },
+  {
+   "ticker": "VYLR",
+   "nombre": "Vylor",
+   "sector": "Consumo básico",
+   "alta": "2026-10-01"
+  },
+  {
+   "ticker": "VZ",
+   "nombre": "Verizon",
+   "sector": "Comunicaciones",
+   "alta": "1983-11-30"
+  },
+  {
+   "ticker": "WAB",
+   "nombre": "Wabtec",
+   "sector": "Industria",
+   "alta": "2019-02-27"
+  },
+  {
+   "ticker": "WAT",
+   "nombre": "Waters Corporation",
+   "sector": "Salud",
+   "alta": "2002-01-02"
+  },
+  {
+   "ticker": "WDAY",
+   "nombre": "Workday, Inc.",
+   "sector": "Tecnología",
+   "alta": "2024-12-23"
+  },
+  {
+   "ticker": "WDC",
+   "nombre": "Western Digital",
+   "sector": "Tecnología",
+   "alta": "2009-07-01"
+  },
+  {
+   "ticker": "WEC",
+   "nombre": "WEC Energy Group",
+   "sector": "Servicios públicos",
+   "alta": "2008-10-31"
+  },
+  {
+   "ticker": "WELL",
+   "nombre": "Welltower",
+   "sector": "Inmobiliario",
+   "alta": "2009-01-30"
+  },
+  {
+   "ticker": "WFC",
+   "nombre": "Wells Fargo",
+   "sector": "Financiero",
+   "alta": "1976-06-30"
+  },
+  {
+   "ticker": "WM",
+   "nombre": "Waste Management",
+   "sector": "Industria",
+   "alta": "1998-08-31"
+  },
+  {
+   "ticker": "WMB",
+   "nombre": "Williams Companies",
+   "sector": "Energía",
+   "alta": "1975-03-31"
+  },
+  {
+   "ticker": "WMT",
+   "nombre": "Walmart",
+   "sector": "Consumo básico",
+   "alta": "1982-08-31"
+  },
+  {
+   "ticker": "WRB",
+   "nombre": "W. R. Berkley Corporation",
+   "sector": "Financiero",
+   "alta": "2019-12-05"
+  },
+  {
+   "ticker": "WSM",
+   "nombre": "Williams-Sonoma, Inc.",
+   "sector": "Consumo discrecional",
+   "alta": "2025-03-24"
+  },
+  {
+   "ticker": "WST",
+   "nombre": "West Pharmaceutical Services",
+   "sector": "Salud",
+   "alta": "2020-05-22"
+  },
+  {
+   "ticker": "WTW",
+   "nombre": "Willis Towers Watson",
+   "sector": "Financiero",
+   "alta": "2016-01-05"
+  },
+  {
+   "ticker": "WY",
+   "nombre": "Weyerhaeuser",
+   "sector": "Inmobiliario",
+   "alta": "1979-10-01"
+  },
+  {
+   "ticker": "WYNN",
+   "nombre": "Wynn Resorts",
+   "sector": "Consumo discrecional",
+   "alta": "2008-11-14"
+  },
+  {
+   "ticker": "XEL",
+   "nombre": "Xcel Energy",
+   "sector": "Servicios públicos",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "XOM",
+   "nombre": "ExxonMobil",
+   "sector": "Energía",
+   "alta": "1957-03-04"
+  },
+  {
+   "ticker": "XYL",
+   "nombre": "Xylem Inc.",
+   "sector": "Industria",
+   "alta": "2011-11-01"
+  },
+  {
+   "ticker": "XYZ",
+   "nombre": "Block, Inc.",
+   "sector": "Financiero",
+   "alta": "2025-07-23"
+  },
+  {
+   "ticker": "YUM",
+   "nombre": "Yum! Brands",
+   "sector": "Consumo discrecional",
+   "alta": "1997-10-06"
+  },
+  {
+   "ticker": "ZBH",
+   "nombre": "Zimmer Biomet",
+   "sector": "Salud",
+   "alta": "2001-08-07"
+  },
+  {
+   "ticker": "ZBRA",
+   "nombre": "Zebra Technologies",
+   "sector": "Tecnología",
+   "alta": "2019-12-23"
+  },
+  {
+   "ticker": "ZTS",
+   "nombre": "Zoetis",
+   "sector": "Salud",
+   "alta": "2013-06-21"
+  }
+ ]
+}

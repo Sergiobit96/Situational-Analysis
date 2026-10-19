@@ -2399,9 +2399,27 @@ const mt5 = process.env.NODE_ENV !== 'production' && process.platform === 'win32
 // cada petición, aunque falle, cuenta en el límite por minuto que comparten los bots.
 let igHistoricoParado = { hasta: 0, error: null }
 
-async function velasIg(ticker, tf, inicio, fin) {
+// Un mercado suelto de IG (ig:EPIC) que es uno de los fijos, o la misma divisa con otro
+// tamaño de contrato (CS.D.EURUSD.CFD.IP y CS.D.EURUSD.CECM.IP cotizan igual), tira de lo
+// grabado y del respaldo de ese fijo. No los que IG da en otra unidad (`escala`: la plata y
+// el crudo, en centavos): su histórico de IG de suelto va sin pasar a dólares. Devuelve el
+// ticker fijo, o null si es un suelto sin equivalente.
+function fijoDeIg(ticker) {
+  const epic = epicDeMercadoIg(ticker)
+  if (!epic) return ticker
+  const epics = ig?.estado().epics ?? {}
+  const sinEscala = t => epics[t] && !(epics[t].escala && epics[t].escala !== 1)
+  const mismo = Object.keys(epics).find(t => epics[t].epic === epic)
+  if (mismo) return sinEscala(mismo) ? mismo : null
+  const divisa = epic.match(/^CS\.D\.([A-Z]{6})\.[A-Z0-9]+\.IP$/)?.[1]
+  return divisa && sinEscala(divisa) && epics[divisa].epic.startsWith(`CS.D.${divisa}.`) ? divisa : null
+}
+
+async function velasIg(tickerPedido, tf, inicio, fin) {
   const { minutos } = TEMPORALIDADES[tf]
   const { res: resolucion } = IG_RESOLUCION[tf]
+  // lo de IG va con el ticker pedido (su epic); lo grabado y el respaldo, con el del fijo
+  const ticker = fijoDeIg(tickerPedido)
   const trozos = []
   const partes = new Set()
   let aviso = null
@@ -2410,7 +2428,7 @@ async function velasIg(ticker, tf, inicio, fin) {
   let conDuka = false
 
   const grabados = []
-  if (grabacion && !epicDeMercadoIg(ticker)) {
+  if (grabacion && ticker) {
     for (const [a, b] of tramosEnteros(grabacion.cubiertos(ticker), minutos)) {
       const x = Math.max(a, inicio), y = Math.min(b, fin)
       if (x < y) grabados.push([x, y])
@@ -2424,7 +2442,7 @@ async function velasIg(ticker, tf, inicio, fin) {
   for (const [a, b] of intervalosPendientes(grabados, inicio, fin)) {
     try {
       if (Date.now() < igHistoricoParado.hasta) throw igHistoricoParado.error
-      const velas = await ig.velasEntre(ticker, tf, a, b)
+      const velas = await ig.velasEntre(tickerPedido, tf, a, b)
       if (velas.length) { trozos.push(velas); partes.add(`histórico ${resolucion}`) }
     } catch (err) {
       if (Date.now() >= igHistoricoParado.hasta) {
@@ -2432,7 +2450,7 @@ async function velasIg(ticker, tf, inicio, fin) {
         else if (/limita las peticiones/.test(err.message)) igHistoricoParado = { hasta: Date.now() + 60_000, error: err }
       }
       sinIg = true
-      const r = await respaldo(ticker, tf, a, b)
+      const r = ticker ? await respaldo(ticker, tf, a, b) : { velas: [], partes: [], conDuka: false }
       conDuka ||= r.conDuka
       if (!r.velas.length) { error = err; aviso ??= err.message; continue }
       trozos.push(r.velas)
@@ -2453,7 +2471,7 @@ async function velasIg(ticker, tf, inicio, fin) {
     // sin IG ni Dukascopy, una página vacía (un fin de semana, con Yahoo, que solo trae la
     // sesión) se salta de una vez hasta lo último que haya antes. Dukascopy va 24 h: con él,
     // saltar se comería lo que tiene fuera de la sesión.
-    previa: sinIg && !conDuka && !velas.length ? previaSinIg(ticker, inicio) : null,
+    previa: ticker && sinIg && !conDuka && !velas.length ? previaSinIg(ticker, inicio) : null,
   }
 }
 
@@ -2466,7 +2484,7 @@ function previaSinIg(ticker, t) {
     while (lo < hi) { const m = (lo + hi) >> 1; if (velas[m].time < t) lo = m + 1; else hi = m }
     if (lo > 0) candidatas.push(velas[lo - 1].time)
   }
-  if (grabacion && !epicDeMercadoIg(ticker)) {
+  if (grabacion) {
     const tramo = grabacion.cubiertos(ticker).filter(([a]) => a < t).at(-1)
     if (tramo) candidatas.push(Math.min(tramo[1], t) - 60)
   }
@@ -2476,12 +2494,22 @@ function previaSinIg(ticker, t) {
 // Segundos por vela de cada serie de Dukascopy (TEMPORALIDADES[tf].duka)
 const SEGUNDOS_SERIE = { m1: 60, m5: 300, m15: 900, m30: 1800, h1: 3600 }
 
+// Lo que hay en Dukascopy para el respaldo del gráfico de IG: los índices y metales de
+// YF_TO_DUKASCOPY, sin el crudo, que es otro contrato (60 dólares por debajo), y las divisas,
+// a menos de un pip de IG (medido el 19-oct-2026; es medio diferencial: IG da el precio
+// medio y Dukascopy el de compra). Las materias primas no: cada una lleva su propio desfase
+// fijo, de otro vencimiento (del −2,5 % del café al +6,3 % del gas), y el azúcar va en otra
+// unidad.
+const DUKA_RESPALDO_IG = {
+  ...Object.fromEntries(Object.entries(YF_TO_DUKASCOPY).filter(([t]) => t !== 'USOIL')),
+  EURUSD: 'eurusd', GBPUSD: 'gbpusd', USDJPY: 'usdjpy', AUDUSD: 'audusd', USDCAD: 'usdcad', USDCHF: 'usdchf',
+}
+
 // Lo que IG no da de [a, b), agrupado con la rejilla del gráfico, de la mejor fuente a la
 // peor, cada una desde donde se acaba la anterior:
-//   · el CFD de Dukascopy: 24 h y años de histórico, a la par del de IG (medido a 5 min en
-//     oct-2026: DAX +1,0 de media, S&P +0,3, Nasdaq −0,6, FTSE +0,3, Russell +0,2, oro
-//     +0,3) salvo en el Dow (+8) y el Nikkei (+38). Va una hora por detrás. Su crudo es otro
-//     contrato (60 dólares por debajo) y no se usa;
+//   · el CFD de Dukascopy (DUKA_RESPALDO_IG): 24 h y años de histórico, a la par del de IG
+//     (medido a 5 min en oct-2026: DAX +1,0 de media, S&P +0,3, Nasdaq −0,6, FTSE +0,3,
+//     Russell +0,2, oro +0,3) salvo en el Dow (+8) y el Nikkei (+38). Va una hora por detrás;
 //   · el contado de Yahoo de la carpeta de recoger_yahoo.py: solo la sesión (Dow +4, sin
 //     Nikkei), de 1 min y, más atrás, de 5;
 //   · y lo grabado del directo, desde su primera vela.
@@ -2491,7 +2519,7 @@ async function respaldo(ticker, tf, a, b) {
   const partes = []
   let crudas = []
   let conDuka = false
-  const instrument = ticker !== 'USOIL' ? YF_TO_DUKASCOPY[ticker] : null
+  const instrument = DUKA_RESPALDO_IG[ticker]
   if (instrument && !dukaCaido()) {
     try {
       crudas = await obtenerTramoDukascopy(instrument, conf.duka, a, b)
@@ -2500,7 +2528,7 @@ async function respaldo(ticker, tf, a, b) {
     if (crudas.length) partes.push('Dukascopy')
   }
   const desde = crudas.length ? crudas[crudas.length - 1].time + SEGUNDOS_SERIE[conf.duka] : a
-  const grabadas = grabacion && !epicDeMercadoIg(ticker) ? grabacion.m1Entre(ticker, desde, b) : []
+  const grabadas = grabacion ? grabacion.m1Entre(ticker, desde, b) : []
   const hastaGrabadas = grabadas[0]?.time ?? b
   const entre = velas => (velas ?? []).filter(v => v.time >= desde && v.time < hastaGrabadas)
   const de1 = entre(velasYahooLocales(ticker, '1min'))

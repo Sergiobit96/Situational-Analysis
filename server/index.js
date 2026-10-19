@@ -2392,10 +2392,8 @@ const mt5 = process.env.NODE_ENV !== 'production' && process.platform === 'win32
   : null
 
 // Una página del gráfico de IG. Lo grabado del directo (ver la grabación, más abajo) sale de
-// disco sin gastar cupo; los ratos sin grabar, del histórico de IG. Si IG no lo da (sin cupo,
-// casi siempre), el contado de Yahoo de la carpeta de recoger_yahoo.py, que solo trae la
-// sesión y va a la par del CFD salvo en el Dow (+4 de media) y el Nikkei (+40, por eso no
-// está), con lo poco que haya grabado en ese rato encima.
+// disco sin gastar cupo; los ratos sin grabar, del histórico de IG, y si IG no lo da (sin
+// cupo, casi siempre), de Dukascopy y de Yahoo (ver respaldo).
 //
 // IG se deja de pedir media hora si dice que no queda cupo, y un minuto si va muy deprisa:
 // cada petición, aunque falle, cuenta en el límite por minuto que comparten los bots.
@@ -2409,6 +2407,7 @@ async function velasIg(ticker, tf, inicio, fin) {
   let aviso = null
   let error = null
   let sinIg = false
+  let conDuka = false
 
   const grabados = []
   if (grabacion && !epicDeMercadoIg(ticker)) {
@@ -2433,12 +2432,15 @@ async function velasIg(ticker, tf, inicio, fin) {
         else if (/limita las peticiones/.test(err.message)) igHistoricoParado = { hasta: Date.now() + 60_000, error: err }
       }
       sinIg = true
-      const r = respaldoYahoo(ticker, minutos, a, b)
-      aviso = r.yahoo ? `${err.message}: lo no grabado sale del contado de Yahoo, solo la sesión` : (aviso ?? err.message)
-      if (!r.velas.length) { error = err; continue }
+      const r = await respaldo(ticker, tf, a, b)
+      conDuka ||= r.conDuka
+      if (!r.velas.length) { error = err; aviso ??= err.message; continue }
       trozos.push(r.velas)
-      if (r.grabadas) partes.add('directo grabado')
-      if (r.yahoo) partes.add('contado de Yahoo')
+      for (const p of r.partes) partes.add(p)
+      const otras = r.partes.filter(p => p !== 'directo grabado')
+      aviso = otras.length
+        ? `${err.message}: lo no grabado sale de ${otras.join(' y ')}${otras.includes('contado de Yahoo') ? ' (solo la sesión)' : ''}`
+        : err.message
     }
   }
 
@@ -2448,9 +2450,10 @@ async function velasIg(ticker, tf, inicio, fin) {
   return {
     velas, aviso, error,
     fuente: `IG (${[...partes].join(' + ') || `histórico ${resolucion}`})`,
-    // sin IG, una página vacía (un fin de semana, con Yahoo, que solo trae la sesión) se salta
-    // de una vez hasta lo último que haya antes
-    previa: sinIg && !velas.length ? previaSinIg(ticker, inicio) : null,
+    // sin IG ni Dukascopy, una página vacía (un fin de semana, con Yahoo, que solo trae la
+    // sesión) se salta de una vez hasta lo último que haya antes. Dukascopy va 24 h: con él,
+    // saltar se comería lo que tiene fuera de la sesión.
+    previa: sinIg && !conDuka && !velas.length ? previaSinIg(ticker, inicio) : null,
   }
 }
 
@@ -2470,21 +2473,41 @@ function previaSinIg(ticker, t) {
   return candidatas.length ? Math.max(...candidatas) : null
 }
 
-// Velas de [a, b) agrupadas a `minutos` con la rejilla del gráfico de IG: las de Yahoo (de 1
-// min y, más atrás, de 5) hasta la primera grabada del directo, y lo grabado desde ahí
-function respaldoYahoo(ticker, minutos, a, b) {
-  const entre = velas => (velas ?? []).filter(v => v.time >= a && v.time < b)
-  const grabadas = grabacion && !epicDeMercadoIg(ticker) ? grabacion.m1Entre(ticker, a, b) : []
-  const hastaGrabadas = grabadas[0]?.time ?? b
-  const de1 = entre(velasYahooLocales(ticker, '1min')).filter(v => v.time < hastaGrabadas)
-  const de5 = minutos >= 5
-    ? entre(velasYahooLocales(ticker, '5min')).filter(v => v.time < (de1[0]?.time ?? hastaGrabadas))
-    : []
-  return {
-    velas: agruparVelas([...de5, ...de1, ...grabadas], minutos),
-    yahoo: de5.length + de1.length > 0,
-    grabadas: grabadas.length > 0,
+// Segundos por vela de cada serie de Dukascopy (TEMPORALIDADES[tf].duka)
+const SEGUNDOS_SERIE = { m1: 60, m5: 300, m15: 900, m30: 1800, h1: 3600 }
+
+// Lo que IG no da de [a, b), agrupado con la rejilla del gráfico, de la mejor fuente a la
+// peor, cada una desde donde se acaba la anterior:
+//   · el CFD de Dukascopy: 24 h y años de histórico, a la par del de IG (medido a 5 min en
+//     oct-2026: DAX +1,0 de media, S&P +0,3, Nasdaq −0,6, FTSE +0,3, Russell +0,2, oro
+//     +0,3) salvo en el Dow (+8) y el Nikkei (+38). Va una hora por detrás. Su crudo es otro
+//     contrato (60 dólares por debajo) y no se usa;
+//   · el contado de Yahoo de la carpeta de recoger_yahoo.py: solo la sesión (Dow +4, sin
+//     Nikkei), de 1 min y, más atrás, de 5;
+//   · y lo grabado del directo, desde su primera vela.
+// `conDuka`: Dukascopy contestó (un 429 llega como velas vacías y no cuenta).
+async function respaldo(ticker, tf, a, b) {
+  const conf = TEMPORALIDADES[tf]
+  const partes = []
+  let crudas = []
+  let conDuka = false
+  const instrument = ticker !== 'USOIL' ? YF_TO_DUKASCOPY[ticker] : null
+  if (instrument && !dukaCaido()) {
+    try {
+      crudas = await obtenerTramoDukascopy(instrument, conf.duka, a, b)
+      conDuka = crudas.length > 0 || !dukascopyLimitando(DUKA_CIRCUITO_MS)
+    } catch (err) { marcarDukaCaido(err) }
+    if (crudas.length) partes.push('Dukascopy')
   }
+  const desde = crudas.length ? crudas[crudas.length - 1].time + SEGUNDOS_SERIE[conf.duka] : a
+  const grabadas = grabacion && !epicDeMercadoIg(ticker) ? grabacion.m1Entre(ticker, desde, b) : []
+  const hastaGrabadas = grabadas[0]?.time ?? b
+  const entre = velas => (velas ?? []).filter(v => v.time >= desde && v.time < hastaGrabadas)
+  const de1 = entre(velasYahooLocales(ticker, '1min'))
+  const de5 = conf.minutos >= 5 ? entre(velasYahooLocales(ticker, '5min')).filter(v => v.time < (de1[0]?.time ?? hastaGrabadas)) : []
+  if (de1.length + de5.length) partes.push('contado de Yahoo')
+  if (grabadas.length) partes.push('directo grabado')
+  return { velas: agruparVelas([...crudas, ...de5, ...de1, ...grabadas], conf.minutos), partes, conDuka }
 }
 
 app.get('/api/grafico/velas', async (req, res) => {
@@ -2511,10 +2534,12 @@ app.get('/api/grafico/velas', async (req, res) => {
       const { diasPagina, res: resolucion } = IG_RESOLUCION[tf]
       let fin = hasta
       let error = null
+      // las páginas de IG son cortas para no quemar su cupo; sin IG, las de Dukascopy
+      const dias = Date.now() < igHistoricoParado.hasta ? Math.max(diasPagina, conf.diasPagina) : diasPagina
       for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
         // en velas enteras: lo grabado se agrupa aquí, y una vela partida entre dos páginas
         // se quedaría con la mitad
-        const inicio = inicioCubo(Math.floor(fin - diasPagina * 86400), conf.minutos)
+        const inicio = inicioCubo(Math.floor(fin - dias * 86400), conf.minutos)
         const r = await velasIg(ticker, tf, inicio, fin)
         if (r.velas.length > 0) {
           const { cupo } = ig.estado()

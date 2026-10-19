@@ -4,6 +4,7 @@ import { capturarVelasPNG } from './graficoVelasCore'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
 import { DUKA_TICKERS, INSTRUMENTOS as PRESETS, intradayUrl } from './intradayApi'
+import { conClaveBot } from './claveBot'
 
 const DIAS = [
   { n: 1, label: 'L', nombre: 'Lunes' },
@@ -1060,9 +1061,10 @@ export default function FiltroGap() {
       }
       setExportProgreso(null)
 
+      // en producción el servidor pide la clave del bot para exportar (ver server/index.js)
       const resp = await fetch('/api/export-ppt', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: conClaveBot({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           ticker:   tkr,
           sesiones: sesionesConGrafico,
@@ -1077,6 +1079,7 @@ export default function FiltroGap() {
       })
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}))
+        if (data.necesitaClave) throw new Error('Para exportar en la web online hace falta la clave del bot: ponla en la pestaña Bots')
         throw new Error(data.error ?? 'Error generando la presentación')
       }
       const blob = await resp.blob()

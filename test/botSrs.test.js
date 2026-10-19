@@ -928,3 +928,20 @@ test('para el gráfico de la pestaña, la sesión de hoy lleva las velas de 15 m
     assert.deepEqual(estado.sesiones.find(s => s.ticker === '^FTSE').hoy, { abre: madrid(7, 9, 0), cierra: madrid(7, 17, 30) })
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('el latido: en marcha desde que arranca, apunta cada vuelta del bucle y se apaga al parar', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25600, 25601] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madrid(28, 8))
+    assert.deepEqual(bot.latido(), { enMarcha: false, desde: null, ultimaVuelta: null })
+    const antes = Date.now()
+    bot.arrancar()
+    assert.equal(bot.latido().enMarcha, true)
+    assert.ok(bot.latido().desde >= antes)
+    await bot._paso()   // va por la misma cola: espera a que acabe la primera vuelta del arranque
+    assert.ok(bot.latido().ultimaVuelta >= antes)
+    bot.parar()
+    assert.equal(bot.latido().enMarcha, false)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})

@@ -18,6 +18,7 @@ import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
+import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
 import { crearTelegram } from './telegram.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
@@ -105,14 +106,35 @@ const DUKA_SESSION_LONDON = {
 
 const app  = express()
 const PORT = process.env.PORT || 3001
-app.use(cors())
-// Límite ampliado: /api/export-ppt recibe un PNG en base64 por cada coincidencia exportada
-app.use(express.json({ limit: '50mb' }))
+const PRODUCCION = process.env.NODE_ENV === 'production'
 
-// Todo lo del bot y de IG pide la clave del bot en producción (ver server/clave-bot.js)
-const claveBot = crearClaveBot({ token: process.env.BOT_TOKEN || '', produccion: process.env.NODE_ENV === 'production' })
+// Quién puede llamar al servidor desde otra web: solo las páginas de este PC (en local, las
+// pestañas hablan con localhost:3001 directamente desde :5173). En producción no hace falta
+// nadie más: el navegador llega por el dominio de Vercel, que reenvía /api aquí. CORS_ORIGENES
+// añade otros orígenes, separados por comas.
+const ORIGENES_EXTRA = (process.env.CORS_ORIGENES || '').split(',').map(s => s.trim()).filter(Boolean)
+const origenPermitido = origen => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origen) || ORIGENES_EXTRA.includes(origen)
+const origenDe = url => { try { return new URL(url).origin } catch { return '' } }
+app.use(cors({ origin: (origen, cb) => cb(null, !origen || origenPermitido(origen)) }))
+// CORS solo impide leer la respuesta: una web cualquiera abierta en el navegador aún podría
+// lanzar peticiones a localhost:3001 con un <img> o un formulario (y arrancar el pipeline).
+// Los navegadores marcan esas peticiones con Sec-Fetch-Site: cross-site.
+app.use((req, res, next) => {
+  if (req.get('sec-fetch-site') !== 'cross-site' || origenPermitido(req.get('origin') || origenDe(req.get('referer')))) return next()
+  res.status(403).json({ error: 'Petición desde otra web' })
+})
+
+// Todo lo del bot y de IG pide la clave del bot en producción (ver server/clave-bot.js), y
+// antes de leer el cuerpo: sin clave no se llega a leer nada
+const claveBot = crearClaveBot({ token: process.env.BOT_TOKEN || '', produccion: PRODUCCION })
 const claveBotValida = claveBot.valida
 app.use(['/api/bot', '/api/ig', '/api/tiempo-real'], claveBot.middleware)
+
+// En producción, cuerpos de 1 MB como mucho: uno de 50 MB que cualquiera mande ocupa cientos
+// de MB al leerlo, y quedarse sin memoria tumba también a los bots. /api/export-ppt lee el suyo
+// (un PNG en base64 por coincidencia) con su propio límite, después de pedir la clave.
+const leerJson = express.json({ limit: PRODUCCION ? '1mb' : '50mb' })
+app.use((req, res, next) => (req.path === '/api/export-ppt' ? next() : leerJson(req, res, next)))
 
 app.get('/healthz', (_req, res) => res.json({ status: 'ok' }))
 
@@ -868,7 +890,8 @@ app.get('/api/gap-filter', async (req, res) => {
 // slide por coincidencia con su gráfico intradía.
 const DIA_NOMBRE_PPT = { 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes' }
 
-app.post('/api/export-ppt', async (req, res) => {
+// En producción pide la clave del bot: es la única ruta abierta que acepta 50 MB
+app.post('/api/export-ppt', claveBot.middleware, express.json({ limit: '50mb' }), async (req, res) => {
   try {
     const { ticker, sesiones, filtros } = req.body
     if (!Array.isArray(sesiones) || sesiones.length === 0)
@@ -2727,9 +2750,8 @@ if (grabacion) {
 // recoger_yahoo.py deja cada mañana en tu PC la sesión de contado de los índices; desde ahí,
 // scripts/subir-yahoo.mjs la sube aquí para que el servidor online la tenga (ver YAHOO_DIR).
 // Solo en producción: en local, YAHOO_DIR es la carpeta de la que salen.
-app.put('/api/yahoo/:fichero', express.text({ type: () => true, limit: '50mb' }), (req, res) => {
+app.put('/api/yahoo/:fichero', claveBot.middleware, express.text({ type: () => true, limit: '50mb' }), (req, res) => {
   if (process.env.NODE_ENV !== 'production') return res.status(404).json({ error: 'Solo en el servidor online' })
-  if (!claveBotValida(req)) return res.status(401).json({ error: 'Clave del bot incorrecta' })
   const { fichero } = req.params
   const nombres = Object.values(INDICE_YAHOO).join('|')
   if (!new RegExp(`^(${nombres})_(1|5)min\\.csv$`).test(fichero)) return res.status(400).json({ error: `Fichero desconocido: ${fichero}` })
@@ -2830,6 +2852,25 @@ const telegram = crearTelegram({
   chatId:  process.env.TELEGRAM_CHAT_ID || '',
   archivo: join(dirname(BOT_PATH), 'telegram.json'),
 })
+
+// Errores sin capturar (ver server/vigilancia.js). Una promesa rechazada que nadie recogía
+// tumbaba el proceso entero, con los tres bots dentro: ahora se apunta, se avisa y el servidor
+// sigue. Una excepción sin capturar sí lo para, porque el estado puede haber quedado a medias:
+// avisa y sale, y Railway lo vuelve a arrancar (restartPolicyType ALWAYS en railway.json).
+// Los avisos dicen primero qué pasa y qué hacer; el error tal cual, al final.
+const avisarServidor = texto => (BOT_OPERA ? telegram.enviar(texto) : Promise.resolve(false))
+const avisarError = crearAvisoErrores({ avisar: avisarServidor })
+const textoError = err => (err instanceof Error ? err.message : String(err)).slice(0, 300)
+process.on('unhandledRejection', err => {
+  console.error('[proceso] promesa rechazada sin capturar:', err)
+  avisarError(`⚠️ Ha fallado algo en el servidor, pero sigue en marcha y los bots también. Solo hay que mirarlo si este aviso se repite.\nDetalle: ${textoError(err)}`)
+})
+process.on('uncaughtException', err => {
+  console.error('[proceso] excepción sin capturar, salgo:', err)
+  setTimeout(() => process.exit(1), 3000)
+  avisarServidor(`🔴 El servidor se ha caído y se está reiniciando solo. En un minuto debería llegarte «Servidor arrancado»; si no llega, míralo en Railway.\nDetalle: ${textoError(err)}`).finally(() => process.exit(1))
+})
+
 const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (bot && BOT_OPERA) bot.arrancar()
 if (bot) console.log(`[bot] registro en ${BOT_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
@@ -2932,6 +2973,23 @@ async function velasDiariasTortugas(ticker) {
 const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugas, archivo: BOT_TORTUGAS_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botTortugas && BOT_OPERA) botTortugas.arrancar()
 if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+
+// ── Vigilancia de los bots (ver server/vigilancia.js) ──
+// Cada 30 s mira si los bots en marcha siguen dando vueltas, y avisa por Telegram si uno lleva
+// 2 min sin completar ninguna. /healthz/bots da lo mismo, con 503 si alguno está parado, y lo
+// que se ha bloqueado el bucle de eventos: es para un vigilante de fuera (UptimeRobot o
+// similar), que es el único que puede avisar si se cae el proceso entero. Sin clave: no
+// enseña nada más que esto.
+const vigilancia = crearVigilancia({
+  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['Tortugas', botTortugas]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
+  avisar: avisarServidor,
+})
+if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)
+const bucle = medirBucle()
+app.get('/healthz/bots', (_req, res) => {
+  const e = vigilancia.estado()
+  res.status(e.ok ? 200 : 503).json({ ...e, opera: BOT_OPERA, bucle: bucle() })
+})
 
 app.get('/api/bot/tortugas', (req, res) => {
   if (!botTortugas) return sinBot(res)
@@ -3124,10 +3182,18 @@ app.get('/api/pipeline/run', (req, res) => {
   runNext()
 })
 
-// Sin dirección: Node escucha en :: y en 0.0.0.0 a la vez. Atando solo a IPv4, Windows
-// resuelve `localhost` primero a ::1, no encuentra a nadie y cada cliente nuevo pagaba
-// ~200 ms de reintento antes de caer a 127.0.0.1.
-app.listen(PORT, () => {
+// En producción, en todas las direcciones: Railway llega desde fuera. En local, solo desde este
+// PC: aquí no se pide clave, y el cortafuegos de Windows deja entrar a Node en las redes
+// públicas (una wifi de fuera). Y en las dos de localhost: atando solo a IPv4, Windows resuelve
+// `localhost` primero a ::1, no encuentra a nadie y cada cliente nuevo pagaba ~200 ms de
+// reintento antes de caer a 127.0.0.1.
+if (PRODUCCION) app.listen(PORT, alArrancar)
+else {
+  app.listen(PORT, '127.0.0.1', alArrancar)
+  app.listen(PORT, '::1').on('error', err => console.warn(`[servidor] no escucho en ::1 (${err.message}); solo en 127.0.0.1`))
+}
+
+function alArrancar() {
   console.log(`Servidor en http://localhost:${PORT}`)
   // Pre-calentar caché Dukascopy H1 en segundo plano para evitar timeouts en primera petición
   ;(async () => {
@@ -3137,4 +3203,4 @@ app.listen(PORT, () => {
     }
     console.log(`[warmup] Caché Dukascopy H1 lista (transporte ${estadoTransporteDukascopy().modo.toUpperCase()})`)
   })().catch(() => {})
-})
+}

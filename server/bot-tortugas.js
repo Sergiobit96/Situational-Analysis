@@ -722,6 +722,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   // una orden espera a que termine, y así nunca salen dos órdenes por la misma ruptura.
   let cola = Promise.resolve()
   let pendiente = false
+  // para la vigilancia (server/vigilancia.js): cuándo arrancó y cuándo completó su última vuelta
+  let arrancadoEn = null
+  let ultimaVuelta = null
   function encolar(fn) {
     const hecho = cola.then(fn)
     cola = hecho.catch(() => {})
@@ -734,6 +737,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       pendiente = false
       try { await paso() } catch (err) { log(`[tortugas] error: ${err.message}`) }
       guardar()
+      ultimaVuelta = Date.now()
     })
   }
 
@@ -789,6 +793,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       }
       guardar()
     })
+    arrancadoEn = Date.now()
     reloj = setInterval(despertar, 5_000)
     for (const ticker of Object.keys(GRUPOS_TORTUGAS)) dejarDeEscuchar.push(escuchar('ig', ticker, despertar))
     despertar()
@@ -797,6 +802,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   }
   function parar() {
     clearInterval(reloj)
+    reloj = null
     dejarDeEscuchar.splice(0).forEach(f => f())
   }
 
@@ -885,6 +891,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
 
   return {
     arrancar, parar, estado, cambiarConfig, pararYCerrar,
+    latido: () => ({ enMarcha: reloj !== null, desde: arrancadoEn, ultimaVuelta }),
     // un paso del bucle sin el temporizador (para las pruebas): por la misma cola y guardando
     _paso: () => encolar(async () => { try { await paso() } finally { guardar() } }),
     _recuperar: () => encolar(async () => { try { await recuperarPosiciones() } finally { guardar() } }),

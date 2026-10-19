@@ -2,11 +2,11 @@
 // mueve a mano: se recorren sesiones enteras sin mandar ninguna orden de verdad
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync } from 'fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { siguientePaso, nivelStop, crearBot, sesionDe, proximaApertura, tamanoPorRiesgo, riesgoDeCuenta, CONFIG_INICIAL } from '../server/bot-srs.js'
+import { siguientePaso, nivelStop, crearBot, sesionDe, proximaApertura, tamanoPorRiesgo, riesgoDeCuenta, margenTipico, CONFIG_INICIAL } from '../server/bot-srs.js'
 import { buscarCierre, crearIG } from '../server/ig.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -23,6 +23,7 @@ const tokio = en('Asia/Tokyo')
 // guardan en orden y una más vieja que la última del instrumento no entraría
 const madridNov = en('Europe/Madrid', 10)
 const madridDic = en('Europe/Madrid', 11)
+const nuevaYorkNov = en('America/New_York', 10)
 const utc = (dia, h, m = 0) => Date.UTC(2026, 9, dia, h, m) / 1000
 
 // ── Las sesiones, en la hora de cada bolsa ──
@@ -167,7 +168,8 @@ const MERCADOS = {
 
 // Un IG que apunta lo que se le pide y contesta lo que diga cada prueba. `velas` por
 // instrumento: la del bracket (por su hora) y las de después; `sinPrecio`, los contratos que la
-// cuenta no puede operar (su ficha viene sin precio)
+// cuenta no puede operar (su ficha viene sin precio); `disponible`, un número o una función de
+// las posiciones abiertas; y con `ig.rechazar = motivo`, IG rechaza las órdenes de abrir
 function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, aMercado = true, sinPrecio = [] }) {
   const ordenes = []
   let abiertas = []
@@ -185,6 +187,7 @@ function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, 
       },
       abrir: async o => {
         ordenes.push({ tipo: 'abrir', ...o })
+        if (ig.rechazar) return { aceptada: false, motivo: ig.rechazar }
         const [bid, oferta] = precios[o.ticker] ?? [25500, 25501]
         const nivel = o.lado === 'largo' ? oferta : bid
         const p = { dealId: `D${++n}`, ticker: o.ticker, epic: o.epic, lado: o.lado, tamano: o.tamano, nivel, stop: o.stop, referencia: o.referencia, abierta: new Date(ig.reloj() * 1000).toISOString().slice(0, 19) }
@@ -201,7 +204,7 @@ function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, 
       },
       posiciones: async () => abiertas,
       cierreDe: async () => ig.nivelCierre == null ? null : { nivel: ig.nivelCierre },
-      cuenta: async () => ({ saldo, disponible, moneda: 'EUR' }),
+      cuenta: async () => ({ saldo, disponible: typeof disponible === 'function' ? disponible(abiertas) : disponible, moneda: 'EUR' }),
     },
     ordenes,
     quitarPosiciones: () => { abiertas = [] },
@@ -210,8 +213,9 @@ function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, 
   return ig
 }
 
-function botDePrueba(ig, cambios = {}, { avisar } = {}) {
+function botDePrueba(ig, cambios = {}, { avisar, registro } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-'))
+  if (registro) writeFileSync(join(dir, 'Bot SRS.json'), JSON.stringify(registro))
   let t = 0
   ig.reloj = () => t
   const bot = crearBot({ ig, archivo: join(dir, 'Bot SRS.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar })
@@ -603,7 +607,7 @@ test('no da la vuelta si el precio ya se ha ido del nivel más del tope', async 
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('pirámide: una posición más por cada R a favor, como mucho una cada 5 min y hasta 5, con el stop de todas en su precio medio', async () => {
+test('pirámide: una posición más por cada R a favor, como mucho una cada 5 min y hasta 4 (la entrada y 3 añadidos), con el stop de todas en su precio medio', async () => {
   const precios = { '^GDAXI': [25500, 25501] }
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(4, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
   const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, piramide: 1, tamanoAnadido: 1 })
@@ -627,17 +631,16 @@ test('pirámide: una posición más por cada R a favor, como mucho una cada 5 mi
     op = await subir(9, 50, 25582)
     assert.equal(op.unidades.length, 3)
     op = await subir(9, 55, 25622)
-    op = await subir(10, 0, 25662)
-    assert.equal(op.unidades.length, 5)
-    op = await subir(10, 5, 25702)                                 // +5R: ya hay 5, no añade más
-    assert.equal(op.unidades.length, 5)
-    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 5)
-    assert.equal(op.stop, 25581.8)                                 // la media de las cinco
+    assert.equal(op.unidades.length, 4)
+    op = await subir(10, 0, 25662)                                 // +4R: ya hay 4, no añade más
+    assert.equal(op.unidades.length, 4)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 4)
+    assert.equal(op.stop, 25561.8)                                 // la media de las cuatro (25.561,75)
 
     // salta el stop de todas en el precio medio: la pierna sale a cero y, como es un break
     // even, no da la vuelta
     ig.quitarPosiciones()
-    ig.nivelCierre = 25581.8
+    ig.nivelCierre = 25561.75
     enHora(madridNov(4, 10, 10, 5)); await bot._paso()
     const hoy = apunte(bot, '^GDAXI')
     assert.equal(hoy.estado, 'terminado')
@@ -674,7 +677,7 @@ test('avisa de lo que apunta y de los cambios de configuración, y de un error q
     await assert.rejects(bot._paso(), /IG caído/)
     assert.equal(avisos.filter(t => t === 'DAX · Error: IG caído').length, 1)
     bot.cambiarConfig({ piramide: 2, tamanoAnadido: 1 })
-    assert.equal(avisos.at(-1), 'Pirámide: una posición más cada 2R a favor, hasta 5\nCada añadido: una unidad entera')
+    assert.equal(avisos.at(-1), 'Pirámide: una posición más cada 2R a favor, hasta 3 añadidos\nCada añadido: una unidad entera')
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -703,6 +706,144 @@ test('por defecto, la pirámide añade media posición cada 1R, con el mínimo d
     const op = apunte(bot, '^GDAXI').operacion
     assert.deepEqual(op.unidades.map(u => u.tamano), [6.2, 3.1])
     assert.equal(op.stop, 25514.7)                                // (6,2 × 25501 + 3,1 × 25542) / 9,3
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// ── El margen entre varios instrumentos ──
+
+test('el margen que suele pedir una entrada sale de la mediana de sus últimos brackets, con el tope de una entrada', () => {
+  assert.equal(margenTipico([], { riesgoPct: 1 }), 0.4)
+  // el 1% del saldo con el stop a un 0,3% del precio: un nominal de 3,3 veces el saldo, y de margen, el 5% de eso
+  assert.ok(Math.abs(margenTipico([0.002, 0.003, 0.010], { riesgoPct: 1 }) - 1 / 6) < 1e-12)
+  assert.ok(Math.abs(margenTipico([0.002, 0.004], { riesgoPct: 1 }) - 1 / 6) < 1e-12)
+  // a mitad del bracket, o con el 10% de margen del Russell, el doble
+  assert.ok(Math.abs(margenTipico([0.003], { riesgoPct: 1, stopPct: 0.5 }) - 1 / 3) < 1e-12)
+  assert.ok(Math.abs(margenTipico([0.003], { riesgoPct: 1, factorMargen: 0.1 }) - 1 / 3) < 1e-12)
+  // un DAX de brackets estrechos pediría la mitad del saldo: se queda en el tope
+  assert.equal(margenTipico([0.001], { riesgoPct: 1 }), 0.4)
+})
+
+// El disponible baja con el margen de lo abierto: un 5% del nominal (todos a 1 € el punto)
+const disponibleMenos = base => abiertas => base - abiertas.reduce((s, p) => s + p.tamano * p.nivel * 0.05, 0)
+const daxYNasdaq = { instrumentos: { '^N225': false, '^GDAXI': true, '^NDX': true, '^GSPC': false, '^DJI': false }, tamanoAnadido: 1 }
+
+test('la pirámide deja el margen de la entrada que aún espera otro instrumento: recorta el añadido, o espera', async () => {
+  const precios = { '^GDAXI': [25500, 25501], '^NDX': [29200, 29201] }
+  const velas = { '^GDAXI': [vela15(madridNov(10, 9, 15), 25480, 25500, 25460, 25490)], '^NDX': [vela15(nuevaYorkNov(10, 9, 45), 29200, 29260, 29170, 29210)] }
+  const ig = igFalso({ velas, precios, disponible: disponibleMenos(20000) })
+  const avisos = []
+  const { bot, dir, enHora } = botDePrueba(ig, daxYNasdaq, { avisar: t => avisos.push(t) })
+  const dax = async (h, m, oferta) => {
+    precios['^GDAXI'] = [oferta - 1, oferta]
+    vela1m('^GDAXI', madridNov(10, h, m), oferta, oferta - 10, oferta - 1)
+    enHora(madridNov(10, h, m, 5)); await bot._paso()
+    return apunte(bot, '^GDAXI')
+  }
+  const abiertas = () => ig.ordenes.filter(o => o.tipo === 'abrir').length
+  try {
+    enHora(madridNov(10, 9, 30, 4)); await bot._paso()
+    let hoy = await dax(9, 41, 25501)                              // compra de 5 (200 € / 40 puntos)
+    assert.equal(hoy.operacion.tamano, 5)
+
+    // +1R: el añadido sería de 5 (1.277 € de margen cada uno), pero el Nasdaq aún no tiene
+    // bracket y, sin brackets pasados, se le guarda lo más que puede pedir una entrada (el 40%
+    // del saldo, 8.000 €), y un colchón del 5% (1.000 €): de 13.625 € disponibles caben 3,6
+    hoy = await dax(9, 45, 25542)
+    assert.deepEqual(hoy.operacion.unidades.map(u => u.tamano), [5, 3.6])
+    assert.ok(hoy.eventos.some(e => e.texto === 'Añadido recortado de 5 a 3.6 por el margen (13.625 € disponibles, de los que 8000 € se guardan para la entrada de Nasdaq 100)'))
+
+    // +2R: ya no cabe ni el mínimo; no manda la orden y lo vuelve a mirar al minuto
+    hoy = await dax(9, 50, 25582)
+    assert.equal(abiertas(), 2)
+    assert.match(hoy.eventos.at(-1).texto, /^Añadido en espera: no cabe en el margen \(9027 € disponibles, de los que 8000 € se guardan para la entrada de Nasdaq 100\)/)
+    assert.equal(avisos.filter(t => t.startsWith('DAX · Añadido en espera')).length, 1)
+    hoy = await dax(9, 51, 25582)
+    assert.equal(avisos.filter(t => t.startsWith('DAX · Añadido en espera')).length, 1, 'se avisa una vez por nivel')
+
+    // a las 16:00 el Nasdaq ya tiene plan: 2,2 contratos (200 € / 90 puntos), y se le guarda
+    // lo que pedirá su entrada (2,2 × 29.210 × 5% = 3.213 €); al DAX le caben 3,7 más
+    enHora(madridNov(10, 16, 0, 5)); await bot._paso()
+    assert.equal(apunte(bot, '^NDX').plan.tamano, 2.2)
+    hoy = await dax(16, 0, 25582)
+    assert.deepEqual(hoy.operacion.unidades.map(u => u.tamano), [5, 3.6, 3.7])
+    assert.equal(abiertas(), 3)
+
+    // y el Nasdaq entra con su tamaño entero
+    precios['^NDX'] = [29261, 29262]
+    vela1m('^NDX', madridNov(10, 16, 5), 29262, 29240, 29261)
+    enHora(madridNov(10, 16, 5, 5)); await bot._paso()
+    const ndx = apunte(bot, '^NDX')
+    assert.equal(ndx.estado, 'en-posicion')
+    assert.equal(ndx.operacion.tamano, 2.2)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('sin plan, a la entrada que espera se le guarda lo que suele pedir según sus últimos brackets', async () => {
+  const precios = { '^GDAXI': [25500, 25501] }
+  // tres días del Nasdaq con brackets del 0,1%, el 0,15% y el 0,2% del precio, y uno del 1%
+  // que no se operó (pasa del 0,8%) y no cuenta: la mediana es un 0,15%
+  const pasado = (dia, rango) => {
+    const ses = sesionDe('^NDX', madridNov(dia, 18))
+    return [`${ses.fecha} ^NDX`, { clave: `${ses.fecha} ^NDX`, fecha: ses.fecha, ticker: '^NDX', abre: ses.abre, cierra: ses.cierra,
+      estado: 'terminado', bracket: { high: 30000, low: 30000 - rango, rango }, cierreBracket: 30000, plan: null, operacion: null, salida: null, eventos: [] }]
+  }
+  const registro = { config: {}, dias: Object.fromEntries([pasado(2, 30), pasado(3, 45), pasado(4, 60), pasado(5, 300)]) }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(12, 9, 15), 25480, 25500, 25460, 25490)] }, precios, disponible: disponibleMenos(20000) })
+  const { bot, dir, enHora } = botDePrueba(ig, daxYNasdaq, { registro })
+  try {
+    enHora(madridNov(12, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(12, 9, 41), 25502, 25495, 25501)
+    enHora(madridNov(12, 9, 41, 10)); await bot._paso()
+    precios['^GDAXI'] = [25541, 25542]
+    vela1m('^GDAXI', madridNov(12, 9, 45), 25542, 25530, 25541)
+    enHora(madridNov(12, 9, 45, 5)); await bot._paso()
+    // el 1% del saldo con el stop a un 0,15%: de margen, un tercio del saldo (6.667 €); y de
+    // 13.625 € disponibles, menos eso y el colchón, caben 4,6
+    const hoy = apunte(bot, '^GDAXI')
+    assert.deepEqual(hoy.operacion.unidades.map(u => u.tamano), [5, 4.6])
+    assert.ok(hoy.eventos.some(e => /de los que 6667 € se guardan para la entrada de Nasdaq 100/.test(e.texto)))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG rechaza un añadido por falta de fondos, la pirámide no se acaba: se reintenta a los 5 min', async () => {
+  const precios = { '^GDAXI': [25500, 25501] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(13, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const avisos = []
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { avisar: t => avisos.push(t) })
+  const dax = async (h, m, oferta) => {
+    precios['^GDAXI'] = [oferta - 1, oferta]
+    vela1m('^GDAXI', madridNov(13, h, m), oferta, oferta - 10, oferta - 1)
+    enHora(madridNov(13, h, m, 5)); await bot._paso()
+    return apunte(bot, '^GDAXI')
+  }
+  const abiertas = () => ig.ordenes.filter(o => o.tipo === 'abrir').length
+  try {
+    enHora(madridNov(13, 9, 30, 4)); await bot._paso()
+    await dax(9, 41, 25501)
+    ig.rechazar = 'INSUFFICIENT_FUNDS'
+    let hoy = await dax(9, 45, 25542)
+    assert.equal(abiertas(), 2)
+    assert.equal(hoy.operacion.unidades.length, 1)
+    assert.ok(!hoy.operacion.sinAnadidos)
+    assert.match(hoy.eventos.at(-1).texto, /^IG rechaza el añadido por falta de fondos \(INSUFFICIENT_FUNDS\): se reintenta cada 5 min/)
+    await dax(9, 47, 25542)
+    assert.equal(abiertas(), 2, 'no lo reintenta antes de 5 min')
+    // a los 5 min, otra vez rechazado: sin apuntarlo ni avisarlo de nuevo
+    const eventos = hoy.eventos.length
+    hoy = await dax(9, 50, 25542)
+    assert.equal(abiertas(), 3)
+    assert.equal(hoy.eventos.length, eventos)
+    assert.equal(avisos.filter(t => t.startsWith('DAX · IG rechaza')).length, 1)
+    // ya hay margen: entra
+    ig.rechazar = null
+    hoy = await dax(9, 55, 25542)
+    assert.equal(hoy.operacion.unidades.length, 2)
+    assert.match(hoy.eventos.find(e => e.texto.startsWith('Añadida a')).texto, /^Añadida a 25542: 2 posiciones abiertas/)
+    // por otro motivo, esa pierna ya no añade más
+    ig.rechazar = 'MARKET_CLOSED_WITH_EDITS'
+    hoy = await dax(10, 0, 25582)
+    assert.equal(hoy.operacion.sinAnadidos, true)
+    assert.match(hoy.eventos.at(-1).texto, /esta pierna no añade más/)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

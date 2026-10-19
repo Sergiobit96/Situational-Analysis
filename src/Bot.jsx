@@ -169,7 +169,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const nombre = t => sesiones.find(s => s.ticker === t)?.nombre ?? t
   const operados = historial.filter(d => d.resultadoPts != null)
   const totalEur = operados.reduce((n, d) => n + (d.resultadoEur ?? 0), 0)
-  const maxUnidades = datos.maxUnidades ?? 5
+  const maxUnidades = datos.maxUnidades ?? 4
 
   // Lo de hoy: lo cerrado (piernas terminadas) y lo que va abierto, con el último precio
   const cuentasHoy = hoy.map(d => {
@@ -363,7 +363,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
           El tamaño sale del riesgo, que es lo que se pierde si salta el stop: ese % del saldo de la cuenta entre los puntos hasta el stop (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
           Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
           Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
-          La pirámide abre como mucho {datos.maxUnidades ?? 5} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
+          La pirámide abre como mucho {datos.maxUnidades ?? 4} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
           Un cambio vale para las sesiones que aún no han fijado su bracket.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {

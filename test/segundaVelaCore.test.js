@@ -126,7 +126,7 @@ test('la pirámide para en maxUnidades posiciones, contando la entrada', () => {
   const sube = [[105, 112, 104, 111]]
   for (let r = 1; r <= 7; r++) sube.push([100 + 10 * r, 111 + 10 * r, 110 + 10 * (r - 1), 110 + 10 * r])
   assert.equal(analizar(sube, { modo: 'ambos', piramide: 1 }).unidades, 6)                  // la entrada y 5 añadidos
-  assert.equal(analizar(sube, { modo: 'ambos', piramide: 1, maxUnidades: 5 }).unidades, 5)  // lo que usa el bot
+  assert.equal(analizar(sube, { modo: 'ambos', piramide: 1, maxUnidades: 4 }).unidades, 4)  // lo que usa el bot: la entrada y 3 añadidos
 })
 
 test('con añadidos de media unidad el precio medio se mueve menos', () => {

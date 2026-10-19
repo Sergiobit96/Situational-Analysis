@@ -21,6 +21,10 @@
 //   · el tamaño sale del riesgo: un `riesgoPct` % del saldo de la cuenta entre los puntos
 //     hasta el stop (y el valor del punto), con el contrato más pequeño que la cuenta pueda
 //     operar y sin pasar de una parte del margen;
+//   · la pirámide no se come el margen de las entradas que aún esperan otros instrumentos con
+//     sesión mientras dure la suya (el DAX y, a las 15:30, el Nasdaq y el Dow): un añadido que
+//     no cabe se recorta o espera a que haya margen, y si IG lo rechaza por falta de fondos se
+//     reintenta en vez de dejar la pirámide;
 //   · cada orden lleva una referencia propia (SRS-…): si el registro se pierde (un despliegue
 //     sin volumen), al arrancar recupera sus posiciones abiertas desde IG y las sigue;
 //   · si arranca con la sesión empezada y la rotura ya pasó, no entra tarde;
@@ -79,8 +83,14 @@ const REVISAR_YA_MS = 2_000      // con el precio al otro lado del stop y una vu
 const ESPERA_STOP_S = 10         // si el precio pasó el stop y IG no ha cerrado en este rato, cierra el bot
 const BUSQUEDAS_CIERRE = 4       // revisiones buscando el precio de cierre antes de dar por bueno el del stop
 const MARGEN_MAX = 0.4           // parte del disponible que puede ocupar el margen de una posición (el mínimo del Nikkei es ~36%)
+const MARGEN_IG = 0.05           // el margen que pide IG, en tanto por uno del nominal, si su ficha no lo dice
+const COLCHON_MARGEN = 0.05      // parte del saldo que un añadido deja sin tocar: el disponible sube y baja con lo que ganan las posiciones
+const ESPERA_MARGEN_S = 60       // un añadido que no cabe en el margen lo vuelve a mirar pasado este rato
+const ESPERA_FONDOS_S = 300      // y si IG lo rechaza por falta de fondos, pasado este
+const BRACKETS_TIPICOS = 10      // los últimos brackets de un instrumento con los que se estima el margen de su entrada
 const PREFIJO = 'SRS-'           // referencia de las órdenes del bot
-export const MAX_UNIDADES = 5    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida
+export const MAX_UNIDADES = 4    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida: la entrada y
+                                 // 3 añadidos (el usuario lo bajó de 5 el 19-oct-2026, por el margen que se comía la pirámide)
 const MAX_PIERNAS = 2            // flip the switch: la entrada y una única vuelta, como el backtest
 const MIN_EN_VELA = 12           // de las 15 velas de 1 min, las que tiene que haber para dar por buena una de 15 hecha con el directo
 const ESPERA_HISTORICO_S = 300   // si el histórico de IG falla (sin cupo semanal, p. ej.), no se le vuelve a pedir hasta pasado este rato
@@ -88,6 +98,7 @@ const INTENTOS_VELAS = 3         // al cierre, las veces que se pide el históri
 
 export const minutoMadrid = ts => Math.floor(((ts + offsetMadrid(ts)) % 86400 + 86400) % 86400 / 60)
 const horaMadrid = ts => new Date((ts + offsetMadrid(ts)) * 1000).toISOString().slice(11, 16)
+const euros = x => `${Math.round(x).toLocaleString('es-ES')} €`
 
 // Velas de `minutos` hechas con las de 1 min del directo entre `desde` y `hasta`, alineadas a
 // `desde`, con cuántas de 1 min lleva cada una (`n`). Son las mismas que da el histórico de IG
@@ -282,6 +293,20 @@ export function tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto, cambioAEur, 
   return { ok: true, tamano, riesgoEur: tamano * eurPorContrato }
 }
 
+// El margen de un contrato del plan al precio `precio`, en euros
+export const margenPorContrato = (precio, plan) => precio * plan.valorPunto * plan.cambioAEur * (plan.factorMargen ?? MARGEN_IG)
+
+// La parte del saldo que suele pedir de margen la entrada de un instrumento. Arriesgando un
+// riesgoPct % del saldo con el stop a una fracción b del precio, el nominal es riesgoPct % / b
+// veces el saldo, y el margen, el factor de IG de eso. `brackets`: los últimos, en fracción del
+// precio; con su mediana sale b. Sin ninguno, o si sale más, el tope de margen de una entrada.
+export function margenTipico(brackets, { riesgoPct, stopPct = 1, factorMargen = MARGEN_IG }) {
+  const b = [...brackets].filter(x => x > 0).sort((x, y) => x - y)
+  if (!b.length) return MARGEN_MAX
+  const mediana = b.length % 2 ? b[(b.length - 1) / 2] : (b[b.length / 2 - 1] + b[b.length / 2]) / 2
+  return Math.min(MARGEN_MAX, riesgoPct / 100 * factorMargen / (mediana * stopPct))
+}
+
 // Los apuntes de antes de la pirámide y el flip tenían una sola posición por sesión: se
 // pasan a la forma de ahora (la pierna con su lista de posiciones) al leer el registro
 function normalizar(d) {
@@ -298,7 +323,7 @@ const DESCRIBIR = {
   modo:              v => `Operativa: ${{ largo: 'solo compras', ambos: 'compra o venta', flip: 'compra o venta, con flip the switch' }[v]}`,
   stopPct:           v => `Stop: ${v === 1 ? 'al otro lado del bracket' : 'a mitad del bracket'}`,
   beR:               v => `Break even: ${v == null ? 'no' : `al recorrer ${v}R`}`,
-  piramide:          v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${v}R a favor, hasta ${MAX_UNIDADES}`}`,
+  piramide:          v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${v}R a favor, hasta ${MAX_UNIDADES - 1} añadidos`}`,
   tamanoAnadido:     v => `Cada añadido: ${v === 1 ? 'una unidad entera' : 'media unidad'}`,
   riesgoPct:         v => `Riesgo por operación: ${String(v).replace('.', ',')}% de la cuenta`,
   deslizamientoMaxR: v => `No entra si el precio se ha ido del nivel más de un ${Math.round(v * 100)}% del bracket`,
@@ -379,6 +404,46 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       historicoHasta = ahora() + ESPERA_HISTORICO_S
       throw err
     }
+  }
+
+  // ── El margen ──
+  // Lo que un añadido tiene que dejar libre: el margen de las entradas que aún pueden llegar
+  // mientras siga abierta la sesión de `dia`, las de los otros instrumentos encendidos cuya
+  // sesión se cruza con lo que le queda y que aún no han entrado (o esperan para dar la
+  // vuelta). Con plan, lo que pedirá su entrada; sin él, lo que suele pedir según sus últimos
+  // brackets (margenTipico). Así la pirámide de un instrumento no deja sin entrada a otro: el
+  // DAX, p. ej., no se come el margen que necesitan a las 15:30 el Nasdaq y el Dow.
+  function margenReservado(dia, saldo) {
+    const cfg = datos.config
+    const t = ahora()
+    const reservas = []
+    if (!cfg.activo) return reservas
+    for (const [ticker, si] of Object.entries(cfg.instrumentos)) {
+      if (!si || ticker === dia.ticker || !SESIONES_BOT[ticker]) continue
+      const cruzan = [E.sesionDe(ticker, t), E.sesionDe(ticker, dia.cierra - 1)].filter(s => s && s.cierra > t && s.abre < dia.cierra)
+      for (const ses of new Map(cruzan.map(s => [clave(s), s])).values()) {
+        const otro = datos.dias[clave(ses)]
+        if (otro && !['esperando-bracket', 'esperando-rotura', 'esperando-vuelta'].includes(otro.estado)) continue
+        const eur = otro?.plan
+          ? otro.plan.tamano * margenPorContrato(otro.cierreBracket ?? otro.bracket.high, otro.plan)
+          : saldo * margenTipicoDe(ticker, otro?.config ?? cfg)
+        reservas.push({ ticker, eur })
+      }
+    }
+    return reservas
+  }
+
+  // margenTipico de un instrumento con sus últimos brackets del registro (los que se podían operar)
+  function margenTipicoDe(ticker, cfg) {
+    const pasados = Object.values(datos.dias)
+      .filter(d => d.ticker === ticker && d.bracket?.rango > 0)
+      .sort((a, b) => b.abre - a.abre)
+    const brackets = pasados
+      .map(d => d.bracket.rango / (d.cierreBracket ?? d.bracket.high))
+      .filter(b => b * 100 <= cfg.rangoMaxPct)
+      .slice(0, BRACKETS_TIPICOS)
+    const factorMargen = pasados.find(d => d.plan?.factorMargen)?.plan.factorMargen ?? MARGEN_IG
+    return margenTipico(brackets, { riesgoPct: cfg.riesgoPct, stopPct: cfg.stopPct, factorMargen })
   }
 
   // ── Las acciones ──
@@ -463,7 +528,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const t = tamanoPorRiesgo({ riesgoEur, riesgoPts, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin })
       if (!t.ok) { descartes.push(`${m.epic}: ${t.motivo}`); continue }
       plan = { epic: m.epic, moneda: m.moneda, tamano: t.tamano, riesgoEur: t.riesgoEur, valorPunto: m.valorPunto, cambioAEur: m.cambioAEur, tamanoMin: m.tamanoMin,
-        saldo: cuenta.saldo, riesgoPct: cfg.riesgoPct }
+        factorMargen: m.factorMargen ?? MARGEN_IG, saldo: cuenta.saldo, riesgoPct: cfg.riesgoPct }
       break
     }
     if (!plan) {
@@ -472,10 +537,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       return
     }
     // que el margen de la posición no se coma la cuenta: como mucho una parte del disponible
-    // (IG pide un 5% del nominal en estos índices)
+    // (IG pide un 5% del nominal en casi todos estos índices)
     const { disponible } = cuenta
     if (disponible != null) {
-      const margenUno = v.close * plan.valorPunto * plan.cambioAEur * 0.05
+      const margenUno = margenPorContrato(v.close, plan)
       const tope = Math.floor((disponible * MARGEN_MAX / margenUno) * 10) / 10
       if (plan.tamano > tope) {
         if (tope < (plan.tamanoMin ?? 0.1)) {
@@ -633,7 +698,9 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   }
 
   // Pirámide: una posición más al llegar el precio a su nivel, con el stop de todas en su
-  // precio medio. Si el precio se ha ido del nivel más del tope, espera a que vuelva cerca
+  // precio medio. Si el precio se ha ido del nivel más del tope, espera a que vuelva cerca.
+  // Si no cabe en el margen (dejando el de las entradas que aún esperan otros instrumentos),
+  // se recorta, o espera a que lo haya; y si IG la rechaza por falta de fondos, se reintenta
   async function anadir(dia) {
     const cfg = dia.config
     const { plan } = dia
@@ -655,22 +722,55 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       }
       return
     }
-    const tamano = Math.max(plan.tamanoMin ?? 0.1, Math.round(plan.tamano * cfg.tamanoAnadido * 10) / 10)
+    let tamano = Math.max(plan.tamanoMin ?? 0.1, Math.round(plan.tamano * cfg.tamanoAnadido * 10) / 10)
+    // el margen: lo que queda del disponible tras guardar el de las entradas de los demás y un colchón
+    let cuenta
+    try { cuenta = await ig.operar.cuenta() } catch (err) { op.esperaAnadir = ahora() + ESPERA_MARGEN_S; throw err }
+    if (cuenta?.disponible != null) {
+      const saldo = cuenta.saldo ?? plan.saldo
+      const reservas = margenReservado(dia, saldo)
+      const reservado = reservas.reduce((s, r) => s + r.eur, 0)
+      const cabe = Math.floor((cuenta.disponible - reservado - COLCHON_MARGEN * saldo) / margenPorContrato(precio, plan) * 10 + 1e-9) / 10
+      const cuentas = `${euros(cuenta.disponible)} disponibles`
+        + (reservas.length ? `, de los que ${euros(reservado)} se guardan para la entrada de ${reservas.map(r => SESIONES_BOT[r.ticker].nombre).join(' y ')}` : '')
+      if (cabe < (plan.tamanoMin ?? 0.1)) {
+        op.esperaAnadir = ahora() + ESPERA_MARGEN_S
+        if (op.avisoMargen !== n) {
+          op.avisoMargen = n
+          apuntar(dia, `Añadido en espera: no cabe en el margen (${cuentas}). Se vuelve a mirar cada minuto`)
+        }
+        return
+      }
+      if (cabe < tamano) {
+        apuntar(dia, `Añadido recortado de ${tamano} a ${cabe} por el margen (${cuentas})`, { aviso: false })
+        tamano = cabe
+      }
+    }
     const stop = stopMedio(op, { tamano, entrada: precio })
     const limite = m.aMercado ? null : (largo ? nivel + tope : nivel - tope)
     const referencia = referenciaNueva(dia)
-    apuntar(dia, `Pirámide: ${largo ? 'compra' : 'venta'} de ${tamano} más, la posición ${op.unidades.length + 1} de ${MAX_UNIDADES} como mucho`)
+    // tras un rechazo de IG por falta de fondos, los reintentos no se apuntan hasta que entre
+    const reintento = op.sinFondos != null
+    if (!reintento) apuntar(dia, `Pirámide: ${largo ? 'compra' : 'venta'} de ${tamano} más, la posición ${op.unidades.length + 1} de ${MAX_UNIDADES} como mucho`)
     dia.estado = 'entrando'
     dia.intento = { tipo: 'anadido', lado: op.lado, tamano, stop, hora: ahora(), referencia, nivel }
     guardar()
     const r = await ig.operar.abrir({ ticker: dia.ticker, epic: plan.epic, lado: op.lado, tamano, stop, moneda: plan.moneda, limite, referencia })
     dia.estado = 'en-posicion'
     if (!r.aceptada) {
-      // p. ej., sin margen para más: no se insiste en esta pierna
+      if (r.motivo === 'INSUFFICIENT_FUNDS') {
+        // sin margen ahora no es sin margen luego (otra sesión cierra, o la posición gana): se reintenta
+        op.esperaAnadir = ahora() + ESPERA_FONDOS_S
+        op.sinFondos = ahora()
+        if (!reintento) apuntar(dia, `IG rechaza el añadido por falta de fondos (${r.motivo}): se reintenta cada ${ESPERA_FONDOS_S / 60} min mientras el precio siga en su nivel`)
+        return
+      }
+      // otro motivo: no se insiste en esta pierna
       op.sinAnadidos = true
       apuntar(dia, `IG rechaza el añadido (${r.motivo}): esta pierna no añade más`)
       return
     }
+    delete op.sinFondos
     sumarUnidad(dia, { dealId: r.dealId, tamano: r.tamano ?? tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia, nivel })
     await ajustarStops(dia)
   }

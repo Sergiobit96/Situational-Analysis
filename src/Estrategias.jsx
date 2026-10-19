@@ -71,6 +71,20 @@ const ESTRATEGIAS = [
                  'los cortos pagan el dividendo y van contra la deriva alcista.',
     Componente:  EstrategiaTortugas,
   },
+  {
+    id:          'tortugas-12',
+    nombre:      'Tortugas S1+S2',
+    titular:     'Tortugas · los dos sistemas a la vez: el 2 coge las rupturas que el 1 se salta',
+    descripcion: 'Los sistemas 1 y 2 en la misma cartera. El 1 compra al romper el máximo de 20 sesiones y sale ' +
+                 'en el mínimo de 10, pero si la ruptura anterior habría ganado se la salta. Esa la coge el ' +
+                 'sistema 2 cuando rompe el máximo de 55 y la lleva con sus reglas: sale en el mínimo de 20, que ' +
+                 'le da más cuerda. Si la anterior perdió, entra el 1 y el 2 se queda fuera. Cada sistema lleva su ' +
+                 'propia posición, con su pirámide hasta 6 y su stop a 2 N, así que si el 2 sigue dentro cuando le ' +
+                 'toca entrar al 1, están los dos a la vez. Las unidades son del mismo tamaño en los dos y los ' +
+                 'límites por grupo y por sentido cuentan las de ambos. Huecos a la apertura y financiación de ' +
+                 'cada noche, como en los otros.',
+    Componente:  EstrategiaTortugas,
+  },
 ]
 
 export default function Estrategias() {

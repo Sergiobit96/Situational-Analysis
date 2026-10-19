@@ -10,6 +10,9 @@
 //    al romper el extremo contrario de 10. Se salta la ruptura si la anterior, operada o no,
 //    habría ganado, y entonces entra en la de 55. Sistema 2: entra en la de 55 y sale en la
 //    de 20, sin filtro.
+//  - Los dos a la vez ('1+2'): cada índice lleva una posición de cada sistema. El 1 entra en
+//    la de 20 si la anterior perdió; si habría ganado se la salta, y esa ruptura la coge el 2
+//    en la de 55 y la lleva con su salida de 20. El 1 ya no tiene la de 55 de reserva.
 //  - Pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`.
 //  - Stop a 2 N del último relleno, común a todas las unidades.
 //  - Todas las órdenes son stop: si la apertura ya ha saltado el nivel, se llenan en ella.
@@ -43,7 +46,7 @@ export const TICKER_TIPO = '^IRX'
 const TIPO_SIN_DATOS = 0.03
 
 export const CONFIG_TORTUGAS = {
-  sistema: 1,
+  sistema: 1,           // 1 | 2 | '1+2'
   lados: 'largos',      // largos | ambos | cortos
   riesgo: 0.002,        // fracción del capital que cuesta 1 N por unidad
   maxUnidades: 6,
@@ -64,6 +67,17 @@ export const CONFIG_TORTUGAS = {
 
 const DIA_MS = 86_400_000
 const noches = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / DIA_MS)
+
+export const sistemasDe = sistema => (sistema === '1+2' ? [1, 2] : [sistema])
+
+// La ruptura con la que entra un sistema que está fuera, o null si no entra. Solo, el 1 entra
+// en la de 20, o en la de 55 si la anterior habría ganado, y el 2 en la de 55. Juntos, la que
+// el 1 se salta la coge el 2, siempre que el 1 no esté dentro.
+function entradaDe(cfg, e, s) {
+  if (cfg.sistema !== '1+2') return s === 2 || e.gano ? 55 : 20
+  if (s === 1) return e.gano ? null : 20
+  return e.gano && !e.pos[1] ? 55 : null
+}
 
 // ── Indicadores ─────────────────────────────────────────────────────────────
 
@@ -123,6 +137,8 @@ export function prepararMercado(info, velas) {
 
 // ── Motor ───────────────────────────────────────────────────────────────────
 
+// las posiciones abiertas de un índice, una por sistema como mucho
+const abiertasDe = e => [e.pos[1], e.pos[2]].filter(Boolean)
 const tamDe = p => p.unidades.reduce((s, u) => s + u.tam, 0)
 const resultadoDe = (p, precio) => p.lado * p.unidades.reduce((s, u) => s + u.tam * (precio - u.precio), 0)
 const precioMedio = p => p.unidades.reduce((s, u) => s + u.precio * u.tam, 0) / tamDe(p)
@@ -154,12 +170,12 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
 
   const est = mercados.map(m => {
     const ptr = bisectIzq(m.fechas, cfg.desde)
-    return { m, ptr, pos: null, virtual: null, gano: false, ultimo: ptr > 0 ? m.c[ptr - 1] : NaN, i: -1 }
+    return { m, ptr, pos: { 1: null, 2: null }, virtual: null, gano: false, ultimo: ptr > 0 ? m.c[ptr - 1] : NaN, i: -1 }
   })
   let efectivo = cfg.capital, valorAyer = cfg.capital, pico = cfg.capital, nominal = cfg.capital
   const operaciones = [], curva = [], exposicion = []
 
-  const valor = () => efectivo + est.reduce((s, e) => s + (e.pos ? resultadoDe(e.pos, e.ultimo) : 0), 0)
+  const valor = () => efectivo + est.reduce((s, e) => s + abiertasDe(e).reduce((t, p) => t + resultadoDe(p, e.ultimo), 0), 0)
   const tamano = e => cfg.riesgo * nominal / e.m.n[e.i]
 
   const fijarCapital = () => {
@@ -183,15 +199,16 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     if (nominal <= 0) return false
     let grupo = 0, total = 0
     for (const x of est) {
-      if (x.pos && x.pos.lado === lado) {
-        total += x.pos.unidades.length
-        if (x.m.info.grupo === e.m.info.grupo) grupo += x.pos.unidades.length
+      for (const p of abiertasDe(x)) {
+        if (p.lado !== lado) continue
+        total += p.unidades.length
+        if (x.m.info.grupo === e.m.info.grupo) grupo += p.unidades.length
       }
     }
     if (grupo >= cfg.maxGrupo || total >= cfg.maxSentido) return false
     if (cfg.apalancamiento) {
       let nom = 0
-      for (const x of est) if (x.pos) nom += tamDe(x.pos) * x.ultimo
+      for (const x of est) for (const p of abiertasDe(x)) nom += tamDe(p) * x.ultimo
       nom += tamano(e) * e.m.c[e.i - 1]
       if (nom > cfg.apalancamiento * valorAyer) return false
     }
@@ -206,25 +223,25 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const canal = sube ? m.alto : m.bajo
     const primero = sube ? Math.min : Math.max
     const res = []
-    if (cfg.sistema === 1) {
+    if (cfg.sistema !== 2) {
       const v = e.virtual
       if (!v) res.push([canal[20][i], 1, { tipo: 'v_entra', lado }])
       else if (v.lado === -lado) res.push([primero(v.stop, canal[10][i]), 1, { tipo: 'v_sale' }])
     }
-    const p = e.pos
-    if (!p) {
-      if (permite(e, lado) && cabe(e, lado)) {
-        const k = cfg.sistema === 2 || e.gano ? 55 : 20
-        res.push([canal[k][i], 0, { tipo: 'entra', lado, k }])
+    for (const s of sistemasDe(cfg.sistema)) {
+      const p = e.pos[s]
+      if (!p) {
+        const k = entradaDe(cfg, e, s)
+        if (k && permite(e, lado) && cabe(e, lado)) res.push([canal[k][i], 0, { tipo: 'entra', sis: s, lado, k }])
+      } else if (p.lado === lado) {
+        if (p.unidades.length < cfg.maxUnidades && cabe(e, lado)) {
+          res.push([p.unidades.at(-1).ref + lado * cfg.paso * p.n0, 0, { tipo: 'anade', sis: s }])
+        }
+      } else {
+        const k = s === 1 ? 10 : 20
+        const nivel = primero(p.stop, canal[k][i])
+        res.push([nivel, 0, { tipo: 'sale', sis: s, motivo: nivel === p.stop ? 'stop' : `canal ${k}` }])
       }
-    } else if (p.lado === lado) {
-      if (p.unidades.length < cfg.maxUnidades && cabe(e, lado)) {
-        res.push([p.unidades.at(-1).ref + lado * cfg.paso * p.n0, 0, { tipo: 'anade' }])
-      }
-    } else {
-      const k = cfg.sistema === 1 ? 10 : 20
-      const nivel = primero(p.stop, canal[k][i])
-      res.push([nivel, 0, { tipo: 'sale', motivo: nivel === p.stop ? 'stop' : `canal ${k}` }])
     }
     return res
   }
@@ -232,7 +249,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   const apunte = (e, p, fecha, salida, motivo, bruto) => {
     const neto = bruto - p.financiacion
     return {
-      indice: e.m.info.id, lado: p.lado > 0 ? 'largo' : 'corto', ruptura: p.ruptura,
+      indice: e.m.info.id, sistema: p.sis, lado: p.lado > 0 ? 'largo' : 'corto', ruptura: p.ruptura,
       entrada: p.abierta, salida: fecha, dias: fecha ? noches(p.abierta, fecha) : null,
       n: p.n0, unidades: p.unidades.length, precioEntrada: precioMedio(p), precioSalida: salida, motivo,
       bruto, financiacion: p.financiacion, neto, pctCapital: 100 * neto / p.capital,
@@ -253,9 +270,9 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     }
     const coste = m.info.spread * precio / 2 + cfg.deslizN * n
     if (accion.tipo === 'entra') {
-      e.pos = { lado: accion.lado, n0: n, abierta: fecha, capital: valorAyer, ruptura: accion.k, stop: NaN, unidades: [], financiacion: 0 }
+      e.pos[accion.sis] = { sis: accion.sis, lado: accion.lado, n0: n, abierta: fecha, capital: valorAyer, ruptura: accion.k, stop: NaN, unidades: [], financiacion: 0 }
     }
-    const p = e.pos
+    const p = e.pos[accion.sis]
     if (accion.tipo === 'entra' || accion.tipo === 'anade') {
       p.unidades.push({ fecha, ref: precio, precio: precio + p.lado * coste, tam: tamano(e) })
       p.stop = precio - p.lado * cfg.stopN * p.n0
@@ -265,7 +282,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const bruto = resultadoDe(p, salida)
     efectivo += bruto
     operaciones.push(apunte(e, p, fecha, salida, accion.motivo, bruto))
-    e.pos = null
+    e.pos[accion.sis] = null
   }
 
   // Lleva el precio de a a b y ejecuta, de la más cercana a la más lejana, las órdenes que
@@ -290,14 +307,15 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   }
 
   const financiar = (e, i) => {
-    const p = e.pos
-    if (!p || !cfg.financiacion) return
+    if (!cfg.financiacion) return
     const { m } = e
-    const tipo = tipoEn(m.fechas[i - 1])
-    const tasa = p.lado > 0 ? tipo + cfg.recargo - m.info.dividendo : cfg.recargo - tipo + m.info.dividendo
-    const coste = tamDe(p) * m.c[i - 1] * tasa * noches(m.fechas[i - 1], m.fechas[i]) / 365
-    efectivo -= coste
-    p.financiacion += coste
+    for (const p of abiertasDe(e)) {
+      const tipo = tipoEn(m.fechas[i - 1])
+      const tasa = p.lado > 0 ? tipo + cfg.recargo - m.info.dividendo : cfg.recargo - tipo + m.info.dividendo
+      const coste = tamDe(p) * m.c[i - 1] * tasa * noches(m.fechas[i - 1], m.fechas[i]) / 365
+      efectivo -= coste
+      p.financiacion += coste
+    }
   }
 
   const sesion = (e, i) => {
@@ -321,12 +339,12 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const v = valor()
     curva.push({ date: f, valor: v })
     let nom = 0
-    for (const e of est) if (e.pos) nom += tamDe(e.pos) * e.ultimo
+    for (const e of est) for (const p of abiertasDe(e)) nom += tamDe(p) * e.ultimo
     exposicion.push(nom / Math.max(v, 1e-9))
     valorAyer = v
   }
 
-  const abiertas = est.filter(e => e.pos).map(e => apunte(e, e.pos, null, e.ultimo, 'abierta', resultadoDe(e.pos, e.ultimo)))
+  const abiertas = est.flatMap(e => abiertasDe(e).map(p => apunte(e, p, null, e.ultimo, 'abierta', resultadoDe(p, e.ultimo))))
   return { cfg, curva, exposicion, operaciones, abiertas, estados: est }
 }
 
@@ -411,6 +429,8 @@ export function resumenPorIndice(res) {
       neto: netoDe(o),
       largos: netoDe(o.filter(x => x.lado === 'largo')),
       cortos: netoDe(o.filter(x => x.lado === 'corto')),
+      s1: netoDe(o.filter(x => x.sistema === 1)),
+      s2: netoDe(o.filter(x => x.sistema === 2)),
       financiacion: suma(o.map(x => x.financiacion)),
       compraCagr: cs.length > 1 ? 100 * ((cs.at(-1) / cs[0]) ** (1 / anios) - 1) : NaN,
       compraDD: 100 * dd,
@@ -445,8 +465,10 @@ export const nHastaStop = (k, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTU
 // sentido: las unidades repartidas como peor convenga entre los índices (`grupos` son cuántos
 // índices hay en cada grupo), con los límites por índice, por grupo y por sentido. Primero lo
 // peor de cada grupo según cuántas unidades tenga y después el reparto entre grupos, las dos
-// cosas con programación dinámica. También devuelve cuántas unidades caben como mucho.
-export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso }) {
+// cosas con programación dinámica. También devuelve cuántas unidades caben como mucho. Con
+// `sistemas` = 2 cada índice puede llevar dos pirámides a la vez, una por sistema, cada una con
+// su stop.
+export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, sistemas = 1, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso }) {
   const repartir = (piezas, tope) => {
     let mejor = [0, ...new Array(tope).fill(-Infinity)]
     for (const pieza of piezas) {
@@ -461,7 +483,8 @@ export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, stop
     }
     return mejor
   }
-  const indice = Array.from({ length: maxUnidades + 1 }, (_, k) => nHastaStop(k, stopN, paso))
+  const piramide = Array.from({ length: maxUnidades + 1 }, (_, k) => nHastaStop(k, stopN, paso))
+  const indice = repartir(new Array(sistemas).fill(piramide), sistemas * maxUnidades)
   const porGrupo = grupos.filter(n => n > 0).map(n => repartir(new Array(n).fill(indice), Math.min(maxGrupo, maxSentido)))
   const total = repartir(porGrupo, maxSentido)
   const posibles = total.reduce((u, v, k) => (v > -Infinity ? k : u), 0)
@@ -469,27 +492,28 @@ export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, stop
 }
 
 // Las órdenes stop para la próxima sesión de cada índice, a partir del estado al último
-// cierre del backtest, con el tamaño de la unidad para `capital`
+// cierre del backtest, con el tamaño de la unidad para `capital`. Con los dos sistemas a la
+// vez, una fila por índice y sistema.
 export function ordenesManana(res, capital) {
   const { cfg } = res
-  return res.estados.map(e => {
+  return res.estados.flatMap(e => sistemasDe(cfg.sistema).map(s => {
     const { m } = e
     const n = m.nCierre.at(-1)
     const alto = k => Math.max(...m.h.slice(-k)), bajo = k => Math.min(...m.l.slice(-k))
     const fila = {
-      indice: m.info.id, nombre: m.info.nombre, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
+      indice: m.info.id, sistema: s, nombre: m.info.nombre, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
       unidad: cfg.riesgo * capital / n,
       posicion: null, compra: null, venta: null, salida: null, filtro: false,
     }
-    const p = e.pos
+    const p = e.pos[s]
     if (!p) {
-      const k = cfg.sistema === 2 || e.gano ? 55 : 20
+      const k = entradaDe(cfg, e, s)
       const mm = cfg.media ? media(m.c.slice(-cfg.media)) : null
-      fila.filtro = cfg.sistema === 1 && e.gano
-      if (cfg.lados !== 'cortos' && (!cfg.media || m.c.at(-1) > mm)) fila.compra = { nivel: alto(k), k }
-      if (cfg.lados !== 'largos' && (!cfg.media || m.c.at(-1) < mm)) fila.venta = { nivel: bajo(k), k }
+      fila.filtro = s === 1 && e.gano
+      if (k && cfg.lados !== 'cortos' && (!cfg.media || m.c.at(-1) > mm)) fila.compra = { nivel: alto(k), k }
+      if (k && cfg.lados !== 'largos' && (!cfg.media || m.c.at(-1) < mm)) fila.venta = { nivel: bajo(k), k }
     } else {
-      const k = cfg.sistema === 1 ? 10 : 20
+      const k = s === 1 ? 10 : 20
       fila.posicion = { lado: p.lado > 0 ? 'largo' : 'corto', unidades: p.unidades.length, desde: p.abierta, medio: precioMedio(p) }
       fila.salida = p.lado > 0 ? Math.max(p.stop, bajo(k)) : Math.min(p.stop, alto(k))
       if (p.unidades.length < cfg.maxUnidades) {
@@ -499,5 +523,5 @@ export function ordenesManana(res, capital) {
       }
     }
     return fila
-  })
+  }))
 }

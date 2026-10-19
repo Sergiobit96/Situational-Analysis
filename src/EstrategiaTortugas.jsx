@@ -3,7 +3,7 @@ import { createChart, AreaSeries, HistogramSeries, PriceScaleMode, CrosshairMode
 import { madridOffsetAt } from './timezone'
 import {
   INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, backtestTortugas,
-  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, porUnidades, ordenesManana, peorHastaStops,
+  metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
 } from './tortugas'
 import './Tortugas.css'
 
@@ -133,6 +133,7 @@ const eur = (v, dec = 0) => Number.isFinite(v) ? `${v < 0 ? '−' : ''}${nf(Math
 const pct = (v, dec = 1) => Number.isFinite(v) ? `${sgn(v, dec)} %` : '—'
 const dia = f => f ? f.split('-').reverse().join('/') : '—'
 const tono = v => v > 0 ? 'positivo' : v < 0 ? 'negativo' : ''
+const nombreSistema = s => (s === '1+2' ? 'S1 + S2' : `S${s}`)
 
 function Chips({ opciones, valor, onCambio }) {
   return opciones.map(o => (
@@ -164,7 +165,8 @@ function Numero({ valor, onCambio, min, max, step = 1, titulo }) {
 // ── Panel ───────────────────────────────────────────────────────────────────
 
 export default function EstrategiaTortugas({ estrategiaId }) {
-  const sistema = estrategiaId === 'tortugas-2' ? 2 : 1
+  const sistema = estrategiaId === 'tortugas-2' ? 2 : estrategiaId === 'tortugas-12' ? '1+2' : 1
+  const juntos = sistema === '1+2'
   const [ajustes, setAjustes] = useState(leerAjustes)
   const [datos, setDatos] = useState(datosEnCache)
   const [cargando, setCargando] = useState(false)
@@ -259,7 +261,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     setTimeout(() => {
       const unidades = [...new Set([1, 4, cfg.maxUnidades])].sort((a, b) => a - b)
       const filas = []
-      for (const s of [1, 2]) for (const lados of ['largos', 'ambos']) for (const u of unidades) {
+      for (const s of [1, 2, '1+2']) for (const lados of ['largos', 'ambos']) for (const u of unidades) {
         const r = backtestTortugas(mercados, tipos, { ...cfg, sistema: s, lados, maxUnidades: u })
         filas.push({ sistema: s, lados, unidades: u, actual: s === cfg.sistema && lados === cfg.lados && u === cfg.maxUnidades, m: metricasTortugas(r) })
       }
@@ -270,11 +272,15 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
   const ultimoDato = mercados.length ? mercados.map(x => x.fechas.at(-1)).sort().at(-1) : null
   // Lo que se pierde: 1 N en contra de todas las unidades, y hasta los stops (a 2 N de la última
-  // unidad de cada pirámide), con el peor reparto de las unidades que caben
+  // unidad de cada pirámide), con el peor reparto de las unidades que caben. Con los dos
+  // sistemas, cada índice puede llevar dos pirámides.
   const peor = peorHastaStops({
     grupos: Object.values(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).reduce((n, i) => ({ ...n, [i.grupo]: (n[i.grupo] ?? 0) + 1 }), {})),
     maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
+    sistemas: sistemasDe(sistema).length,
   })
+  // la N y la unidad son las mismas para los dos sistemas: una caja por índice
+  const nPorIndice = ordenes.filter((f, k) => ordenes.findIndex(x => x.indice === f.indice) === k)
 
   return (
     <div className="estrategia-panel tortugas">
@@ -321,7 +327,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Pirámide
             <span className="filtro-valor">
-              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por índice, contando la entrada: una más cada ½ N a favor
+              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por índice{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
             </span>
           </label>
           <div className="filtro-presets">
@@ -426,13 +432,13 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </p>
           )}
           <Resumen m={m} res={res} />
-          <NDeHoy filas={ordenes} paso={res.cfg.paso} stopN={res.cfg.stopN} />
+          <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} />
           <CurvaTortugas res={res} />
           <Anual res={res} />
           <PorIndice res={res} />
           <Piramide res={res} />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} />
-          <Ordenes filas={ordenes} capital={ajustes.capital} ultimoDato={ultimoDato} />
+          <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} />
           <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} />
           <p className="estr-nota">
             Velas diarias del contado (Yahoo). Las órdenes son stop y se ejecutan en su nivel, o en la apertura si la
@@ -583,6 +589,12 @@ function PorIndice({ res }) {
   const filas = useMemo(() => resumenPorIndice(res), [res])
   const hayCortos = res.cfg.lados !== 'largos'
   const hayLargos = res.cfg.lados !== 'cortos'
+  const juntos = res.cfg.sistema === '1+2'
+  const delSistema = s => {
+    const ops = res.operaciones.filter(o => o.sistema === s)
+    return { n: ops.length, neto: ops.reduce((t, o) => t + o.neto, 0), ganan: ops.filter(o => o.neto > 0).length }
+  }
+  const [s1, s2] = juntos ? [delSistema(1), delSistema(2)] : []
   return (
     <div className="estr-resumen">
       <div className="tortugas-tabla-wrap">
@@ -591,6 +603,7 @@ function PorIndice({ res }) {
             <tr>
               <th>Por índice</th><th>Desde</th><th>Operaciones</th><th>Ganadoras</th><th>Neto</th>
               {hayLargos && hayCortos && <><th>Largos</th><th>Cortos</th></>}
+              {juntos && <><th>Sistema 1</th><th>Sistema 2</th></>}
               <th>Financiación</th><th>Comprar y mantener</th><th>Su peor caída</th>
             </tr>
           </thead>
@@ -603,6 +616,7 @@ function PorIndice({ res }) {
                 <td>{nf(f.acierto, 1)} %</td>
                 <td className={tono(f.neto)}>{eur(f.neto)}</td>
                 {hayLargos && hayCortos && <><td className={tono(f.largos)}>{eur(f.largos)}</td><td className={tono(f.cortos)}>{eur(f.cortos)}</td></>}
+                {juntos && <><td className={tono(f.s1)}>{eur(f.s1)}</td><td className={tono(f.s2)}>{eur(f.s2)}</td></>}
                 <td>{eur(-f.financiacion)}</td>
                 <td>{pct(f.compraCagr)} al año</td>
                 <td>{pct(f.compraDD, 0)}</td>
@@ -612,6 +626,10 @@ function PorIndice({ res }) {
         </table>
       </div>
       <p className="estr-nota">
+        {juntos && <>
+          El sistema 1 deja <strong className={tono(s1.neto)}>{eur(s1.neto)}</strong> en {nf(s1.n)} operaciones ({nf(s1.n ? 100 * s1.ganan / s1.n : NaN, 0)} % ganadoras)
+          y el 2, con las rupturas que el 1 se salta, <strong className={tono(s2.neto)}>{eur(s2.neto)}</strong> en {nf(s2.n)} ({nf(s2.n ? 100 * s2.ganan / s2.n : NaN, 0)} % ganadoras).{' '}
+        </>}
         Comprar y mantener es el índice de precio, sin dividendos (salvo el DAX, que los incluye), en el mismo periodo:
         sirve de referencia para la rentabilidad y, sobre todo, para la caída.
       </p>
@@ -656,7 +674,7 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
-        <strong>Sistema 1 frente a sistema 2</strong>
+        <strong>Sistema 1, sistema 2 y los dos juntos</strong>
         <button className="chip" onClick={onComparar} disabled={comparando}>
           {comparando ? 'Calculando…' : variantes ? 'Volver a comparar' : 'Comparar variantes'}
         </button>
@@ -670,7 +688,7 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
             <tbody>
               {variantes.filas.map(f => (
                 <tr key={`${f.sistema}-${f.lados}-${f.unidades}`} className={f.actual ? 'tortugas-actual' : ''}>
-                  <th>S{f.sistema} · {LADO_CORTO[f.lados]} · {f.unidades === 1 ? 'sin pirámide' : `${f.unidades} u`}</th>
+                  <th>{nombreSistema(f.sistema)} · {LADO_CORTO[f.lados]} · {f.unidades === 1 ? 'sin pirámide' : `${f.unidades} u`}</th>
                   <td className={tono(f.m.cagr)}>{pct(f.m.cagr)}</td>
                   <td>{pct(f.m.maxDD, 0)}</td>
                   <td>{nf(f.m.mar, 2)}</td>
@@ -688,7 +706,7 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
         {variantes && !vigente
           ? <strong>Los ajustes han cambiado desde la comparación: vuelve a calcularla. </strong>
           : null}
-        Los dos sistemas, con y sin cortos y con distintas pirámides, con el resto de ajustes como están.
+        Los dos sistemas, por separado y juntos (el 2 con las rupturas que el 1 se salta), con y sin cortos y con distintas pirámides, con el resto de ajustes como están.
         La fila resaltada es la que se ve arriba. Fíjate más en el MAR (rentabilidad anual entre el peor drawdown)
         que en la rentabilidad: subir el riesgo sube las dos cosas a la vez.
       </p>
@@ -696,8 +714,13 @@ function Variantes({ variantes, vigente, comparando, onComparar }) {
   )
 }
 
-function Ordenes({ filas, capital, ultimoDato }) {
+function Ordenes({ filas, juntos, capital, ultimoDato }) {
   const nivel = o => o ? `${nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
+  const fuera = f => {
+    if (!juntos) return f.filtro ? 'fuera · la última de 20 ganó: espera la de 55' : 'fuera'
+    if (f.sistema === 1) return f.filtro ? 'fuera · la última de 20 ganó: se la salta y la coge el S2' : 'fuera'
+    return f.compra || f.venta ? 'fuera · el S1 se salta la de 20: entra en la de 55' : 'fuera · solo entra si el S1 se salta la ruptura'
+  }
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
@@ -707,19 +730,20 @@ function Ordenes({ filas, capital, ultimoDato }) {
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th><th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th><th>Compra stop</th><th>Venta stop</th><th>Salida stop</th></tr>
+            <tr><th>Índice</th>{juntos && <th>Sistema</th>}<th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th><th>Compra stop</th><th>Venta stop</th><th>Salida stop</th></tr>
           </thead>
           <tbody>
             {filas.map(f => (
-              <tr key={f.indice}>
+              <tr key={`${f.indice}-${f.sistema}`}>
                 <th>{f.nombre}</th>
+                {juntos && <td>S{f.sistema}</td>}
                 <td title={dia(f.ultimoDia)}>{nf(f.cierre, 2)}</td>
                 <td>{nf(f.n, 1)}</td>
                 <td>{nf(f.unidad, 2)} €/pt</td>
                 <td className="tortugas-izq">
                   {f.posicion
                     ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${nf(f.posicion.medio, 1)}`
-                    : f.filtro ? 'fuera · la última de 20 ganó: espera la de 55' : 'fuera'}
+                    : fuera(f)}
                 </td>
                 <td>{nivel(f.compra)}</td>
                 <td>{nivel(f.venta)}</td>
@@ -731,7 +755,7 @@ function Ordenes({ filas, capital, ultimoDato }) {
       </div>
       <p className="estr-nota">
         Es la posición que tendría hoy el backtest. Entre paréntesis, las sesiones de la ruptura. La salida es el más
-        cercano entre el stop de 2 N y el canal contrario. La unidad es riesgo · capital / N: si sale por debajo del
+        cercano entre el stop de 2 N y el canal contrario{juntos ? ' (de 10 en el S1 y de 20 en el S2)' : ''}. La unidad es riesgo · capital / N: si sale por debajo del
         mínimo del broker, hace falta más capital o más riesgo por unidad.
       </p>
     </div>
@@ -740,6 +764,7 @@ function Ordenes({ filas, capital, ultimoDato }) {
 
 function Operaciones({ res, mostradas, onMas }) {
   const filas = useMemo(() => [...res.abiertas, ...[...res.operaciones].reverse()], [res])
+  const juntos = res.cfg.sistema === '1+2'
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
@@ -749,12 +774,13 @@ function Operaciones({ res, mostradas, onMas }) {
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th><th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
+            <tr><th>Índice</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
           </thead>
           <tbody>
             {filas.slice(0, mostradas).map((o, k) => (
               <tr key={k} className={o.motivo === 'abierta' ? 'tortugas-actual' : ''}>
                 <th>{o.indice}</th>
+                {juntos && <td>S{o.sistema}</td>}
                 <td>{o.lado}</td>
                 <td>{dia(o.entrada)}</td>
                 <td>{o.salida ? dia(o.salida) : 'abierta'}</td>

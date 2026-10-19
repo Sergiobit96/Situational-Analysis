@@ -127,3 +127,69 @@ test('sistema 1: tras una ruptura de 20 ganadora, la siguiente espera a la de 55
   assert.equal(o.compra.k, 55)
   assert.ok(Math.abs(o.compra.nivel - 105.63) < 1e-9)
 })
+
+// ── Los dos sistemas a la vez ──
+
+const SUBE = Array.from({ length: 14 }, (_, j) => vela(105 + 0.01 * j, 105.5 + 0.01 * j, 104.5 + 0.01 * j, 105 + 0.01 * j))
+const TRIANGULO = Array.from({ length: 20 }, (_, j) => vela(103, 103.4 - 0.01 * j, 102.6 + 0.01 * j, 103))
+// la serie del test anterior: una ruptura de 20 ganadora y otra de 20 que el sistema 1 se salta
+const SALTADA = () => [
+  ...base().slice(0, 60), ...Array.from({ length: 10 }, () => vela(100, 100.9, 99.1, 100)),
+  vela(100, 103, 99.5, 102.9), ...SUBE, vela(104.4, 104.6, 103, 103.2), ...TRIANGULO,
+  vela(103, 104, 102.9, 103.9),
+]
+
+test('los dos a la vez: la ruptura que el sistema 1 se salta la coge el 2 en la de 55', () => {
+  const res = backtestTortugas([prepararMercado(INFO, conFechas(SALTADA()))], SIN_TIPO, { ...LIMPIO, sistema: '1+2' })
+  assert.deepEqual(res.operaciones.map(o => [o.sistema, o.ruptura, o.motivo]), [[1, 20, 'canal 10']])
+  assert.equal(res.abiertas.length, 0)
+  const [s1, s2] = ordenesManana(res, 20_000)
+  assert.deepEqual([s1.indice, s1.sistema, s2.indice, s2.sistema], ['X', 1, 'X', 2])
+  assert.equal(s1.filtro, true)
+  assert.equal(s1.compra, null)                    // el 1 no tiene la de 55 de reserva
+  assert.equal(s2.compra.k, 55)
+  assert.ok(Math.abs(s2.compra.nivel - 105.63) < 1e-9)
+})
+
+test('los dos a la vez: el sistema 2 lleva la de 55 con su salida de 20, no con la de 10', () => {
+  const velas = conFechas([
+    ...SALTADA(),
+    vela(104, 106.4, 103.9, 106.3),                // rompe la de 55 (105,63)
+    ...Array.from({ length: 24 }, (_, j) => vela(106.5 + j, 107.4 + j, 106.4 + j, 107.3 + j)),
+    vela(130, 130.1, 115, 115.5),                  // rompe el mínimo de 10 (120,4), no el de 20
+    vela(115, 115.5, 108, 108.5),                  // rompe el de 20 (111,4)
+  ])
+  const mercado = prepararMercado(INFO, velas)
+  const cfg = { ...LIMPIO, maxUnidades: 1 }
+  // solo, el sistema 1 entra en la de 55 de reserva y sale en la de 10
+  const solo = backtestTortugas([mercado], SIN_TIPO, { ...cfg, sistema: 1 }).operaciones.at(-1)
+  assert.deepEqual([solo.sistema, solo.ruptura, solo.motivo, solo.precioSalida], [1, 55, 'canal 10', 120.4])
+  const juntos = backtestTortugas([mercado], SIN_TIPO, { ...cfg, sistema: '1+2' }).operaciones
+  assert.deepEqual(juntos.map(o => [o.sistema, o.ruptura, o.motivo]), [[1, 20, 'canal 10'], [2, 55, 'canal 20']])
+  assert.equal(juntos[1].precioEntrada, 105.63)
+  assert.equal(juntos[1].precioSalida, 111.4)
+})
+
+test('los dos a la vez: si la ruptura anterior perdió, entra el sistema 1 y el 2 se queda fuera', () => {
+  const velas = conFechas([
+    ...base(), RUPTURA,
+    vela(103, 103.5, 96, 96.5),                    // rompe el mínimo de 10 (98,9): la real y la virtual pierden
+    ...Array.from({ length: 10 }, () => vela(100, 101, 99, 100)),
+    vela(100, 106, 99.9, 105.9),                   // 104 es a la vez el máximo de 20 y el de 55
+  ])
+  const res = backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, { ...LIMPIO, sistema: '1+2', maxUnidades: 1 })
+  assert.deepEqual(res.operaciones.map(o => [o.sistema, o.motivo, o.precioSalida]), [[1, 'canal 10', 98.9]])
+  assert.equal(res.estados[0].gano, false)
+  assert.deepEqual(res.abiertas.map(o => [o.sistema, o.ruptura, o.precioEntrada]), [[1, 20, 104]])
+  const [, s2] = ordenesManana(res, 20_000)
+  assert.equal(s2.posicion, null)
+  assert.equal(s2.compra, null)
+})
+
+test('lo peor hasta los stops con dos pirámides por índice, una por sistema', () => {
+  // 12 unidades en un índice: lo peor son dos pirámides de 4 (5 N cada una), no una de 6
+  assert.deepEqual(peorHastaStops({ grupos: [1], maxUnidades: 6, maxGrupo: 12, maxSentido: 12, sistemas: 2 }), { n: 10, unidades: 12 })
+  // con 2 unidades, una en cada sistema pierde 2 + 2 N; las dos en la misma pirámide, 3,5
+  assert.deepEqual(peorHastaStops({ grupos: [1], maxUnidades: 6, maxGrupo: 2, maxSentido: 2, sistemas: 2 }), { n: 4, unidades: 2 })
+  assert.deepEqual(peorHastaStops({ grupos: [1], maxUnidades: 6, maxGrupo: 2, maxSentido: 2 }), { n: 3.5, unidades: 2 })
+})

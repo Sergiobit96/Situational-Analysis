@@ -62,7 +62,7 @@ test('los niveles del bot son los del backtest: N, canales y filtro del Sistema 
       assert.deepEqual(nv.virtual && { lado: nv.virtual.lado, entrada: nv.virtual.entrada, stop: nv.virtual.stop }, e.virtual, `ruptura virtual con semilla ${semilla}`)
       assert.equal(nv.alto[20], Math.max(...velas.slice(-20).map(v => v.high)))
       assert.equal(nv.bajo[10], Math.min(...velas.slice(-10).map(v => v.low)))
-      if (!e.pos) assert.equal(nv.alto[nv.gano ? 55 : 20], manana.compra.nivel)
+      if (!e.pos[1]) assert.equal(nv.alto[nv.gano ? 55 : 20], manana.compra.nivel)
     }
   }
   assert.equal(nivelesTortugas(serie(50)), null)

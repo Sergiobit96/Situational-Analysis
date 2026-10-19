@@ -107,6 +107,8 @@
 .tor-tabla small.bot-pos { color: var(--green); }
 .tor-tabla small.bot-neg { color: var(--red); }
 .tor-motivo { max-width: 22rem; white-space: normal; }
+/* el contrato de IG con que se opera la unidad (CS.D.EURUSD.CECM.IP) */
+.tor-tabla small.tor-epic { font-size: 0.65rem; letter-spacing: 0.01em; opacity: 0.8; }
 .tor-apagado td { opacity: 0.55; }
 .velas-tabla.tor-tabla tbody.tor-indice-grupo tr:first-child td { border-top: 1px solid var(--border-2, var(--border)); }
 .velas-tabla.tor-tabla tbody.tor-indice-grupo tr + tr td { border-top-style: dashed; }

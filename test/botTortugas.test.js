@@ -261,10 +261,13 @@ test('el DAX de punta a punta: plan, ruptura, pirámide con el stop de todas, sa
     assert.equal(m.plan.unidad.tamano, 0.6)
     assert.equal(avisos.filter(a => /Próxima sesión/.test(a)).length, 0)
 
-    // al abrir se rehace
+    // al abrir se rehace; se apunta en los eventos de la pestaña, pero no va a Telegram
+    // (la tabla de la pestaña ya lo enseña)
     enHora(fra(10, 19, 9, 0, 5)); await bot._paso()
     m = mercado(bot, '^GDAXI')
     assert.equal(m.plan.provisional, false)
+    assert.ok(bot.estado().eventos.some(e => /^Sesión de hoy: N 300/.test(e.texto)))
+    assert.equal(avisos.filter(a => /Sesión de hoy/.test(a)).length, 0)
 
     // ruptura: compra a mercado con el stop a 2 N del relleno
     ig.precios['^GDAXI'] = [25_155, 25_156]

@@ -326,7 +326,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
               <td className="bot-celda-texto" rowSpan={n}>
                 {!plan ? '—'
                   : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
-                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano, 2)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small></>
+                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano, 2)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small><small className="tor-sub tor-epic">{plan.unidad.epic}</small></>
                   : <><span className="bot-neg">no cabe</span><small className="tor-sub tor-motivo">{plan.unidad?.motivo}</small></>}
               </td>
             </>}

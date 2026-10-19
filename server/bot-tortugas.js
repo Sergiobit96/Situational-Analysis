@@ -316,7 +316,6 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   // que es la misma en los dos porque cada uno tiene la misma parte del capital
   async function hacerPlan(ticker, ses) {
     const cfg = datos.config
-    const anterior = datos.planes[ticker]
     const reparto = cfg.sistemas.length || 1
     const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct, reparto }
     const falla = (texto, { espera = REINTENTO_PLAN_S, aviso = !plan.provisional } = {}) => {
@@ -382,12 +381,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     partes.push(plan.unidad.ok
       ? `unidad de ${num(plan.unidad.tamano, 2)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N${reparto > 1 ? ' en cada sistema' : ''})`
       : `no se puede operar: ${plan.unidad.motivo}`)
-    // el plan provisional (antes de abrir) no se avisa; el de la apertura, solo si cambia algo
+    // el plan se queda en los eventos de la pestaña, sin Telegram: la tabla de la pestaña ya
+    // enseña la N, los niveles de cada sistema y la unidad (petición del usuario, 19-oct-2026)
     const texto = `${plan.provisional ? 'Próxima sesión' : 'Sesión de hoy'}: ${partes.join(' · ')}`
-    const repetido = anterior && !anterior.error && anterior.fecha === plan.fecha && anterior.unidad?.ok === plan.unidad.ok
-      && anterior.n === plan.n && anterior.unidad?.tamano === plan.unidad.tamano
-    const conPosicion = SISTEMAS.some(s => datos.posiciones[claveDe(ticker, s)])
-    apuntar(ticker, texto, { aviso: !plan.provisional && !repetido && (conPosicion || plan.unidad.ok) })
+    apuntar(ticker, texto, { aviso: false })
   }
 
   // ── Límites de cartera (los del backtest, dentro de cada sistema; el nominal, de todo) ──

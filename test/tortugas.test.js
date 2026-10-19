@@ -68,6 +68,9 @@ test('pirámide cada ½ N con el stop común a 2 N del último añadido', () => 
   assert.equal(op.precioSalida, 100)               // 104 − 2 N
   // unidad = 0,2 % · 100.000 / 2 = 100 €/pt, y pierde 1 + 2 + 3 + 4 puntos
   assert.equal(op.neto, -1000)
+  assert.deepEqual(op.tamanos, [100, 100, 100, 100])
+  assert.equal(op.tamano, 400)
+  assert.equal(op.nominal, 400 * 102.5)
 })
 
 test('si la noche salta el stop, sale a la apertura', () => {

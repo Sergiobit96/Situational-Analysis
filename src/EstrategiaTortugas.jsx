@@ -774,7 +774,7 @@ function Operaciones({ res, mostradas, onMas }) {
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
-            <tr><th>Índice</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
+            <tr><th>Índice</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th><th title="Todas las unidades juntas, en € por punto">Tamaño</th><th title="Tamaño por precio medio de entrada">Nominal</th><th>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th><th>% capital</th></tr>
           </thead>
           <tbody>
             {filas.slice(0, mostradas).map((o, k) => (
@@ -787,6 +787,8 @@ function Operaciones({ res, mostradas, onMas }) {
                 <td>{o.dias ?? ''}</td>
                 <td>{nf(o.n, 1)}</td>
                 <td>{o.unidades}</td>
+                <td title={o.tamanos.length > 1 ? `Unidades: ${o.tamanos.map(t => nf(t, 2)).join(' + ')} €/pt` : undefined}>{nf(o.tamano, 2)} €/pt</td>
+                <td>{eur(o.nominal)}</td>
                 <td>{nf(o.precioEntrada, 1)}</td>
                 <td>{nf(o.precioSalida, 1)}</td>
                 <td>{o.motivo === 'abierta' ? '—' : o.motivo}</td>

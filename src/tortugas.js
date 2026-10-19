@@ -251,7 +251,8 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     return {
       indice: e.m.info.id, sistema: p.sis, lado: p.lado > 0 ? 'largo' : 'corto', ruptura: p.ruptura,
       entrada: p.abierta, salida: fecha, dias: fecha ? noches(p.abierta, fecha) : null,
-      n: p.n0, unidades: p.unidades.length, precioEntrada: precioMedio(p), precioSalida: salida, motivo,
+      n: p.n0, unidades: p.unidades.length, tamano: tamDe(p), nominal: tamDe(p) * precioMedio(p),
+      tamanos: p.unidades.map(u => u.tam), precioEntrada: precioMedio(p), precioSalida: salida, motivo,
       bruto, financiacion: p.financiacion, neto, pctCapital: 100 * neto / p.capital,
     }
   }

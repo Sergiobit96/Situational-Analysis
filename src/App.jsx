@@ -12,8 +12,7 @@ import Book from './Book'
 import Estrategias from './Estrategias.jsx'
 import Grafico from './Grafico'
 import Estadisticas from './Estadisticas.jsx'
-import Bot from './Bot'
-import BotTortugas from './BotTortugas'
+import Bots from './Bots'
 import './App.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
@@ -26,8 +25,7 @@ const ICONOS = {
   diario:   'M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3V4zM5 17a3 3 0 013-3h11M9 8h6',
   seg:      'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
   stats:    'M12 3v9h9a9 9 0 11-9-9zM15 3.5A9 9 0 0120.5 9H15z',
-  bot:      'M5 9h14v10H5zM12 5v4M9 13h.01M15 13h.01M9 16h6M12 5a1 1 0 100-2 1 1 0 000 2z',
-  tortugas: 'M4 15c0-4.4 3.6-8 8-8s8 3.6 8 8H4zM8 15l-1.5 3M16 15l1.5 3M20 13h1.5a1.5 1.5 0 000-3H19M12 7v8M7.5 10.5l9 0',
+  bots:     'M5 9h14v10H5zM12 5v4M9 13h.01M15 13h.01M9 16h6M12 5a1 1 0 100-2 1 1 0 000 2z',
   datos:    'M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4',
   pipeline: 'M6 4l14 8-14 8V4z',
   fotos:    'M3 7h4l2-3h6l2 3h4v13H3zM12 17a4 4 0 100-8 4 4 0 000 8z',
@@ -47,10 +45,9 @@ const GRUPOS = [
     { id: 'diario', label: 'Diario' },
     { id: 'seg',    label: 'Seguimiento' },
     { id: 'stats',  label: 'Estadísticas' },
-    // el bot opera en la demo de IG desde el servidor (en la nube, con BOT_OPERA=1); en
-    // producción la pestaña pide la clave del bot
-    { id: 'bot', label: 'Bot SRS' },
-    { id: 'tortugas', label: 'Bot Tortugas' },
+    // los bots (SRS, Rule of 4 y tortugas) operan en la demo de IG desde el servidor (en la
+    // nube, con BOT_OPERA=1); en producción la pestaña pide la clave del bot
+    { id: 'bots', label: 'Bots' },
   ] },
   { titulo: 'Datos', tabs: [
     { id: 'datos', label: 'Subir datos' },
@@ -75,18 +72,23 @@ function Icono({ id }) {
   )
 }
 
-function tabInicial() {
+// Las pestañas que había antes de juntar los bots: un enlace o una pestaña guardada con ellas
+// abre la de los bots en su vista
+const BOTS_ANTES = { bot: 'srs', tortugas: 'tortugas' }
+
+function tabPedida() {
   const enUrl = window.location.hash.slice(1)
-  if (TABS.some(t => t.id === enUrl)) return enUrl
+  if (TABS.some(t => t.id === enUrl) || BOTS_ANTES[enUrl]) return enUrl
   try {
     const guardada = localStorage.getItem('sa.tab')
-    if (TABS.some(t => t.id === guardada)) return guardada
+    if (TABS.some(t => t.id === guardada) || BOTS_ANTES[guardada]) return guardada
   } catch { /* sin almacenamiento */ }
   return 'gap'
 }
 
 export default function App() {
-  const [tab, setTab] = useState(tabInicial)
+  const [pedida] = useState(tabPedida)
+  const [tab, setTab] = useState(() => (BOTS_ANTES[pedida] ? 'bots' : pedida))
   // Trade que Seguimiento pide abrir en Operaciones (fecha + producto)
   const [irATrade, setIrATrade] = useState(null)
   const actual = TABS.find(t => t.id === tab)
@@ -153,8 +155,7 @@ export default function App() {
           )}
           {tab === 'estr'     && <Estrategias />}
           {tab === 'stats'    && <Estadisticas />}
-          {tab === 'bot'      && <Bot />}
-          {tab === 'tortugas' && <BotTortugas />}
+          {tab === 'bots'     && <Bots inicial={BOTS_ANTES[pedida] ?? null} />}
           {tab === 'pipeline' && <Pipeline />}
           {tab === 'fotos'    && <Fotos />}
           {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}

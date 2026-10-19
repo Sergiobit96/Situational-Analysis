@@ -5,10 +5,12 @@ import { piernasDe, abiertoSrs, siguienteAnadidoSrs, acumulado } from './botCalc
 import { GraficoSesion, Piramide, LineaDelDia, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
 
-// Pestaña Bot: el bot SRS que opera en la demo de IG (server/bot-srs.js) en varias sesiones
-// del día. Enseña las sesiones de hoy, el historial al lado de lo que habría hecho el
-// backtest (calculado aquí, con el mismo motor que la pestaña Estrategias, sobre las velas
-// que el bot guarda al cierre) y la configuración. En producción el servidor pide una clave.
+// Un bot del motor de server/bot-srs.js en la demo de IG: el SRS, en varias sesiones del día,
+// o la Rule of 4, los días del FOMC (`api`, `nombre` y `notaDia` dicen cuál). Enseña las
+// sesiones de hoy, el historial al lado de lo que habría hecho el backtest (calculado aquí,
+// con el mismo motor que la pestaña Estrategias, sobre las velas que el bot guarda al cierre)
+// y la configuración. Telegram y el ensayo de órdenes son de la cuenta, no de un bot: van solo
+// en el SRS (`extras`). En producción el servidor pide una clave.
 
 const ESTADOS = {
   'esperando-bracket': 'Esperando a la vela del bracket',
@@ -78,7 +80,9 @@ function backtestDe(d, maxUnidades) {
   }
 }
 
-export default function Bot() {
+const NOTA_SRS = 'Horas de Madrid; la raya vertical es ahora. Cada sesión abre a la hora de su bolsa (Tokio 09:00, Fráncfort 09:00, Londres 08:00 y Nueva York 09:30) y la casilla la enciende o la apaga.'
+
+export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaDia = NOTA_SRS, extras = true }) {
   const [datos, setDatos] = useState(null)
   const [error, setError] = useState(null)
   const [pideClave, setPideClave] = useState(false)
@@ -93,7 +97,7 @@ export default function Bot() {
 
   const cargar = useCallback(async () => {
     try {
-      setDatos(await pedir('/api/bot'))
+      setDatos(await pedir(api))
       setAhora(Math.floor(Date.now() / 1000))
       setError(null)
       setPideClave(false)
@@ -101,7 +105,7 @@ export default function Bot() {
       setError(err.message)
       if (err.necesitaClave) setPideClave(true)
     }
-  }, [])
+  }, [api])
 
   // al abrir la pestaña y cada 5 s: el bot cambia solo (bracket, entrada, cierre)
   useEffect(() => {
@@ -116,12 +120,12 @@ export default function Bot() {
     setOcupado(true)
     try { await fn(); await cargar() } catch (err) { setError(err.message) } finally { setOcupado(false) }
   }
-  const guardarConfig = cambios => accion(() => pedir('/api/bot/config', {
+  const guardarConfig = cambios => accion(() => pedir(`${api}/config`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cambios),
   }))
   const pararYCerrar = () => {
-    if (!window.confirm('¿Apagar el bot y cerrar ahora todo lo que tenga abierto?')) return
-    accion(() => pedir('/api/bot/parar', { method: 'POST' }))
+    if (!window.confirm(`¿Apagar el bot ${nombreBot} y cerrar ahora todo lo que tenga abierto?`)) return
+    accion(() => pedir(`${api}/parar`, { method: 'POST' }))
   }
   const conectarTelegram = () => accion(async () => {
     setAvisoTelegram(null)
@@ -179,6 +183,9 @@ export default function Bot() {
   const saldo = hoy.find(d => d.plan?.saldo)?.plan.saldo ?? null
   const curva = acumulado([...operados].reverse().map(d => ({ etiqueta: `${d.fecha} · ${nombre(d.ticker)}`, valor: d.resultadoEur ?? 0 })))
   const maxEur = Math.max(0, ...operados.map(d => Math.abs(d.resultadoEur ?? 0)))
+  // la próxima sesión de cualquier instrumento encendido (en la Rule of 4, la próxima reunión)
+  const proximas = sesiones.filter(s => s.encendido && s.proxima).map(s => s.proxima)
+  const proxima = proximas.length ? Math.min(...proximas) : null
 
   // Una fila por instrumento en la línea del día: su sesión de hoy y cómo va
   const filasDia = sesiones.map(s => {
@@ -212,7 +219,7 @@ export default function Bot() {
       <section className="bot-cabecera">
         <div>
           <div className={`bot-interruptor ${config.activo ? 'encendido' : ''}`}>{config.activo ? '● Encendido' : '○ Apagado'}</div>
-          <p className="bot-nota">SRS · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}</p>
+          <p className="bot-nota">{nombreBot} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}</p>
           {!opera && <p className="bot-aviso">Este servidor no opera (BOT_OPERA no es 1): el registro es el suyo, pero las órdenes las manda el servidor que tenga BOT_OPERA=1.</p>}
         </div>
         <div className="bot-botones">
@@ -236,13 +243,16 @@ export default function Bot() {
       <section className="bot-bloque">
         <h3>El día</h3>
         <LineaDelDia filas={filasDia} ahora={ahora} />
-        <p className="bot-nota">Horas de Madrid; la raya vertical es ahora. Cada sesión abre a la hora de su bolsa (Tokio 09:00, Fráncfort 09:00, Londres 08:00 y Nueva York 09:30) y la casilla la enciende o la apaga.</p>
+        <p className="bot-nota">{notaDia}</p>
       </section>
 
       <section className="bot-bloque">
         <h3>Hoy</h3>
         {hoy.length === 0 ? (
-          <p className="bot-nota">{config.activo ? 'Ninguna sesión empezada todavía.' : 'El bot está apagado: enciéndelo para que opere las próximas sesiones.'}</p>
+          <p className="bot-nota">
+            {config.activo ? 'Ninguna sesión empezada todavía.' : 'El bot está apagado: enciéndelo para que opere las próximas sesiones.'}
+            {proxima && ` La próxima: ${fechaHora(proxima)}.`}
+          </p>
         ) : (
           <div className="bot-tarjetas">
             {[...cuentasHoy].sort((a, b) => (ORDEN_ESTADO[a.d.estado] ?? 1) - (ORDEN_ESTADO[b.d.estado] ?? 1) || a.d.abre - b.d.abre)
@@ -361,6 +371,7 @@ export default function Bot() {
         }}>Guardar configuración</button>
       </section>
 
+      {extras && <>
       <section className="bot-bloque">
         <h3>Avisos por Telegram</h3>
         <p className="bot-nota">
@@ -392,6 +403,7 @@ export default function Bot() {
         {ensayo?.error && <p className="bot-error">{ensayo.error}</p>}
         {ensayo?.pasos && <ul className="bot-eventos">{ensayo.pasos.map((p, i) => <li key={i}>{p}</li>)}</ul>}
       </section>
+      </>}
     </div>
   )
 }

@@ -31,12 +31,19 @@
 // El registro (configuración y un apunte por sesión) va a un JSON. Al cierre guarda las velas
 // de 15 min de la sesión: con ellas la pestaña Bot calcula lo que habría hecho el backtest
 // con el mismo motor que la pestaña Estrategias (el servidor se despliega sin src).
+//
+// El mismo motor opera también la Rule of 4 (RULE_OF_4, con crearBot({ estrategia })): solo
+// los días en que el FOMC publica su decisión, con la sesión anclada en el comunicado (14:00
+// de Nueva York) y dos horas de duración, y el bracket en la cuarta vela de 10 min. Es otro
+// bot, con su registro, su configuración y sus referencias (R4-…): los dos pueden tener a la
+// vez posiciones en el mismo índice, que IG no compensa (las órdenes van con forceOpen).
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
 import { offsetMadrid } from './velas-grafico.js'
 import { fechaEnZona, diaSemanaEnZona, instanteEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
+import { FOMC, HORA_FOMC_NY } from './fomc.js'
 
 // Apertura y cierre de cada sesión en la hora de su bolsa (minutos desde medianoche)
 export const SESIONES_BOT = {
@@ -99,6 +106,13 @@ export function agruparDirecto(velas1, desde, hasta, minutos = MINUTOS_VELA) {
   return [...porTramo.values()].sort((a, b) => a.time - b.time)
 }
 
+// Una sesión con su vela del bracket: la `nBracket`-ésima de `minutosVela` desde la apertura
+const conBracket = (ticker, fecha, abre, cierra, minutosVela, nBracket) => ({
+  ticker, fecha, abre, cierra,
+  velaBracket: abre + (nBracket - 1) * minutosVela * 60,
+  finBracket:  abre + nBracket * minutosVela * 60,
+})
+
 // La sesión de un instrumento en curso en `t` (o la de ese día, si ya cerró), en su bolsa.
 // null en fin de semana.
 export function sesionDe(ticker, t) {
@@ -107,13 +121,7 @@ export function sesionDe(ticker, t) {
   const dow = diaSemanaEnZona(t, s.zona)
   if (dow === 0 || dow === 6) return null
   const fecha = fechaEnZona(t, s.zona)
-  const abre = instanteEnZona(fecha, s.apertura, s.zona)
-  return {
-    ticker, fecha, abre,
-    cierra:      instanteEnZona(fecha, s.cierre, s.zona),
-    velaBracket: abre + MINUTOS_VELA * 60,
-    finBracket:  abre + 2 * MINUTOS_VELA * 60,
-  }
+  return conBracket(ticker, fecha, instanteEnZona(fecha, s.apertura, s.zona), instanteEnZona(fecha, s.cierre, s.zona), MINUTOS_VELA, 2)
 }
 
 // La próxima apertura de un instrumento a partir de `t` (para enseñarla en la pestaña)
@@ -123,6 +131,49 @@ export function proximaApertura(ticker, t) {
     if (ses && ses.abre > t) return ses.abre
   }
   return null
+}
+
+// ── Rule of 4: los días del FOMC ──
+// La sesión empieza con el comunicado, a las 14:00 de Nueva York (las 20:00 de Madrid casi
+// siempre; las 19:00 o las 21:00 las semanas en que los dos no han cambiado aún la hora), y
+// dura dos horas, hasta el cierre de Wall Street. Igual para todos los instrumentos: el DAX,
+// el FTSE y el Nikkei también cotizan a esa hora. La fecha es la de Nueva York.
+const DIAS_FOMC = new Set(FOMC)
+const ZONA_FOMC = 'America/New_York'
+const comunicado = fecha => instanteEnZona(fecha, HORA_FOMC_NY, ZONA_FOMC)
+
+export function sesionRuleOf4(ticker, t) {
+  if (!SESIONES_BOT[ticker]) return null
+  const fecha = fechaEnZona(t, ZONA_FOMC)
+  if (!DIAS_FOMC.has(fecha)) return null
+  const abre = comunicado(fecha)
+  return conBracket(ticker, fecha, abre, abre + 120 * 60, 10, 4)
+}
+
+// El próximo comunicado a partir de `t`, o null si el calendario (server/fomc.js) se acaba
+export function proximaRuleOf4(ticker, t) {
+  for (const fecha of FOMC) {
+    const abre = comunicado(fecha)
+    if (abre > t) return abre
+  }
+  return null
+}
+
+// Lo que cambia de una estrategia a otra; el resto del bot es el mismo. `aviso` va delante de
+// lo que se manda a Telegram, para saber de qué bot es (el SRS, sin nada, como siempre).
+export const SRS = {
+  id: 'srs', nombre: 'SRS', prefijo: PREFIJO, etiquetaLog: 'bot', aviso: '',
+  minutosVela: MINUTOS_VELA, nBracket: 2,
+  configInicial: CONFIG_INICIAL, sesionDe, proximaApertura,
+}
+export const RULE_OF_4 = {
+  id: 'rule-of-4', nombre: 'Rule of 4', prefijo: 'R4-', etiquetaLog: 'rule of 4', aviso: 'Rule of 4 · ',
+  minutosVela: 10, nBracket: 4,
+  configInicial: {
+    ...CONFIG_INICIAL,
+    instrumentos: { '^N225': false, '^GDAXI': false, '^FTSE': false, '^NDX': true, '^GSPC': true, '^DJI': true, '^RUT': false },
+  },
+  sesionDe: sesionRuleOf4, proximaApertura: proximaRuleOf4,
 }
 
 // ── Piernas y posiciones ──
@@ -256,13 +307,18 @@ const DESCRIBIR = {
 
 // ── El bot ──
 // `avisar(texto)` recibe lo que pasa (para Telegram); si falla, el bot sigue a lo suyo.
-export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {} }) {
-  let datos = { config: { ...CONFIG_INICIAL }, dias: {} }
+// `estrategia`: SRS (por defecto) o RULE_OF_4.
+export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS }) {
+  const E = estrategia
+  const inicial = E.configInicial
+  // de las velas de 1 min de la del bracket, las que tiene que haber para hacerla con el directo
+  const minEnVela = Math.round(E.minutosVela * MIN_EN_VELA / MINUTOS_VELA)
+  let datos = { config: { ...inicial }, dias: {} }
   try {
     const leido = JSON.parse(readFileSync(archivo, 'utf8'))
-    const config = { ...CONFIG_INICIAL }
-    for (const k of Object.keys(CONFIG_INICIAL)) if (k in (leido.config ?? {})) config[k] = leido.config[k]
-    config.instrumentos = { ...CONFIG_INICIAL.instrumentos, ...config.instrumentos }
+    const config = { ...inicial }
+    for (const k of Object.keys(inicial)) if (k in (leido.config ?? {})) config[k] = leido.config[k]
+    config.instrumentos = { ...inicial.instrumentos, ...config.instrumentos }
     datos = { config, dias: leido.dias ?? {} }
   } catch { /* primera vez */ }
   for (const d of Object.values(datos.dias)) normalizar(d)
@@ -276,11 +332,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       writeFileSync(`${archivo}.tmp`, texto)
       renameSync(`${archivo}.tmp`, archivo)
       guardado = texto
-    } catch (err) { log(`[bot] no se ha podido guardar: ${err.message}`) }
+    } catch (err) { log(`[${E.etiquetaLog}] no se ha podido guardar: ${err.message}`) }
   }
 
   function avisarSinFallar(texto) {
-    try { Promise.resolve(avisar(texto)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
+    try { Promise.resolve(avisar(`${E.aviso}${texto}`)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
   }
 
   const clave = ses => `${ses.fecha} ${ses.ticker}`
@@ -290,7 +346,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       datos.dias[k] = {
         clave: k, fecha: ses.fecha, ticker: ses.ticker, abre: ses.abre, cierra: ses.cierra,
         // la ventana en minutos de Madrid, para que la pestaña pase las velas por el backtest
-        ventana: { open: minutoMadrid(ses.abre), close: minutoMadrid(ses.cierra), minutosVela: MINUTOS_VELA, nBracket: 2 },
+        ventana: { open: minutoMadrid(ses.abre), close: minutoMadrid(ses.cierra), minutosVela: E.minutosVela, nBracket: E.nBracket },
         config: { ...datos.config }, estado: 'esperando-bracket', bracket: null, plan: null,
         operacion: null, salida: null, eventos: [],
       }
@@ -302,19 +358,24 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   function apuntar(dia, texto, { aviso = true } = {}) {
     if (dia.eventos.at(-1)?.texto === texto) return
     dia.eventos.push({ hora: new Date(ahora() * 1000).toISOString(), texto })
-    log(`[bot] ${dia.clave} ${texto}`)
+    log(`[${E.etiquetaLog}] ${dia.clave} ${texto}`)
     if (aviso) avisarSinFallar(`${SESIONES_BOT[dia.ticker]?.nombre ?? dia.ticker} · ${texto}`)
   }
-  const referenciaNueva = dia => `${PREFIJO}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
+  const referenciaNueva = dia => `${E.prefijo}${dia.ticker.replace(/\W/g, '')}-${dia.fecha.replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
 
   // ── Las velas: primero las del directo, y el histórico de IG solo si faltan ──
   const directo = ticker => ultimasVelas('ig', ticker, 3 * 1440)
   // El histórico de IG gasta un cupo semanal: si falla, no se le vuelve a pedir en un rato
   // (sin esto, una sesión sin cupo lo pediría en cada paso, cada 5 s)
   let historicoHasta = 0
+  // Velas de la estrategia entre `desde` y `hasta`, alineadas a `desde`. IG no da velas de 10
+  // min: para la Rule of 4 se piden las de 5 y se juntan de dos en dos.
   async function historico(ticker, desde, hasta) {
     if (ahora() < historicoHasta) throw new Error('el histórico de IG ha fallado hace poco; se vuelve a pedir en unos minutos')
-    try { return await ig.velasEntre(ticker, 'm15', desde, hasta) } catch (err) {
+    try {
+      if (E.minutosVela === 15) return await ig.velasEntre(ticker, 'm15', desde, hasta)
+      return agruparDirecto(await ig.velasEntre(ticker, 'm5', desde, hasta), desde, hasta, E.minutosVela)
+    } catch (err) {
       historicoHasta = ahora() + ESPERA_HISTORICO_S
       throw err
     }
@@ -341,7 +402,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       v = { high: dia.bracket.high, low: dia.bracket.low, close: dia.cierreBracket ?? dia.bracket.high }
     } else {
       // la vela del bracket, hecha con el directo si lo tiene casi entero (el servidor estaba en marcha)
-      v = agruparDirecto(directo(dia.ticker), ses.velaBracket, ses.finBracket).find(x => x.time === ses.velaBracket && x.n >= MIN_EN_VELA)
+      v = agruparDirecto(directo(dia.ticker), ses.velaBracket, ses.finBracket, E.minutosVela).find(x => x.time === ses.velaBracket && x.n >= minEnVela)
       if (!v) {
         let velas
         try { velas = await historico(dia.ticker, ses.velaBracket, ses.finBracket) } catch (err) {
@@ -508,7 +569,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     // (sin la referencia, solo una sin referencia o con la del bot: la de otro bot de la misma
     // cuenta, como el de las tortugas, no es nuestra aunque entre a la vez)
     const nuestra = abiertas.find(p => p.referencia && p.referencia === intento.referencia)
-      ?? abiertas.find(p => p.ticker === dia.ticker && !conocidas.has(p.dealId) && (!p.referencia || p.referencia.startsWith(PREFIJO))
+      ?? abiertas.find(p => p.ticker === dia.ticker && !conocidas.has(p.dealId) && (!p.referencia || p.referencia.startsWith(E.prefijo))
         && Date.parse(`${p.abierta}Z`) / 1000 >= intento.hora - 60)
     if (intento.tipo === 'anadido') {
       dia.estado = 'en-posicion'
@@ -780,15 +841,16 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     apuntar(dia, 'Precio de salida corregido con la actividad de IG', { aviso: false })
   }
 
-  // Las velas de 15 min de la sesión, para comparar con el backtest en la pestaña: las del
-  // directo si están todas; si no, las del histórico de IG; y si este falla unas cuantas veces,
-  // las que haya del directo (el backtest de ese día puede salir incompleto)
+  // Las velas de la sesión (de 15 min, o de 10 en la Rule of 4), para comparar con el
+  // backtest en la pestaña: las del directo si están todas; si no, las del histórico de IG; y
+  // si este falla unas cuantas veces, las que haya del directo (el backtest de ese día puede
+  // salir incompleto)
   async function guardarVelas(dia, ses) {
-    const propias = agruparDirecto(directo(dia.ticker), ses.abre, ses.cierra)
-    const esperadas = Math.round((ses.cierra - ses.abre) / (MINUTOS_VELA * 60))
+    const propias = agruparDirecto(directo(dia.ticker), ses.abre, ses.cierra, E.minutosVela)
+    const esperadas = Math.round((ses.cierra - ses.abre) / (E.minutosVela * 60))
     const guardarlas = (velas, de) => {
       dia.velas = velas.map(v => [v.time, v.open, v.high, v.low, v.close])
-      apuntar(dia, `Guardadas ${velas.length} velas de 15 min de la sesión (${de})`, { aviso: false })
+      apuntar(dia, `Guardadas ${velas.length} velas de ${E.minutosVela} min de la sesión (${de})`, { aviso: false })
     }
     if (propias.length >= esperadas - 1 && propias[0]?.time === ses.abre) return guardarlas(propias, 'del directo')
     try { return guardarlas(await historico(dia.ticker, ses.abre, ses.cierra), 'del histórico de IG') } catch (err) {
@@ -804,11 +866,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   async function recuperarPosiciones() {
     const conocidas = new Set(Object.values(datos.dias).filter(posicionAbierta).flatMap(d => d.operacion.unidades.map(u => u.dealId)))
     const nuevas = (await ig.operar.posiciones())
-      .filter(p => p.referencia?.startsWith(PREFIJO) && p.ticker && !conocidas.has(p.dealId))
+      .filter(p => p.referencia?.startsWith(E.prefijo) && p.ticker && !conocidas.has(p.dealId))
       .sort((a, b) => Date.parse(`${a.abierta}Z`) - Date.parse(`${b.abierta}Z`))
     for (const p of nuevas) {
       const abierta = Date.parse(`${p.abierta}Z`) / 1000
-      const ses = sesionDe(p.ticker, abierta)
+      const ses = E.sesionDe(p.ticker, abierta)
       if (!ses) continue
       const dia = apunteDe(ses, true)
       apuntar(dia, `Recuperada de IG una posición del bot que no estaba en el registro (${p.referencia})`)
@@ -837,7 +899,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     pendiente = true
     encolar(async () => {
       pendiente = false
-      try { await paso() } catch (err) { log(`[bot] error: ${err.message}`) }
+      try { await paso() } catch (err) { log(`[${E.etiquetaLog}] error: ${err.message}`) }
       guardar()
     })
   }
@@ -856,10 +918,10 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     let primerError = null
     for (const ticker of tickersAMirar()) {
       try {
-        const ses = sesionDe(ticker, t)
+        const ses = E.sesionDe(ticker, t)
         // algo que quedó entre manos de una sesión que ya terminó (el bot estaba parado al cierre)
         const viejas = Object.values(datos.dias).filter(d => d.ticker === ticker && enJuego(d) && d.cierra <= t && (!ses || d.clave !== clave(ses)))
-        for (const d of viejas) await pasoDe(d, { ticker, fecha: d.fecha, abre: d.abre, cierra: d.cierra, finBracket: d.abre + 1800 }, cfg, t)
+        for (const d of viejas) await pasoDe(d, { ticker, fecha: d.fecha, abre: d.abre, cierra: d.cierra, finBracket: d.abre + E.nBracket * E.minutosVela * 60 }, cfg, t)
         if (!ses) continue
         const crear = cfg.activo && !!cfg.instrumentos[ticker] && t < ses.cierra
         const dia = apunteDe(ses, crear)
@@ -900,7 +962,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   function arrancar() {
     encolar(async () => {
       try { await recuperarPosiciones() } catch (err) {
-        log(`[bot] no se han podido revisar las posiciones al arrancar: ${err.message}`)
+        log(`[${E.etiquetaLog}] no se han podido revisar las posiciones al arrancar: ${err.message}`)
         avisarSinFallar(`No he podido revisar las posiciones de IG al arrancar: ${err.message}`)
       }
       guardar()
@@ -1003,7 +1065,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const distancia = Math.max(3 * (m.stopMin ?? 10), 30)
     const margen = Math.max(m.oferta - m.bid, 5)
     const tipo = m.aMercado ? 'a mercado' : 'con límite (este mercado no admite órdenes a mercado)'
-    const r = await ig.operar.abrir({ ticker, epic: m.epic, lado: 'largo', tamano: m.tamanoMin ?? 1, stop: m.bid - distancia, moneda: m.moneda, limite: m.aMercado ? null : m.oferta + margen, referencia: `${PREFIJO}ENSAYO-${Date.now().toString(36)}` })
+    const r = await ig.operar.abrir({ ticker, epic: m.epic, lado: 'largo', tamano: m.tamanoMin ?? 1, stop: m.bid - distancia, moneda: m.moneda, limite: m.aMercado ? null : m.oferta + margen, referencia: `${E.prefijo}ENSAYO-${Date.now().toString(36)}` })
     pasos.push(`Abrir compra de ${r.tamano ?? m.tamanoMin} ${tipo} con stop en ${(m.bid - distancia).toFixed(1)}: ${r.aceptada ? `aceptada a ${r.nivel}` : 'rechazada'} (${r.motivo})`)
     if (!r.aceptada) return pasos
     try {
@@ -1031,7 +1093,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     // "hoy": la sesión en curso o la última del día de cada instrumento, y lo que siga entre manos
     const actuales = new Set()
     for (const ticker of Object.keys(SESIONES_BOT)) {
-      const ses = sesionDe(ticker, t)
+      const ses = E.sesionDe(ticker, t)
       if (ses && datos.dias[clave(ses)]) actuales.add(clave(ses))
     }
     for (const d of dias) if (enJuego(d)) actuales.add(d.clave)
@@ -1041,16 +1103,17 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const ultima = ultimasVelas('ig', d.ticker, 1).at(-1)
       const precio = ultima?.close ?? null
       if (d.velas) return { ...d, precio }
-      const velas = agruparDirecto(directo(d.ticker), d.abre, Math.min(d.cierra, t + 1)).map(v => [v.time, v.open, v.high, v.low, v.close])
+      const velas = agruparDirecto(directo(d.ticker), d.abre, Math.min(d.cierra, t + 1), E.minutosVela).map(v => [v.time, v.open, v.high, v.low, v.close])
       return { ...d, velas, velasEnDirecto: true, precio }
     }
     return {
+      estrategia: { id: E.id, nombre: E.nombre, minutosVela: E.minutosVela, nBracket: E.nBracket },
       config: datos.config,
       maxUnidades: MAX_UNIDADES,
       sesiones: Object.entries(SESIONES_BOT).map(([ticker, s]) => {
-        const ses = sesionDe(ticker, t)
+        const ses = E.sesionDe(ticker, t)
         return {
-          ticker, nombre: s.nombre, zona: s.zona, encendido: !!datos.config.instrumentos[ticker], proxima: proximaApertura(ticker, t),
+          ticker, nombre: s.nombre, zona: s.zona, encendido: !!datos.config.instrumentos[ticker], proxima: E.proximaApertura(ticker, t),
           hoy: ses ? { abre: ses.abre, cierra: ses.cierra } : null,
         }
       }),

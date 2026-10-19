@@ -9,6 +9,7 @@ import {
 } from './velas-grafico.js'
 import { limpiarDibujos, claveValida } from './dibujos.js'
 import { crearIG, IG_RESOLUCION } from './ig.js'
+import { crearMt5, simbolosDeEnv } from './mt5.js'
 import { suscribir, resumenTiempoReal } from './tiempo-real.js'
 import { crearBot } from './bot-srs.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
@@ -2342,6 +2343,12 @@ async function obtenerTramoDukascopy(instrument, timeframe, desde, hasta, timeou
 // deja vacía una página de 1 min, pero cuatro seguidas ya es que no hay más datos
 const PAGINAS_VACIAS_MAX = 4
 
+// MetaTrader 5 (server/mt5.js): solo en local y en Windows, que es donde están el terminal y
+// el paquete de Python. Python y el terminal arrancan con la primera petición, no aquí.
+const mt5 = process.env.NODE_ENV !== 'production' && process.platform === 'win32' && process.env.MT5 !== '0'
+  ? crearMt5({ python: process.env.MT5_PYTHON || 'python', simbolos: simbolosDeEnv(process.env.MT5_SIMBOLOS) })
+  : null
+
 app.get('/api/grafico/velas', async (req, res) => {
   const { ticker, tf = 'm15', fuente = 'duka' } = req.query
   const conf = TEMPORALIDADES[tf]
@@ -2376,6 +2383,28 @@ app.get('/api/grafico/velas', async (req, res) => {
         fin = inicio
       }
       return res.json({ ticker, tf, fuente: `IG ${IG_RESOLUCION[tf].res}`, velas: [], hayMas: false, directo: true })
+    }
+
+    if (fuente === 'mt5') {
+      if (!mt5) return res.status(404).json({ error: 'MetaTrader 5 solo está en local, con el terminal instalado' })
+      const simbolo = mt5.simboloDe(ticker)
+      if (!simbolo) return res.status(400).json({ error: `MetaTrader 5 no tiene ${ticker}` })
+      // de MT5 se pide la misma serie que de Dukascopy (la de 4 h y la diaria, la horaria) y se
+      // agrupa en hora de Madrid: las suyas de 4 h y diarias van con la hora del bróker
+      let fin = hasta
+      for (let i = 0; i < PAGINAS_VACIAS_MAX; i++) {
+        const inicio = inicioDiaMadrid(fin - conf.diasPagina * 86400)
+        const { velas: crudas, previa } = await mt5.pagina(ticker, conf.duka, inicio, fin)
+        if (crudas.length > 0) {
+          const velas = agruparVelas(crudas, conf.minutos)
+          return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas, hayMas: previa != null })
+        }
+        // un hueco de semanas (le faltan del 16-jul al 5-sep-2025) se salta de una vez hasta
+        // la última vela que haya antes
+        if (previa == null) break
+        fin = previa + 1
+      }
+      return res.json({ ticker, tf, fuente: `MT5 ${simbolo} ${conf.duka}`, velas: [], hayMas: false })
     }
 
     if (fuente === 'yahoo') {
@@ -2476,6 +2505,11 @@ const ig = IG_FALTAN.length === 0
     })
   : null
 ig?.iniciar()
+
+app.get('/api/mt5/estado', async (req, res) => {
+  if (!mt5) return res.status(404).json({ error: 'MetaTrader 5 solo está en local, con el terminal instalado' })
+  try { res.json(await mt5.estado()) } catch (err) { res.status(503).json({ error: err.message }) }
+})
 
 app.get('/api/ig/estado', (req, res) => {
   if (!ig) return res.json({ configurado: false, faltan: IG_FALTAN })

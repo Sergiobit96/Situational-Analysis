@@ -17,6 +17,7 @@ export const TEMPORALIDADES = [
 
 export const FUENTES = [
   { id: 'duka',  label: 'Dukascopy', title: 'CFD de Dukascopy: 24 h y años de histórico' },
+  { id: 'mt5',   label: 'MT5',       title: 'CFD de tu MetaTrader 5 (MetaQuotes-Demo), solo en local: 24 h, a 1 min desde 2017 (Russell 2018, Nikkei 2019, Nasdaq 2022, oro 2004). Falta del 16-jul al 5-sep-2025 y de oct-2024 a ene-2025 hay días congelados. Sin FTSE ni petróleo' },
   { id: 'yahoo', label: 'Yahoo',     title: 'Contado de los índices (oro, plata y petróleo, con el futuro). Hasta 30 días a 1m, 60 días de 5 a 30m, 2 años en 1h y 4h, y el diario completo' },
   { id: 'csv',   label: 'CSV cash',  title: 'Tu CSV del DAX cash a 5 min: solo sesión, desde 2009' },
   { id: 'ig',    label: 'IG en directo', title: 'Precios de IG (su CFD) con la última vela moviéndose en directo. Necesita las claves de IG en server/.env' },
@@ -53,27 +54,35 @@ export const olvidarMercadoIg = ticker => escribirMercadosIg(mercadosIgGuardados
 export const decimalesDe = precio => (!(precio > 0) || precio >= 200 ? 2 : precio >= 20 ? 3 : precio >= 2 ? 4 : 5)
 
 
+// Lo que tiene MetaQuotes-Demo (server/mt5.js): sin FTSE, que dejó de cotizar en mayo de 2026,
+// ni petróleo
+const CON_MT5 = new Set(['^GDAXI', '^GSPC', '^NDX', '^DJI', '^RUT', '^N225', 'XAUUSD', 'XAGUSD'])
+
 // Yahoo no da el spot de estos: los sirve con el futuro (GC=F, SI=F y CL=F en el servidor)
 const CON_FUTURO_EN_YAHOO = new Set(['XAUUSD', 'XAGUSD', 'USOIL'])
 
 // Los dibujos van con la serie de precios, no con la fuente: el CSV y Yahoo dan el mismo
 // contado del DAX (coinciden al céntimo) y los comparten; el CFD de Dukascopy y los futuros
-// de Yahoo cotizan a otro precio y llevan los suyos.
+// de Yahoo cotizan a otro precio y llevan los suyos. El CFD de MT5 comparte los de
+// Dukascopy: los dos son CFD de 24 h sobre el contado, y MT5 lo sustituye mientras
+// Dukascopy no responde.
 export function claveDibujosDe(ticker, fuente) {
-  if (fuente === 'duka') return ticker
+  if (fuente === 'duka' || fuente === 'mt5') return ticker
   if (fuente === 'ig') return `${ticker}@ig`
   if (fuente === 'yahoo' && CON_FUTURO_EN_YAHOO.has(ticker)) return `${ticker}@futuro`
   return `${ticker}@contado`
 }
 
 // Fuentes que tiene un instrumento: el CSV del DAX cash está en tu disco, así que solo existe
-// en local y solo para el DAX; IG, en local o con la clave del bot guardada (en producción el
-// servidor la pide); un mercado suelto de IG, solo IG
+// en local y solo para el DAX; MT5, solo en local (el terminal está en este ordenador); IG,
+// en local o con la clave del bot guardada (en producción el servidor la pide); un mercado
+// suelto de IG, solo IG
 export function fuentesDe(ticker) {
   const conIg = hayIg()
   if (esMercadoIg(ticker)) return conIg ? FUENTES.filter(f => f.id === 'ig') : []
   const hayCsv = import.meta.env.DEV && ticker === '^GDAXI'
-  return FUENTES.filter(f => (f.id !== 'ig' || conIg) && (f.id !== 'csv' || hayCsv))
+  const hayMt5 = import.meta.env.DEV && CON_MT5.has(ticker)
+  return FUENTES.filter(f => (f.id !== 'ig' || conIg) && (f.id !== 'csv' || hayCsv) && (f.id !== 'mt5' || hayMt5))
 }
 
 // Lo que de verdad pinta un panel con su configuración guardada: sin la fuente elegida, la

@@ -62,19 +62,22 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
   const [errorDibujos, setErrorDibujos] = useState(null)
   const [vivo, setVivo] = useState(null)   // hora del último precio en directo
   const [decimales, setDecimales] = useState(2)
-  // el gráfico pasó solo a IG porque Dukascopy no dio nada: { ticker, motivo }
+  // el gráfico pasó solo a MT5 o a IG porque Dukascopy no dio nada: { ticker, fuente, motivo }
   const [respaldo, setRespaldo] = useState(null)
   const contenedorRef = useRef(null)
   const reintentarRef = useRef(null)
   // Los dibujos son de la serie de precios y se ven en todas las temporalidades, como en TradingView
   const claveDibujos = claveDibujosDe(ticker, fuente)
   const conIg = fuente !== 'ig' && fuentesDe(ticker).some(f => f.id === 'ig')
+  const conMt5 = fuente !== 'mt5' && fuentesDe(ticker).some(f => f.id === 'mt5')
 
-  // Si Dukascopy no da ni la primera página (suele ser su 429), el gráfico pasa a IG, que
-  // tiene el mismo instrumento, en vez de quedarse en blanco
-  const pasarAIg = useEffectEvent(motivo => {
-    setRespaldo({ ticker, motivo })
-    onCambiar({ fuente: 'ig' })
+  // Si Dukascopy no da ni la primera página (suele ser su 429), el gráfico pasa a MT5 (en
+  // local) o a IG, que tienen el mismo instrumento, en vez de quedarse en blanco. MT5 va
+  // antes: IG gasta su cupo semanal de histórico, que comparte con los bots.
+  const respaldoDe = conMt5 ? 'mt5' : conIg ? 'ig' : null
+  const pasarARespaldo = useEffectEvent(motivo => {
+    setRespaldo({ ticker, fuente: respaldoDe, motivo })
+    onCambiar({ fuente: respaldoDe })
   })
 
   useEffect(() => {
@@ -173,11 +176,11 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
         if (!hasta && j.directo) abrirDirecto()
         parado = false
         setEstado({ cargando: false, error: null, fuente: j.fuente, n: datos.length, hayMas, aviso: j.aviso ?? null })
-        // el aviso del paso a IG solo vale para ese instrumento, mientras siga en IG
-        if (!hasta) setRespaldo(r => (r && (r.ticker !== ticker || fuente !== 'ig') ? null : r))
+        // el aviso del paso a MT5 o IG solo vale para ese instrumento, mientras siga ahí
+        if (!hasta) setRespaldo(r => (r && (r.ticker !== ticker || fuente !== r.fuente) ? null : r))
       } catch (err) {
         if (err.name === 'AbortError') return
-        if (fuente === 'duka' && !hasta && !datos.length && conIg) { pasarAIg(err.message); return }
+        if (fuente === 'duka' && !hasta && !datos.length && respaldoDe) { pasarARespaldo(err.message); return }
         parado = true
         setEstado(e => ({ ...e, cargando: false, error: err.message }))
       } finally {
@@ -239,7 +242,7 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
       herramientas.dispose()
       chart.remove()
     }
-  }, [ticker, tf, fuente, claveDibujos, conIg, onModo, registrar])
+  }, [ticker, tf, fuente, claveDibujos, respaldoDe, onModo, registrar])
 
   const sube = leyenda && leyenda.cambio >= 0
 
@@ -271,6 +274,9 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
           <>
             <span className="grafico-pro-error" title={estado.error}>{estado.error}</span>
             <button className="dibujo-btn" onClick={() => reintentarRef.current?.()}>Reintentar</button>
+            {fuente === 'duka' && conMt5 && (
+              <button className="dibujo-btn" onClick={() => onCambiar({ fuente: 'mt5' })}>Ver con MT5</button>
+            )}
             {fuente === 'duka' && conIg && (
               <button className="dibujo-btn" onClick={() => onCambiar({ fuente: 'ig' })}>Ver con IG</button>
             )}
@@ -280,9 +286,9 @@ export default function PanelGrafico({ config, activo, conMarco, onActivar, onCa
           </>
         ) : estado.cargando ? 'Cargando…' : (
           <>
-            {respaldo?.ticker === ticker && fuente === 'ig' && (
+            {respaldo?.ticker === ticker && fuente === respaldo.fuente && (
               <>
-                <span className="grafico-pro-respaldo" title={respaldo.motivo}>Dukascopy no responde: se ve con IG</span>
+                <span className="grafico-pro-respaldo" title={respaldo.motivo}>Dukascopy no responde: se ve con {respaldo.fuente === 'mt5' ? 'MT5' : 'IG'}</span>
                 <button className="dibujo-btn" onClick={() => { setRespaldo(null); onCambiar({ fuente: 'duka' }) }}>Volver a Dukascopy</button>
               </>
             )}

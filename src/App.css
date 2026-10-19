@@ -2470,6 +2470,10 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
   font-size: 0.8rem;
   color: var(--green);
 }
+.diario-drive          { margin-left: 0.4rem; }
+.diario-drive.guardado { color: var(--green); }
+.diario-drive.error,
+.diario-drive.sin-servidor { color: var(--red); }
 
 /* Dos columnas: fortalezas a la izquierda, debilidades a la derecha */
 .diario-grid {

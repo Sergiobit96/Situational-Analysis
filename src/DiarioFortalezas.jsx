@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
 const STORAGE_KEY = 'abcd_diario_v1'
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+// Lo que se espera tras el último cambio antes de mandarlo a Drive
+const ESPERA_GUARDAR_MS = 400
 
 // Las dos listas del diario. `pareja` apunta a la otra columna para poder mover
 // una entrada de lado (una debilidad corregida pasa a fortaleza sin reescribirla).
@@ -74,13 +77,67 @@ export default function DiarioFortalezas() {
   const [borrador, setBorrador] = useState({ fortalezas: '', debilidades: '' })
   const [editando, setEditando] = useState(null)   // id de la entrada en edición
   const [aviso,    setAviso]    = useState(null)
-  const importRef = useRef(null)
+  // Drive: { estado: 'leyendo' | 'guardando' | 'guardado' | 'sin-servidor' | 'error', texto?, archivo? }
+  const [drive,    setDrive]    = useState(import.meta.env.DEV ? { estado: 'leyendo' } : null)
+  const [cargado,  setCargado]  = useState(false)  // ya se leyó lo de Drive: a partir de ahí se guarda
+  const importRef    = useRef(null)
+  const ultimoEnDrive = useRef(null)  // el JSON que hay en Drive, para no mandar lo mismo otra vez
+  const ultimas      = useRef(entradas)
+  const listo        = useRef(false)
 
-  // Persistencia en localStorage: el diario no sale nunca del navegador, igual que
-  // las operaciones del Excel (useTrades). Copia de seguridad con exportar/importar.
+  // El navegador se queda una copia como caché: es lo que se pinta mientras llega lo de
+  // Drive, y lo único que hay en la versión publicada. Copia a mano con exportar/importar.
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(entradas)) } catch { /* cuota llena, no crítico */ }
   }, [entradas])
+
+  // En local el diario va a un JSON en Drive (G:\Mi unidad) a través del servidor, como el de
+  // operaciones (useTrades): manda lo de Drive, y si Drive aún no tiene nada se sube lo del
+  // navegador
+  const subir = useCallback((lista, { keepalive = false } = {}) => {
+    const texto = JSON.stringify(lista)
+    if (texto === ultimoEnDrive.current) return
+    const vacio = lista.fortalezas.length + lista.debilidades.length === 0
+    setDrive(d => ({ ...d, estado: 'guardando' }))
+    fetch(`${API}/api/diario-fortalezas${vacio ? '?vaciar=1' : ''}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: texto, keepalive,
+    })
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`)
+        ultimoEnDrive.current = texto
+        setDrive({ estado: 'guardado', archivo: d.archivo })
+      })
+      .catch(err => setDrive(d => ({ ...d, estado: 'error', texto: err.message })))
+  }, [])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    let vivo = true
+    fetch(`${API}/api/diario-fortalezas`)
+      .then(async r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then(data => {
+        if (!vivo) return
+        const enDrive = { fortalezas: saneaLista(data?.fortalezas), debilidades: saneaLista(data?.debilidades) }
+        ultimoEnDrive.current = JSON.stringify(enDrive)
+        setDrive({ estado: 'guardado', archivo: data?.archivo })
+        if (enDrive.fortalezas.length + enDrive.debilidades.length > 0) setEntradas(enDrive)
+        else subir(ultimas.current)   // Drive aún vacío: se sube ya lo del navegador
+        listo.current = true
+        setCargado(true)
+      })
+      .catch(() => { if (vivo) setDrive({ estado: 'sin-servidor' }) })
+    return () => { vivo = false }
+  }, [subir])
+
+  // Cada cambio va a Drive al poco; al salir de la pestaña, lo que quede pendiente sale ya
+  useEffect(() => {
+    ultimas.current = entradas
+    if (!cargado) return
+    const t = setTimeout(() => subir(entradas), ESPERA_GUARDAR_MS)
+    return () => clearTimeout(t)
+  }, [entradas, cargado, subir])
+  useEffect(() => () => { if (listo.current) subir(ultimas.current, { keepalive: true }) }, [subir])
 
   const añadir = useCallback(col => {
     const texto = borrador[col].trim()
@@ -171,6 +228,7 @@ export default function DiarioFortalezas() {
           {total === 0
             ? 'Diario vacío'
             : `${total} entrada(s) · ${entradas.fortalezas.length} fortaleza(s) · ${entradas.debilidades.length} debilidad(es)`}
+          <EstadoDrive drive={drive} />
         </span>
         <span className="diario-toolbar-acciones">
           <input
@@ -277,5 +335,23 @@ export default function DiarioFortalezas() {
         })}
       </div>
     </div>
+  )
+}
+
+// Dónde está guardado el diario. En la versión publicada no hay servidor local ni Drive: se
+// queda en el navegador
+function EstadoDrive({ drive }) {
+  if (!drive) return <span className="diario-drive">· se guarda en este navegador</span>
+  const textos = {
+    leyendo:        'leyendo de Drive…',
+    guardando:      'guardando en Drive…',
+    guardado:       '✓ guardado en Drive',
+    'sin-servidor': 'sin servidor local: solo en este navegador',
+    error:          `no se ha guardado en Drive: ${drive.texto}`,
+  }
+  return (
+    <span className={`diario-drive ${drive.estado}`} title={drive.archivo ?? undefined}>
+      · {textos[drive.estado]}
+    </span>
   )
 }

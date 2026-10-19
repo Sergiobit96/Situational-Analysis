@@ -10,6 +10,7 @@ import {
 import { limpiarDibujos, claveValida } from './dibujos.js'
 import { crearIG, IG_RESOLUCION } from './ig.js'
 import { crearMt5, simbolosDeEnv } from './mt5.js'
+import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
 import { suscribir, resumenTiempoReal } from './tiempo-real.js'
 import { crearBot } from './bot-srs.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS } from './bot-tortugas.js'
@@ -1573,6 +1574,42 @@ app.put('/api/trades', (req, res) => {
     res.json({ archivo: TRADES_PATH, total: trades.length })
   } catch (err) {
     console.error('[trades]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ── Diario de fortalezas y debilidades (pestaña Diario, solo local) ──
+// Como el de operaciones: vivía solo en el navegador y limpiar los datos del sitio lo
+// borraba. Ahora va a un JSON en Drive y el navegador se queda la copia como caché.
+const DIARIO_FD_PATH = process.env.DIARIO_FORTALEZAS || join(PHOTOS_ROOT, 'Diario fortalezas.json')
+
+function leerDiarioFd() {
+  try { return limpiarDiario(JSON.parse(readFileSync(DIARIO_FD_PATH, 'utf8'))) }
+  catch { return { fortalezas: [], debilidades: [] } }
+}
+
+app.get('/api/diario-fortalezas', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  res.json({ archivo: DIARIO_FD_PATH, ...leerDiarioFd() })
+})
+
+app.put('/api/diario-fortalezas', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  try {
+    let diario
+    try { diario = limpiarDiario(req.body) } catch (err) { return res.status(400).json({ error: err.message }) }
+    // Vaciarlo entero casi siempre es un cliente que aún no había cargado: se rechaza salvo
+    // que se pida a propósito (al borrar la última entrada)
+    const previas = totalDiario(leerDiarioFd())
+    if (totalDiario(diario) === 0 && previas > 0 && req.query.vaciar !== '1') {
+      return res.status(409).json({ error: `Hay ${previas} entradas guardadas; para borrarlas todas, vaciar=1` })
+    }
+    const tmp = `${DIARIO_FD_PATH}.tmp`
+    writeFileSync(tmp, JSON.stringify({ actualizado: Date.now(), ...diario }, null, 2))
+    renameSync(tmp, DIARIO_FD_PATH)
+    res.json({ archivo: DIARIO_FD_PATH, total: totalDiario(diario) })
+  } catch (err) {
+    console.error('[diario-fortalezas]', err.message)
     res.status(500).json({ error: err.message })
   }
 })

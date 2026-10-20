@@ -81,6 +81,7 @@ const MINUTOS_VELA = 15
 const REVISAR_CADA_MS = 30_000   // cada cuánto se mira en IG si una posición sigue abierta
 const REVISAR_YA_MS = 2_000      // con el precio al otro lado del stop y una vuelta pendiente, se mira mucho más a menudo
 const ESPERA_STOP_S = 10         // si el precio pasó el stop y IG no ha cerrado en este rato, cierra el bot
+const ESPERA_STOP_FALLIDO_S = 30 // si IG falla al mover un stop (un error suyo, no un rechazo), se reintenta pasado este rato
 const BUSQUEDAS_CIERRE = 4       // revisiones buscando el precio de cierre antes de dar por bueno el del stop
 const MARGEN_MAX = 0.4           // parte del disponible que puede ocupar el margen de una posición (el mínimo del Nikkei es ~36%)
 const MARGEN_IG = 0.05           // el margen que pide IG, en tanto por uno del nominal, si su ficha no lo dice
@@ -229,6 +230,8 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
     if (puedeDarLaVuelta(dia, cfg) && !op.be && op.stop != null && precio != null && (largo ? precio <= op.stop : precio >= op.stop)) {
       return { accion: 'revisar-ya' }
     }
+    // un stop que IG no movió por un fallo suyo: se reintenta al rato
+    if (op.stopPendiente != null && !(op.esperaStop > ahora)) return { accion: 'stop' }
     // pirámide: el precio llegó al nivel de la siguiente posición (una como mucho cada 5 min)
     const n = op.unidades?.length ?? 1
     if (cfg.activo && cfg.piramide && n < MAX_UNIDADES && !op.sinAnadidos && precio != null
@@ -657,17 +660,48 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   }
 
   // Pone el stop de todas las posiciones abiertas de la pierna en `nivel`. Devuelve lo que
-  // IG haya rechazado; la pierna solo cambia de stop si lo aceptó para todas
+  // IG haya rechazado; la pierna solo cambia de stop si lo aceptó para todas. Si IG falla (un
+  // error suyo, no un rechazo), el stop queda pendiente y se reintenta al rato (reintentarStop)
   async function moverStops(dia, nivel) {
     const op = dia.operacion
     const fallos = []
+    op.stopPendiente = nivel
     for (const u of op.unidades.filter(x => !x.salida && x.stop !== nivel)) {
-      const r = await ig.operar.moverStop({ ticker: dia.ticker, dealId: u.dealId, stop: nivel })
+      let r
+      try { r = await ig.operar.moverStop({ ticker: dia.ticker, dealId: u.dealId, stop: nivel }) } catch (err) {
+        op.esperaStop = ahora() + ESPERA_STOP_FALLIDO_S
+        throw new Error(`IG ha fallado al mover el stop a ${nivel}; se reintenta cada ${ESPERA_STOP_FALLIDO_S} s (${err.message})`, { cause: err })
+      }
       if (r.aceptada) u.stop = nivel
       else fallos.push(r.motivo)
     }
+    delete op.stopPendiente
+    delete op.esperaStop
     if (!fallos.length) op.stop = nivel
     return fallos
+  }
+
+  // Un stop que IG no movió por un fallo suyo. Si alguna posición ya no está, de la pierna se
+  // ocupa la revisión; si siguen todas, se vuelve a mover, sin repetirlo en las que IG ya tiene
+  // en ese nivel (la orden pudo entrar aunque fallara su confirmación)
+  async function reintentarStop(dia, ses) {
+    const op = dia.operacion
+    const nivel = op.stopPendiente
+    op.esperaStop = ahora() + ESPERA_STOP_FALLIDO_S
+    const abiertas = await ig.operar.posiciones()
+    const pendientes = op.unidades.filter(u => !u.salida)
+    if (pendientes.some(u => !abiertas.some(p => p.dealId === u.dealId))) {
+      delete op.stopPendiente
+      delete op.esperaStop
+      await revisar(dia, ses, { forzar: true })
+      return
+    }
+    for (const u of pendientes) {
+      const p = abiertas.find(x => x.dealId === u.dealId)
+      if (p.stop != null && Math.abs(p.stop - nivel) <= Math.abs(nivel) * 1e-9) u.stop = nivel
+    }
+    const fallos = await moverStops(dia, nivel)
+    apuntar(dia, fallos.length ? `IG no deja mover el stop a ${nivel}: ${fallos[0]}` : `Stop en ${nivel}, tras el fallo de IG`)
   }
 
   async function breakeven(dia) {
@@ -840,7 +874,14 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     for (let intento = 0; intento < 3; intento++, margen *= 2) {
       const m = await ig.operar.datosMercado(dia.ticker, epic)
       const limite = m.aMercado ? null : (op.lado === 'largo' ? m.bid - margen : m.oferta + margen)
-      r = await ig.operar.cerrar({ ticker: dia.ticker, dealId: u.dealId, lado: op.lado, tamano: u.tamano, limite })
+      try {
+        r = await ig.operar.cerrar({ ticker: dia.ticker, dealId: u.dealId, lado: op.lado, tamano: u.tamano, limite })
+      } catch (err) {
+        // un fallo de IG (o de su confirmación): si la posición ya no está, se cerró y la
+        // revisión busca a qué precio; si sigue abierta, el siguiente paso lo vuelve a intentar
+        if ((await ig.operar.posiciones()).some(p => p.dealId === u.dealId)) throw err
+        return { aceptada: false, motivo: err.message }
+      }
       if (r.aceptada) break
       apuntar(dia, limite == null ? `IG no cierra a mercado (${r.motivo})` : `IG no cierra con ${margen.toFixed(1)} puntos de margen (${r.motivo})`)
     }
@@ -1049,6 +1090,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       if (p.accion === 'anadir')      await anadir(dia)
       if (p.accion === 'breakeven')   await breakeven(dia)
       if (p.accion === 'cerrar')      await cerrar(dia, p.motivo, ses)
+      if (p.accion === 'stop')        await reintentarStop(dia, ses)
       if (p.accion === 'vigilar')     await revisar(dia, ses)
       if (p.accion === 'revisar-ya')  await revisar(dia, ses, { cruce: true })
       if (p.accion === 'reconciliar') await reconciliar(dia)

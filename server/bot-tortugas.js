@@ -156,6 +156,7 @@ const RECIENTE_S = 120             // las velas de 1 min que cuentan como el pre
 const REVISAR_CADA_MS = 30_000     // cada cuánto se mira en IG si las posiciones siguen abiertas
 const REVISAR_YA_MS = 2_000        // con el precio al otro lado de un stop
 const ESPERA_STOP_S = 10           // si el precio pasó el stop y IG no ha cerrado en este rato, cierra el bot
+const ESPERA_STOP_FALLIDO_S = 30   // si IG falla al mover un stop (un error suyo, no un rechazo), se reintenta pasado este rato
 const BUSQUEDAS_CIERRE = 4
 const REINTENTO_PLAN_S = 600       // si no se pudo hacer el plan, se intenta de nuevo pasado este rato
 const REINTENTO_IG_S = 120         // si fue IG (p. ej., porque limita las peticiones), algo antes; nunca en cada paso
@@ -229,13 +230,16 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
     const pronto = enSesion && ahora < ses.abre + (ses.esperaPlan ?? 0)
     if ((!vale || reintento) && !recienCerrada && !pronto) return { accion: 'plan', ses: objetivo }
   }
-  if (!enSesion) return { accion: pos ? 'vigilar' : 'nada' }
+  // un stop que IG no movió por un fallo suyo: se reintenta al rato, con la sesión abierta o no
+  const stopPendiente = pos?.stopPendiente != null && !(pos.esperaStop > ahora)
+  const quieto = { accion: stopPendiente ? 'stop' : pos ? 'vigilar' : 'nada' }
+  if (!enSesion) return quieto
 
   const delSistema = plan?.fecha === ses.fecha && !plan.error ? plan.sistemas?.[sistema] : null
   const hoy = delSistema ? { ...plan, ...delSistema } : null
   // el precio de ahora: las velas de 1 min de los dos últimos minutos de la sesión
   const recientes = velas.filter(v => v.time >= ses.abre && v.time + RECIENTE_S > ahora)
-  if (!recientes.length) return { accion: pos ? 'vigilar' : 'nada' }
+  if (!recientes.length) return quieto
   const alto = Math.max(...recientes.map(v => v.high))
   const bajo = Math.min(...recientes.map(v => v.low))
   const precio = recientes.at(-1).close
@@ -246,6 +250,7 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
     if (canal != null && (largo ? bajo <= canal : alto >= canal)) return { accion: 'salir', motivo: `canal ${hoy.kSalida}` }
     // al otro lado del stop: lo cierra IG, y si no lo hace en unos segundos, el bot
     if (pos.stop != null && (largo ? precio <= pos.stop : precio >= pos.stop)) return { accion: 'revisar-ya' }
+    if (stopPendiente) return { accion: 'stop' }
     if (cfg.activo && hoy?.unidad?.ok && pos.unidades.length < cfg.maxUnidades && pos.sinAnadidos !== ses.fecha && !(pos.esperaAnadir > ahora)) {
       const nivel = siguienteAnadido(pos)
       if (largo ? alto >= nivel : bajo <= nivel) return { accion: 'anadir' }
@@ -540,21 +545,58 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   async function sumarUnidad(pos, { dealId, tamano, entrada, stop, referencia, nivel = null, hora = null }) {
     pos.unidades.push({ dealId, tamano, entrada, stop, hora: hora ?? ahora(), referencia, nivel, deslizamiento: nivel == null ? null : dir(pos.lado) * (entrada - nivel) })
     const nuevo = pos.lado === 'largo' ? Math.max(pos.stop ?? -Infinity, stop) : Math.min(pos.stop ?? Infinity, stop)
-    const fallos = await moverStops(pos, nuevo)
+    let comoQueda
+    try {
+      const fallos = await moverStops(pos, nuevo)
+      comoQueda = fallos.length ? `IG no deja mover el stop de todas a ${px(nuevo)} (${fallos[0]})` : `stop de todas en ${px(nuevo)}`
+    } catch (err) { comoQueda = err.message }
     const n = pos.unidades.filter(u => !u.salida).length
-    apuntar(pos.ticker, `Pirámide: ${num(tamano, 2)} más a ${px(entrada)}, ${n} de ${datos.config.maxUnidades} unidades;`
-      + (fallos.length ? ` IG no deja mover el stop de todas a ${px(nuevo)} (${fallos[0]})` : ` stop de todas en ${px(nuevo)}`), { sistema: pos.sistema })
+    apuntar(pos.ticker, `Pirámide: ${num(tamano, 2)} más a ${px(entrada)}, ${n} de ${datos.config.maxUnidades} unidades; ${comoQueda}`, { sistema: pos.sistema })
   }
 
+  // El stop de todas las unidades abiertas en `nivel`. Devuelve lo que IG haya rechazado. Si IG
+  // falla (un error suyo, no un rechazo), el stop queda pendiente y se reintenta al rato
   async function moverStops(pos, nivel) {
     const fallos = []
+    pos.stopPendiente = nivel
     for (const u of pos.unidades.filter(x => !x.salida && x.stop !== nivel)) {
-      const r = await ig.operar.moverStop({ ticker: pos.ticker, dealId: u.dealId, stop: nivel })
+      let r
+      try { r = await ig.operar.moverStop({ ticker: pos.ticker, dealId: u.dealId, stop: nivel }) } catch (err) {
+        pos.esperaStop = ahora() + ESPERA_STOP_FALLIDO_S
+        throw new Error(`IG ha fallado al mover el stop de todas a ${px(nivel)}; se reintenta cada ${ESPERA_STOP_FALLIDO_S} s (${err.message})`, { cause: err })
+      }
       if (r.aceptada) u.stop = nivel
       else fallos.push(r.motivo)
     }
+    delete pos.stopPendiente
+    delete pos.esperaStop
     if (!fallos.length) pos.stop = nivel
     return fallos
+  }
+
+  // Un stop que IG no movió por un fallo suyo. Si falta alguna unidad, de la posición se ocupa
+  // la revisión; si siguen todas, se vuelve a mover, sin repetirlo en las que IG ya tiene en
+  // ese nivel (la orden pudo entrar aunque fallara su confirmación)
+  async function reintentarStop(pos) {
+    const nivel = pos.stopPendiente
+    pos.esperaStop = ahora() + ESPERA_STOP_FALLIDO_S
+    const abiertas = await ig.operar.posiciones()
+    const pendientes = pos.unidades.filter(u => !u.salida)
+    if (pendientes.some(u => !abiertas.some(p => p.dealId === u.dealId))) {
+      delete pos.stopPendiente
+      delete pos.esperaStop
+      return
+    }
+    for (const u of pendientes) {
+      const p = abiertas.find(x => x.dealId === u.dealId)
+      if (p.stop != null && Math.abs(p.stop - nivel) <= Math.abs(nivel) * 1e-9) u.stop = nivel
+    }
+    let texto
+    try {
+      const fallos = await moverStops(pos, nivel)
+      texto = fallos.length ? `IG no deja mover el stop de todas a ${px(nivel)} (${fallos[0]})` : `Stop de todas en ${px(nivel)}, tras el fallo de IG`
+    } catch (err) { texto = err.message }
+    apuntar(pos.ticker, texto, { sistema: pos.sistema })
   }
 
   // Tras una orden sin confirmar: si IG tiene la posición con su referencia (o una del mismo
@@ -591,7 +633,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     for (let intento = 0; intento < 3; intento++, margen *= 2) {
       const m = await ig.operar.datosMercado(pos.ticker, pos.epic)
       const limite = m.aMercado ? null : (pos.lado === 'largo' ? m.bid - margen : m.oferta + margen)
-      r = await ig.operar.cerrar({ ticker: pos.ticker, dealId: u.dealId, lado: pos.lado, tamano: u.tamano, limite })
+      try {
+        r = await ig.operar.cerrar({ ticker: pos.ticker, dealId: u.dealId, lado: pos.lado, tamano: u.tamano, limite })
+      } catch (err) {
+        // un fallo de IG (o de su confirmación): si la unidad ya no está, se cerró y la
+        // revisión busca a qué precio; si sigue abierta, el siguiente paso lo vuelve a intentar
+        if ((await ig.operar.posiciones()).some(p => p.dealId === u.dealId)) throw err
+        return { aceptada: false, motivo: err.message }
+      }
       if (r.aceptada) break
       apuntar(pos.ticker, `IG no cierra ${limite == null ? 'a mercado' : `con ${px(margen)} de margen`} (${r.motivo})`, { sistema: pos.sistema })
     }
@@ -815,6 +864,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           if (p.accion === 'anadir')      await anadir(ticker, sistema, ses)
           if (p.accion === 'salir')       await salir(pos, p.motivo)
           if (p.accion === 'reconciliar') await reconciliar(ticker, sistema)
+          if (p.accion === 'stop')        await reintentarStop(pos)
           if (p.accion === 'revisar-ya')  cruces.add(clave)
         }
       } catch (err) {

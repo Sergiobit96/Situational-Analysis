@@ -159,6 +159,16 @@ test('con posición: añade cada ½ N, sale por el canal y vigila el stop', () =
   assert.equal(paso({ pos, intento: { tipo: 'anadido' }, ahora }).accion, 'reconciliar')
 })
 
+test('un stop que IG no movió por un fallo suyo se reintenta al rato, en la sesión o fuera de ella', () => {
+  const pos = { lado: 'largo', n0: 300, stop: 24_560, stopPendiente: 24_700, esperaStop: fra(10, 19, 11, 0, 40), unidades: [{ entrada: 25_160, tamano: 0.6 }] }
+  const velas = v1(fra(10, 19, 11), 25_300, 25_200, 25_250)
+  assert.equal(paso({ pos, ahora: fra(10, 19, 11, 0, 30), velas }).accion, 'vigilar')         // aún no
+  assert.equal(paso({ pos, ahora: fra(10, 19, 11, 0, 50), velas }).accion, 'stop')
+  assert.equal(paso({ pos, ahora: fra(10, 19, 20) }).accion, 'stop')
+  // salir por el canal va antes
+  assert.deepEqual(paso({ pos, ahora: fra(10, 19, 11, 0, 50), velas: v1(fra(10, 19, 11), 24_900, 24_850, 24_870) }), { accion: 'salir', motivo: 'canal 10' })
+})
+
 // ── El bot entero, con un IG de mentira ──
 
 const MERCADOS = {
@@ -314,6 +324,55 @@ test('el DAX de punta a punta: plan, ruptura, pirámide con el stop de todas, sa
 
     const guardado = JSON.parse(readFileSync(archivo, 'utf8'))
     assert.equal(guardado.operaciones.length, 1)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+// La compra del DAX a 25.156 y, a ½ N, la segunda unidad, con el stop de las dos a 24.708, el
+// `dia` de octubre (cada prueba el suyo: las velas de 1 min del directo son de todas)
+async function compraYAnadido(ig, bot, enHora, dia) {
+  enHora(fra(10, dia, 9, 0, 5)); await bot._paso()
+  ig.precios['^GDAXI'] = [25_155, 25_156]
+  vela1m('^GDAXI', fra(10, dia, 10), 25_156, 25_140)
+  enHora(fra(10, dia, 10, 0, 20)); await bot._paso()
+  ig.precios['^GDAXI'] = [25_307, 25_308]
+  vela1m('^GDAXI', fra(10, dia, 11), 25_308, 25_290)
+  enHora(fra(10, dia, 11, 0, 20)); await bot._paso()
+}
+const falloIG = () => { throw new Error('Fallo interno de IG con la orden (error.service.execution.find)') }
+
+test('si IG falla al mover el stop de la pirámide, se reintenta a los 30 s', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const moverStop = ig.operar.moverStop
+  ig.operar.moverStop = falloIG
+  const { bot, dir, avisos, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-10-20') }, soloS1)
+  try {
+    await compraYAnadido(ig, bot, enHora, 21)
+    assert.equal(posicion(bot, '^GDAXI').unidades.length, 2)
+    assert.equal(posicion(bot, '^GDAXI').stop, 24_556)
+    assert.ok(avisos.some(a => /Pirámide: .*; IG ha fallado al mover el stop de todas a 24\.708; se reintenta cada 30 s \(Fallo interno de IG/.test(a)))
+    ig.operar.moverStop = moverStop
+    enHora(fra(10, 21, 11, 0, 30)); await bot._paso()                // aún no
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'stop').length, 0)
+    enHora(fra(10, 21, 11, 0, 55)); await bot._paso()
+    assert.deepEqual(ig.ordenes.filter(o => o.tipo === 'stop').map(o => [o.dealId, o.stop]), [['D1', 24_708]])
+    assert.equal(posicion(bot, '^GDAXI').stop, 24_708)
+    assert.ok(avisos.at(-1).endsWith('Stop de todas en 24.708, tras el fallo de IG'))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG falla al cerrar pero la unidad ya no está, se busca a qué precio salió en vez de insistir', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-10-21') }, soloS1)
+  try {
+    await compraYAnadido(ig, bot, enHora, 22)
+    enHora(fra(10, 23, 9, 0, 5)); await bot._paso()
+    ig.operar.cerrar = async () => { ig.quitarPosiciones(); falloIG() }
+    ig.nivelCierre = 24_845
+    ig.precios['^GDAXI'] = [24_845, 24_846]
+    vela1m('^GDAXI', fra(10, 23, 10), 24_900, 24_840)
+    enHora(fra(10, 23, 10, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI'), null)
+    assert.equal(bot.estado().operaciones[0].salida, 24_845)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

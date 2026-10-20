@@ -167,6 +167,8 @@ const ERRORES = {
   'error.security.account-suspended':   'IG tiene la cuenta suspendida',
   'error.public-api.exceeded-api-key-allowance': 'IG limita las peticiones de esta clave: espera un minuto',
   'error.public-api.exceeded-account-historical-data-allowance': 'Agotado el cupo semanal de histórico de IG; el directo sigue funcionando',
+  // sin documentar: salió el 20-oct-2026 en el Nikkei, en mitad de una orden
+  'error.service.execution.find': 'Fallo interno de IG con la orden (error.service.execution.find)',
 }
 const mensaje = codigo => ERRORES[codigo] ?? `IG: ${codigo}`
 

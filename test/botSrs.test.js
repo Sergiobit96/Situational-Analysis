@@ -649,6 +649,105 @@ test('pirámide: una posición más por cada R a favor, como mucho una cada 5 mi
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+// Una compra del DAX a 25501 y, a +1R, el añadido, cuyo stop de las dos (25521,5) IG no mueve:
+// `fallo(o, ig)` es lo que hace IG con la orden antes de dar el error
+async function stopQueFalla(fallo) {
+  const precios = { '^GDAXI': [25500, 25501] }
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(4, 9, 15), 25480, 25500, 25460, 25490)] }, precios })
+  const moverStop = ig.operar.moverStop
+  ig.operar.moverStop = async o => { await fallo(o, ig); throw new Error('Fallo interno de IG con la orden (error.service.execution.find)') }
+  const { bot, dir, enHora } = botDePrueba(ig, { ...soloDax, piramide: 1, tamanoAnadido: 1 })
+  enHora(madridNov(4, 9, 30, 4)); await bot._paso()
+  vela1m('^GDAXI', madridNov(4, 9, 41), 25502, 25495, 25501)
+  enHora(madridNov(4, 9, 41, 10)); await bot._paso()               // compra a 25501
+  precios['^GDAXI'] = [25541, 25542]
+  vela1m('^GDAXI', madridNov(4, 9, 45), 25542, 25532, 25541)
+  enHora(madridNov(4, 9, 45, 5))
+  await assert.rejects(bot._paso(), /IG ha fallado al mover el stop a 25521.5; se reintenta cada 30 s \(Fallo interno de IG/)
+  ig.operar.moverStop = moverStop
+  return { ig, bot, dir, enHora }
+}
+
+test('si IG falla al mover el stop, se reintenta a los 30 s', async () => {
+  const { ig, bot, dir, enHora } = await stopQueFalla(() => {})
+  try {
+    let op = apunte(bot, '^GDAXI').operacion
+    assert.equal(op.unidades.length, 2)
+    assert.equal(op.stopPendiente, 25521.5)
+    assert.equal(op.stop, 25460)
+    enHora(madridNov(4, 9, 45, 20)); await bot._paso()               // aún no
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'stop').length, 0)
+    enHora(madridNov(4, 9, 45, 40)); await bot._paso()
+    op = apunte(bot, '^GDAXI').operacion
+    assert.deepEqual(ig.ordenes.filter(o => o.tipo === 'stop').map(o => [o.dealId, o.stop]), [['D1', 25521.5]])
+    assert.equal(op.stop, 25521.5)
+    assert.equal(op.stopPendiente, undefined)
+    assert.equal(apunte(bot, '^GDAXI').eventos.at(-1).texto, 'Stop en 25521.5, tras el fallo de IG')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG movió el stop pero falló su confirmación, el reintento no lo vuelve a mandar', async () => {
+  const { ig, bot, dir, enHora } = await stopQueFalla(async (o, ig) => {
+    (await ig.operar.posiciones()).find(p => p.dealId === o.dealId).stop = o.stop
+  })
+  try {
+    enHora(madridNov(4, 9, 45, 40)); await bot._paso()
+    const op = apunte(bot, '^GDAXI').operacion
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'stop').length, 0)
+    assert.equal(op.stop, 25521.5)
+    assert.equal(op.stopPendiente, undefined)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG falla al mover el stop y la posición ya no está, la pierna se cierra con la revisión', async () => {
+  const { ig, bot, dir, enHora } = await stopQueFalla(() => {})
+  try {
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25530
+    enHora(madridNov(4, 9, 45, 40)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'stop').length, 0)
+    assert.equal(hoy.estado, 'terminado')
+    assert.equal(hoy.salida.nivel, 25530)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG falla al cerrar pero la posición ya no está, se busca a qué precio salió en vez de insistir', async () => {
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(4, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25500, 25501] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madridNov(4, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(4, 9, 41), 25502, 25495, 25501)
+    enHora(madridNov(4, 9, 41, 10)); await bot._paso()             // compra a 25501
+    ig.operar.cerrar = async () => { ig.quitarPosiciones(); throw new Error('Fallo interno de IG con la orden (error.service.execution.find)') }
+    ig.nivelCierre = 25510
+    enHora(madridNov(4, 17, 30, 3)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'terminado')
+    assert.equal(hoy.salida.nivel, 25510)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG falla al cerrar y la posición sigue abierta, se vuelve a intentar en el paso siguiente', async () => {
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(4, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25500, 25501] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    enHora(madridNov(4, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(4, 9, 41), 25502, 25495, 25501)
+    enHora(madridNov(4, 9, 41, 10)); await bot._paso()
+    const cerrar = ig.operar.cerrar
+    ig.operar.cerrar = async () => { throw new Error('Fallo interno de IG con la orden (error.service.execution.find)') }
+    enHora(madridNov(4, 17, 30, 3))
+    await assert.rejects(bot._paso(), /error\.service\.execution\.find/)
+    assert.equal(apunte(bot, '^GDAXI').estado, 'en-posicion')
+    ig.operar.cerrar = cerrar
+    enHora(madridNov(4, 17, 30, 8)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'terminado')
+    assert.equal(hoy.salida.motivo, 'cierre')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('no entra si al romper el precio ya se ha ido del nivel más de un cuarto del bracket', async () => {
   const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(5, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25514, 25515] } })
   const { bot, dir, enHora } = botDePrueba(ig, soloDax)

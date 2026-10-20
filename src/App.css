@@ -3520,6 +3520,62 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   box-shadow: 0 0 0 0.9rem var(--surface), 0 2px 14px rgba(109, 93, 252, 0.3);
 }
 
+/* ── Filtros por bloques numerados: el 1 dice qué datos se bajan y va con el botón,
+   que está justo debajo; los demás se recalculan al momento ── */
+.estr-bloque {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.estr-bloque + .estr-bloque {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+.estr-bloque-cabecera { display: flex; align-items: flex-start; gap: 0.55rem; }
+.estr-bloque-num {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  border: 1px solid rgba(109, 93, 252, 0.45);
+  color: #d4cfff;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.estr-bloque-titulo { font-size: 0.85rem; font-weight: 600; color: var(--text); line-height: 1.35rem; }
+.estr-bloque-nota { font-size: 0.7rem; color: var(--muted); line-height: 1.35; }
+.estrategias-page .estr-bloque > .filtro-group {
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 0.4rem;
+}
+/* lo que hace la opción marcada, debajo de los botones y sin quitarles protagonismo */
+.estr-explica { font-size: 0.68rem; color: var(--muted); line-height: 1.4; }
+/* el botón va con su bloque: ya no hace falta que persiga al final de la columna */
+.estrategias-page .estr-bloque .btn-filtrar {
+  position: static;
+  margin-top: 0;
+  box-shadow: 0 2px 14px rgba(109, 93, 252, 0.3);
+}
+/* lo cambiado en el bloque 1 que aún no se ha analizado */
+.estr-pendiente {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+}
+/* encima de los resultados: de dónde salen y los ajustes que no son los de por defecto */
+.estr-ajustes { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 0.9rem; }
+.estr-ajustes-base { font-size: 0.82rem; color: var(--muted); }
+
 /* Las dos mitades del histórico, una al lado de la otra */
 .estr-mitades-tabla {
   width: 100%;

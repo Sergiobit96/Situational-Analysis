@@ -8,6 +8,8 @@
 
 .tortugas-limites { align-items: center; }
 .tortugas-limites span { font-size: 0.75rem; color: var(--muted); }
+/* el capital tiene seis cifras: en la casilla de los porcentajes no se veía entero */
+.tortugas .tortugas-numero-ancho { width: 6.5rem; }
 
 .tortugas-aviso {
   padding: 0.5rem 0.75rem;

@@ -9,6 +9,7 @@ import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } fr
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
+import { Bloque, AjustesPuestos } from './AjustesEstrategia'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -32,19 +33,34 @@ async function bajarDiario(ticker, desde, signal) {
 }
 
 const DIAS = [
-  { n: 1, label: 'L', nombre: 'Lunes' },
-  { n: 2, label: 'M', nombre: 'Martes' },
-  { n: 3, label: 'X', nombre: 'Miércoles' },
-  { n: 4, label: 'J', nombre: 'Jueves' },
-  { n: 5, label: 'V', nombre: 'Viernes' },
+  { n: 1, label: 'Lun', nombre: 'Lunes' },
+  { n: 2, label: 'Mar', nombre: 'Martes' },
+  { n: 3, label: 'Mié', nombre: 'Miércoles' },
+  { n: 4, label: 'Jue', nombre: 'Jueves' },
+  { n: 5, label: 'Vie', nombre: 'Viernes' },
 ]
 const DIA_CORTO = { 1: 'LUN', 2: 'MAR', 3: 'MIÉ', 4: 'JUE', 5: 'VIE' }
+const TODOS_LOS_DIAS = DIAS.map(d => d.n)
+const nombreDias = dias => (dias.size === DIAS.length ? 'todos los días' : DIAS.filter(d => dias.has(d.n)).map(d => d.label).join(', '))
 
 const PERIODOS   = [
-  { meses: 1, label: '1m' }, { meses: 3, label: '3m' }, { meses: 6, label: '6m' },
-  { meses: 12, label: '12m' }, { meses: 24, label: '2a' }, { meses: 60, label: '5a' },
-  { meses: 120, label: '10a' },
+  { meses: 1, label: '1 mes' }, { meses: 3, label: '3 meses' }, { meses: 6, label: '6 meses' },
+  { meses: 12, label: '1 año' }, { meses: 24, label: '2 años' }, { meses: 60, label: '5 años' },
+  { meses: 120, label: '10 años' },
 ]
+
+// Lo que decide qué sesiones se descargan. Si alguno cambia después de analizar, los
+// resultados son de antes y el bloque lo avisa hasta que se vuelve a pulsar el botón.
+const CAMPOS_DESCARGA = [
+  { campo: 'fuente',   nombre: 'los datos' },
+  { campo: 'ticker',   nombre: 'el instrumento' },
+  { campo: 'dias',     nombre: 'los días' },
+  { campo: 'meses',    nombre: 'el periodo' },
+  { campo: 'cantidad', nombre: 'las sesiones a analizar' },
+  { campo: 'anios',    nombre: 'los años' },
+]
+// «el instrumento, los días y el periodo»
+const enumerar = xs => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} y ${xs.at(-1)}`)
 // El tope real lo pone la paciencia: el feed se descarga sesión a sesión y en serie, porque
 // Dukascopy corta por IP si se le piden muchos ficheros a la vez. Lo ya descargado se queda
 // en la caché de disco del servidor, así que la segunda pasada sobre las mismas fechas vuela.
@@ -110,6 +126,11 @@ const APERTURAS = [
   { id: 'dentro', label: 'Dentro',            pos: 'dentro', nota: 'abre dentro del rango del día anterior' },
   { id: 'debajo', label: '↓ Bajo el mínimo',  pos: 'debajo', nota: 'abre por debajo del mínimo del día anterior' },
 ]
+
+// Si una sesión cuenta con el color de 1ª vela y la apertura marcados (null: cualquiera).
+// Las que no se pudieron leer no tienen ni color ni apertura, así que solo entran sin filtro.
+const pasaVela1    = (r, dir) => !dir || (r.analisis.valido && r.analisis.dir1 === dir)
+const pasaApertura = (r, pos) => !pos || (r.analisis.valido && posicionApertura(r.analisis, r.previo) === pos)
 
 // Qué operativa se simula. El stop de una pierna es el nivel de entrada de la contraria,
 // así que "con flip" es literalmente darle la vuelta a la posición cuando salta.
@@ -255,6 +276,30 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const tpValor = tpModo === 'pct' && Number(tpPct) > 0 ? Number(tpPct) : null
   const volumenes = estr.tortuga ? VOLUMENES_TORTUGA : VOLUMENES
   const modos = estr.lado ? modosLado(estr.lado) : MODOS
+
+  // Con qué se hizo el último análisis. Los resultados son de esas sesiones: se recalculan con
+  // su instrumento aunque luego se marque otro chip, y lo que cambie se avisa como pendiente.
+  const [analizado, setAnalizado] = useState(null)
+  const descargaActual = {
+    fuente, ticker, dias: [...dias].sort().join(','), meses, cantidad, anios: `${anioDesde}-${anioHasta}`,
+  }
+  const camposQueCuentan = estr.soloFomc ? ['ticker', 'dias', 'anios']
+    : fuente === 'csv' ? ['fuente', 'dias', 'anios']
+    : ['fuente', 'ticker', 'dias', 'meses', 'cantidad']
+  const cambiosPendientes = analizado && resultados.length > 0
+    ? CAMPOS_DESCARGA
+      .filter(c => camposQueCuentan.includes(c.campo) && analizado[c.campo] !== descargaActual[c.campo])
+      .map(c => c.nombre)
+    : []
+  const tickerVisto = analizado?.ticker ?? ticker
+  const fuenteVista = analizado?.fuente ?? fuente
+
+  // Los valores con los que arranca cada ajuste de operativa y de qué sesiones cuentan
+  const porDefecto = {
+    modo: estr.modoInicial ?? 'ambos', volumen: estr.tortuga ? 'tortuga' : 'fijo',
+    tamano: 'uno', nivelStop: 'extremo', stopModo: 'fijo', tpModo: 'no', coste: 0,
+    vela1: 'todas', aperturaPos: 'todas',
+  }
 
   // Todo lo que define la operativa, en un solo sitio: lo usan las tres descargas, el
   // afinado de las dudosas y el recálculo al tocar un filtro. Lo que la estrategia trae fijo
@@ -469,6 +514,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   }
 
   const analizar = async () => {
+    setAnalizado(descargaActual)
     if (estr.soloFomc) return analizarFomc()
     if (fuente === 'csv') return analizarHistorico()
     cancelar()
@@ -535,35 +581,35 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // solo entran cuando no se filtra por él.
   // La operativa se recalcula sobre las velas ya descargadas: cambiar de modo no vuelve
   // a pedirle nada al feed.
+  // Va con el instrumento del análisis, no con el chip marcado ahora: las velas son de aquel.
   const conModo = useMemo(() => resultados.map(r => ({
     ...r,
     analisis: analizarSesion({
       ...opcionesMotor,
+      ticker: tickerVisto,
       velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null,
       velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
     }),
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
   // recalculo, y son todas valores sueltos
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  })), [resultados, ticker, modoEfectivo, stopModo, volumen, tpValor, stopPct, tamano, coste])
+  })), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, stopPct, tamano, coste])
 
-  const analizadas = useMemo(() => {
-    const dir = VELAS1.find(v => v.id === vela1)?.dir
-    const pos = APERTURAS.find(x => x.id === aperturaPos)?.pos
-    let out = dir ? conModo.filter(({ analisis: a }) => a.valido && a.dir1 === dir) : conModo
-    if (pos) out = out.filter(r => r.analisis.valido && posicionApertura(r.analisis, r.previo) === pos)
-    return out
-  }, [conModo, vela1, aperturaPos])
+  const dirVela1 = VELAS1.find(v => v.id === vela1)?.dir
+  const posApertura = APERTURAS.find(x => x.id === aperturaPos)?.pos
+  const analizadas = useMemo(
+    () => conModo.filter(r => pasaVela1(r, dirVela1) && pasaApertura(r, posApertura)),
+    [conModo, dirVela1, posApertura],
+  )
 
-  // cuántas sesiones hay de cada caso, para no tener que ir probando los chips
-  const porApertura = useMemo(() => {
-    const cuenta = { encima: 0, dentro: 0, debajo: 0 }
-    for (const r of conModo) {
-      const pos = r.analisis.valido ? posicionApertura(r.analisis, r.previo) : null
-      if (pos) cuenta[pos]++
-    }
-    return cuenta
-  }, [conModo])
+  // Cuántas sesiones quedarían con cada chip de «qué sesiones cuentan», con lo que esté marcado
+  // en el otro grupo: así no hay que ir probándolos
+  const porVela1 = useMemo(() => Object.fromEntries(VELAS1.map(v => [
+    v.id, conModo.filter(r => pasaVela1(r, v.dir) && pasaApertura(r, posApertura)).length,
+  ])), [conModo, posApertura])
+  const porApertura = useMemo(() => Object.fromEntries(APERTURAS.map(x => [
+    x.id, conModo.filter(r => pasaVela1(r, dirVela1) && pasaApertura(r, x.pos)).length,
+  ])), [conModo, dirVela1])
 
   const resumen = useMemo(() => resumir(analizadas.map(r => r.analisis)), [analizadas])
 
@@ -663,13 +709,14 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     ;(async () => {
       const nuevas = {}
       try {
-        if (fuente === 'csv') {
+        // de donde salieron las sesiones del análisis, aunque luego se haya marcado otra cosa
+        if (fuenteVista === 'csv') {
           const q = new URLSearchParams({ finas: '1', dias: faltan.join(',') })
           const d = await (await fetch(`${API}/api/dax-historico?${q}`)).json()
           for (const ses of d.sesiones ?? []) if (ses.finas?.length) nuevas[ses.date] = ses.finas
         } else {
           for (const f of faltan) {
-            const d = await (await fetch(intradayUrl(ticker, f, 'm5'))).json()
+            const d = await (await fetch(intradayUrl(tickerVisto, f, 'm5'))).json()
             if (d.velas?.length) nuevas[f] = d.velas
           }
         }
@@ -677,362 +724,427 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       if (vivo && Object.keys(nuevas).length) setFinas5m(prev => ({ ...prev, ...nuevas }))
     })()
     return () => { vivo = false }
-  }, [fechasVista, fuente, ticker])
+  }, [fechasVista, fuenteVista, tickerVisto])
 
   const tradesPara = fecha => trades.filter(t =>
-    t.ticker === ticker && (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha)
+    t.ticker === tickerVisto && (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha)
   )
+
+  // Los ajustes de operativa y de qué sesiones cuentan que no están en su valor por defecto,
+  // para la barra de encima de los resultados
+  const conPiramide = volumen !== 'fijo'
+  const ajustesPuestos = [
+    modoEfectivo !== porDefecto.modo && {
+      id: 'modo', texto: modos.find(m => m.id === modoEfectivo)?.label, quitar: () => setModo(porDefecto.modo),
+    },
+    volumen !== porDefecto.volumen && {
+      id: 'volumen', texto: `Volumen: ${volumenes.find(v => v.id === volumen)?.label}`, quitar: () => setVolumen(porDefecto.volumen),
+    },
+    conPiramide && tamano !== porDefecto.tamano && {
+      id: 'tamano', texto: `Añadidos de ${TAMANOS.find(t => t.id === tamano)?.label}`, quitar: () => setTamano(porDefecto.tamano),
+    },
+    !estr.tortuga && nivelStop !== porDefecto.nivelStop && {
+      id: 'nivel', texto: `Stop ${NIVELES.find(n => n.id === nivelStop)?.label.toLowerCase()}`, quitar: () => setNivelStop(porDefecto.nivelStop),
+    },
+    !estr.tortuga && stopModo !== porDefecto.stopModo && {
+      id: 'be', texto: STOPS.find(s => s.id === stopModo)?.label, quitar: () => setStopModo(porDefecto.stopModo),
+    },
+    tpValor != null && {
+      id: 'tp', texto: `Objetivo ${tpValor.toLocaleString('es-ES')}%`, quitar: () => setTpModo(porDefecto.tpModo),
+    },
+    Number(coste) > 0 && {
+      id: 'coste', texto: `Costes ${Number(coste).toLocaleString('es-ES')} pts`, quitar: () => setCoste(porDefecto.coste),
+    },
+    vela1 !== porDefecto.vela1 && {
+      id: 'vela1', texto: `1ª vela ${vela1}`, quitar: () => setVela1(porDefecto.vela1),
+    },
+    aperturaPos !== porDefecto.aperturaPos && {
+      id: 'apertura',
+      texto: { encima: 'Abre sobre el máximo de ayer', dentro: 'Abre dentro del rango de ayer', debajo: 'Abre bajo el mínimo de ayer' }[aperturaPos],
+      quitar: () => setAperturaPos(porDefecto.aperturaPos),
+    },
+  ].filter(Boolean).map(a => ({ ...a, quitar: () => { a.quitar(); setMostradas(POR_PAGINA) } }))
+  const restablecer = () => {
+    setModo(porDefecto.modo); setVolumen(porDefecto.volumen); setTamano(porDefecto.tamano)
+    setNivelStop(porDefecto.nivelStop); setStopModo(porDefecto.stopModo); setTpModo(porDefecto.tpModo)
+    setCoste(porDefecto.coste); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos)
+    setMostradas(POR_PAGINA)
+  }
+
+  // De dónde salen los resultados, tal como se analizaron
+  const baseAnalisis = analizado && (() => {
+    const diasTxt = nombreDias(new Set(analizado.dias.split(',').filter(Boolean).map(Number)))
+    const [desde, hasta] = analizado.anios.split('-')
+    const nombre = INSTRUMENTOS.find(i => i.value === analizado.ticker)?.label ?? analizado.ticker
+    if (estr.soloFomc) return `${nombre} · reuniones del FOMC de ${desde} a ${hasta} · ${diasTxt}`
+    if (analizado.fuente === 'csv') return `DAX cash (CSV) · de ${desde} a ${hasta} · ${diasTxt}`
+    const periodo = PERIODOS.find(p => p.meses === analizado.meses)?.label ?? `${analizado.meses} meses`
+    return `${nombre} · las ${analizado.cantidad} sesiones más recientes de ${periodo} · ${diasTxt}`
+  })()
 
   return (
     <div className="estrategia-panel">
       <div className="filtro-controls">
-        {estr.admiteCsv && <div className="filtro-group">
-          <label className="filtro-label">
-            Datos
-            <span className="filtro-valor">
+        <Bloque n={1} titulo="Qué se analiza" nota="Se descarga al pulsar Analizar">
+          {estr.admiteCsv && <div className="filtro-group">
+            <label className="filtro-label">Datos</label>
+            <div className="filtro-presets">
+              <button className={`chip ${fuente === 'feed' ? 'activo' : ''}`} onClick={() => setFuente('feed')}>
+                Feed (Dukascopy)
+              </button>
+              <button className={`chip ${fuente === 'csv' ? 'activo' : ''}`} onClick={() => { setFuente('csv'); setTicker('^GDAXI') }}>
+                DAX 2009 → 2026
+              </button>
+            </div>
+            <p className="estr-explica">
               {fuente === 'csv'
                 ? 'CSV de DAX cash a 5 min, sin límite de peticiones'
-                : 'del feed, unas pocas sesiones por tanda'}
-            </span>
-          </label>
-          <div className="filtro-presets">
-            <button className={`chip ${fuente === 'feed' ? 'activo' : ''}`} onClick={() => setFuente('feed')}>
-              Feed (Dukascopy)
-            </button>
-            <button className={`chip ${fuente === 'csv' ? 'activo' : ''}`} onClick={() => { setFuente('csv'); setTicker('^GDAXI') }}>
-              DAX 2009 → 2026
-            </button>
-          </div>
-        </div>}
+                : 'Del feed, unas pocas sesiones por tanda'}
+            </p>
+          </div>}
 
-        {(fuente === 'csv' || estr.soloFomc) && (
-          <div className="filtro-group">
-            <label className="filtro-label">
-              Años
-              <span className="filtro-valor">
-                {estr.soloFomc
-                  ? `${FOMC.filter(f => Number(f.slice(0, 4)) >= anioDesde && Number(f.slice(0, 4)) <= anioHasta).length} reuniones del FOMC`
-                  : 'DAX cash, sesión 09:00-17:30'}
-              </span>
-            </label>
-            <div className="filtro-presets">
-              <select className="filtro-otros" value={anioDesde} onChange={e => setAnioDesde(Number(e.target.value))}>
-                {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>desde {a}</option>)}
-              </select>
-              <select className="filtro-otros" value={anioHasta} onChange={e => setAnioHasta(Number(e.target.value))}>
-                {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>hasta {a}</option>)}
-              </select>
+          {(fuente === 'csv' || estr.soloFomc) && (
+            <div className="filtro-group">
+              <label className="filtro-label">
+                Años
+                {estr.soloFomc && (
+                  <span className="filtro-valor">
+                    {FOMC.filter(f => Number(f.slice(0, 4)) >= anioDesde && Number(f.slice(0, 4)) <= anioHasta).length} reuniones del FOMC
+                  </span>
+                )}
+              </label>
+              <div className="filtro-presets">
+                <select className="filtro-otros" value={anioDesde} onChange={e => setAnioDesde(Number(e.target.value))}>
+                  {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>desde {a}</option>)}
+                </select>
+                <select className="filtro-otros" value={anioHasta} onChange={e => setAnioHasta(Number(e.target.value))}>
+                  {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>hasta {a}</option>)}
+                </select>
+              </div>
+              {!estr.soloFomc && <p className="estr-explica">DAX cash, sesión 09:00-17:30</p>}
             </div>
-          </div>
-        )}
+          )}
 
-        {fuente === 'feed' && (
+          {fuente === 'feed' && (
+            <div className="filtro-group">
+              <label className="filtro-label">Instrumento</label>
+              <div className="filtro-presets">
+                {INSTRUMENTOS.map(i => (
+                  <button
+                    key={i.value}
+                    className={`chip ${ticker === i.value ? 'activo' : ''}`}
+                    onClick={() => setTicker(i.value)}
+                  >{i.label}</button>
+                ))}
+              </div>
+              <p className="estr-explica">
+                {estr.soloFomc
+                  ? 'La ventana la marca el comunicado, no la apertura'
+                  : sesion && `Apertura ${fmtMin(sesion.open)} · ${sesion.plaza}`}
+              </p>
+            </div>
+          )}
+
           <div className="filtro-group">
             <label className="filtro-label">
-              Instrumento
-              {estr.soloFomc
-                ? <span className="filtro-valor">la ventana la marca el comunicado, no la apertura</span>
-                : sesion && <span className="filtro-valor">apertura {fmtMin(sesion.open)} · {sesion.plaza}</span>}
+              Días de la semana
+              {dias.size !== DIAS.length && (
+                <button className="clear-eventos" onClick={() => setDias(new Set(TODOS_LOS_DIAS))}>marcar todos</button>
+              )}
             </label>
             <div className="filtro-presets">
-              {INSTRUMENTOS.map(i => (
+              {DIAS.map(d => (
                 <button
-                  key={i.value}
-                  className={`chip ${ticker === i.value ? 'activo' : ''}`}
-                  onClick={() => setTicker(i.value)}
-                >{i.label}</button>
+                  key={d.n}
+                  title={d.nombre}
+                  className={`chip ${dias.has(d.n) ? 'activo' : ''}`}
+                  aria-pressed={dias.has(d.n)}
+                  onClick={() => toggleDia(d.n)}
+                >{d.label}</button>
               ))}
             </div>
           </div>
-        )}
 
-        <div className="filtro-group">
-          <label className="filtro-label">Días de la semana</label>
-          <div className="filtro-dias">
-            {DIAS.map(d => (
-              <button
-                key={d.n}
-                title={d.nombre}
-                className={`dia-chip ${dias.has(d.n) ? 'activo' : ''}`}
-                onClick={() => toggleDia(d.n)}
-              >{d.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            1ª vela de {estr.etiquetaVela}
-            {vela1 !== 'todas' && (
-              <span className="filtro-valor">{analizadas.length} de {resultados.length} sesiones</span>
-            )}
-          </label>
-          <div className="filtro-presets">
-            {VELAS1.map(v => (
-              <button
-                key={v.id}
-                className={`chip ${vela1 === v.id ? 'activo' : ''}`}
-                onClick={() => { setVela1(v.id); setMostradas(POR_PAGINA) }}
-                title={v.dir ? `Solo las sesiones cuya primera vela cierra ${v.dir === 'alcista' ? 'por encima' : 'por debajo'} de su apertura` : 'Sin filtrar por el color de la primera vela'}
-              >{v.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Apertura del día
-            <span className="filtro-valor">{APERTURAS.find(x => x.id === aperturaPos)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {APERTURAS.map(x => (
-              <button
-                key={x.id}
-                className={`chip ${aperturaPos === x.id ? 'activo' : ''}`}
-                onClick={() => { setAperturaPos(x.id); setMostradas(POR_PAGINA) }}
-                title={x.nota}
-              >
-                {x.label}
-                {x.pos && <span className="chip-cuenta">{porApertura[x.pos]}</span>}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Operativa
-            <span className="filtro-valor">{modos.find(m => m.id === modoEfectivo)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {modos.map(m => {
-              const sinFlip = m.id in SIN_FLIP && stopPct !== 1
-              return (
+          {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
+            <label className="filtro-label">Periodo</label>
+            <div className="filtro-presets">
+              {PERIODOS.map(p => (
                 <button
-                  key={m.id}
-                  className={`chip ${modoEfectivo === m.id ? 'activo' : ''}`}
-                  disabled={sinFlip}
-                  onClick={() => { setModo(m.id); setMostradas(POR_PAGINA) }}
-                  title={sinFlip ? 'Con el stop a media vela no hay vuelta: el nivel donde salta ya no es la entrada del lado contrario' : m.nota}
-                >{m.label}</button>
-              )
-            })}
-          </div>
-        </div>
+                  key={p.meses}
+                  className={`chip ${meses === p.meses ? 'activo' : ''}`}
+                  onClick={() => setMeses(p.meses)}
+                >{p.label}</button>
+              ))}
+            </div>
+          </div>}
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Volumen
-            <span className="filtro-valor">{volumenes.find(v => v.id === volumen)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {volumenes.map(v => (
-              <button
-                key={v.id}
-                className={`chip ${volumen === v.id ? 'activo' : ''}`}
-                onClick={() => { setVolumen(v.id); setMostradas(POR_PAGINA) }}
-                title={v.nota}
-              >{v.label}</button>
-            ))}
-          </div>
-        </div>
+          {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
+            <label className="filtro-label">Sesiones a analizar</label>
+            <div className="filtro-presets">
+              {CANTIDADES.map(c => (
+                <button
+                  key={c}
+                  className={`chip ${cantidad === c ? 'activo' : ''}`}
+                  onClick={() => setCantidad(c)}
+                >{c}</button>
+              ))}
+              {/* la `key` reinicia el campo cuando la cantidad cambia desde los botones */}
+              <input
+                key={cantidad}
+                className="pag-input"
+                type="number"
+                min={1}
+                max={2000}
+                defaultValue={cantidad}
+                title="Escribe cuántas sesiones quieres analizar y pulsa Enter"
+                onFocus={e => e.target.select()}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                onBlur={e => {
+                  const n = Math.round(Number(e.target.value))
+                  if (!Number.isFinite(n) || n < 1) { e.target.value = cantidad; return }
+                  setCantidad(Math.min(n, 2000))
+                }}
+              />
+            </div>
+            <p className="estr-explica">Las {cantidad} más recientes del periodo, una descarga por sesión</p>
+          </div>}
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Tamaño de los añadidos
-            <span className="filtro-valor">{TAMANOS.find(t => t.id === tamano)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {TAMANOS.map(t => (
-              <button
-                key={t.id}
-                className={`chip ${tamano === t.id ? 'activo' : ''}`}
-                onClick={() => { setTamano(t.id); setMostradas(POR_PAGINA) }}
-                title={t.nota}
-              >{t.label}</button>
-            ))}
-          </div>
-        </div>
+          {cambiosPendientes.length > 0 && !cargando && (
+            <p className="estr-pendiente">
+              Has cambiado {enumerar(cambiosPendientes)}: los resultados siguen siendo los de antes hasta que vuelvas a analizar.
+            </p>
+          )}
+          <button className="btn-filtrar" onClick={analizar} disabled={cargando || dias.size === 0}>
+            {cargando ? 'Analizando…'
+              : dias.size === 0 ? 'Marca al menos un día'
+              : cambiosPendientes.length > 0 ? 'Analizar con los cambios'
+              : 'Analizar sesiones'}
+          </button>
 
-        {!estr.tortuga && <div className="filtro-group">
-          <label className="filtro-label">
-            Nivel del stop
-            <span className="filtro-valor">{NIVELES.find(n => n.id === nivelStop)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {NIVELES.map(n => (
-              <button
-                key={n.id}
-                className={`chip ${nivelStop === n.id ? 'activo' : ''}`}
-                onClick={() => { setNivelStop(n.id); setMostradas(POR_PAGINA) }}
-                title={n.nota}
-              >{n.label}</button>
-            ))}
-          </div>
-        </div>}
+          {cargando && (
+            <div className="velas-cargando">
+              <span className="spinner" />
+              {progreso?.total
+                ? `Descargando velas… ${progreso.done}/${progreso.total}`
+                : 'Buscando sesiones…'}
+              <button className="btn-cancelar-velas" onClick={cancelar}>✕ Cancelar</button>
+            </div>
+          )}
+          {error && <div className="error-global">{error}</div>}
+        </Bloque>
 
-        {!estr.tortuga && <div className="filtro-group">
-          <label className="filtro-label">
-            Break even
-            <span className="filtro-valor">{STOPS.find(s => s.id === stopModo)?.nota}</span>
-          </label>
-          <div className="filtro-presets">
-            {STOPS.map(s => (
-              <button
-                key={s.id}
-                className={`chip ${stopModo === s.id ? 'activo' : ''}`}
-                onClick={() => { setStopModo(s.id); setMostradas(POR_PAGINA) }}
-                title={s.nota}
-              >{s.label}</button>
-            ))}
+        <Bloque n={2} titulo="Qué sesiones cuentan" nota="Al momento: las estadísticas son solo de estas. El número es cuántas quedarían">
+          <div className="filtro-group">
+            <label className="filtro-label">1ª vela de {estr.etiquetaVela}</label>
+            <div className="filtro-presets">
+              {VELAS1.map(v => (
+                <button
+                  key={v.id}
+                  className={`chip ${vela1 === v.id ? 'activo' : ''}`}
+                  onClick={() => { setVela1(v.id); setMostradas(POR_PAGINA) }}
+                  title={v.dir ? `Solo las sesiones cuya primera vela cierra ${v.dir === 'alcista' ? 'por encima' : 'por debajo'} de su apertura` : 'Sin filtrar por el color de la primera vela'}
+                >
+                  {v.label}
+                  {resultados.length > 0 && <span className="chip-cuenta">{porVela1[v.id]}</span>}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>}
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Objetivo
-            <span className="filtro-valor">
+          <div className="filtro-group">
+            <label className="filtro-label">Apertura del día</label>
+            <div className="filtro-presets">
+              {APERTURAS.map(x => (
+                <button
+                  key={x.id}
+                  className={`chip ${aperturaPos === x.id ? 'activo' : ''}`}
+                  onClick={() => { setAperturaPos(x.id); setMostradas(POR_PAGINA) }}
+                  title={x.nota}
+                >
+                  {x.label}
+                  {resultados.length > 0 && <span className="chip-cuenta">{porApertura[x.id]}</span>}
+                </button>
+              ))}
+            </div>
+            <p className="estr-explica">Respecto al máximo y el mínimo del día anterior: {APERTURAS.find(x => x.id === aperturaPos)?.nota}</p>
+          </div>
+        </Bloque>
+
+        <Bloque n={3} titulo="Cómo se opera" nota="Se recalcula al momento con las sesiones ya analizadas">
+          <div className="filtro-group">
+            <label className="filtro-label">Operativa</label>
+            <div className="filtro-presets">
+              {modos.map(m => {
+                const sinFlip = m.id in SIN_FLIP && stopPct !== 1
+                return (
+                  <button
+                    key={m.id}
+                    className={`chip ${modoEfectivo === m.id ? 'activo' : ''}`}
+                    disabled={sinFlip}
+                    onClick={() => { setModo(m.id); setMostradas(POR_PAGINA) }}
+                    title={sinFlip ? 'Con el stop a media vela no hay vuelta: el nivel donde salta ya no es la entrada del lado contrario' : m.nota}
+                  >{m.label}</button>
+                )
+              })}
+            </div>
+            <p className="estr-explica">{modos.find(m => m.id === modoEfectivo)?.nota}</p>
+          </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">Volumen</label>
+            <div className="filtro-presets">
+              {volumenes.map(v => (
+                <button
+                  key={v.id}
+                  className={`chip ${volumen === v.id ? 'activo' : ''}`}
+                  onClick={() => { setVolumen(v.id); setMostradas(POR_PAGINA) }}
+                  title={v.nota}
+                >{v.label}</button>
+              ))}
+            </div>
+            <p className="estr-explica">{volumenes.find(v => v.id === volumen)?.nota}</p>
+          </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">Tamaño de los añadidos</label>
+            <div className="filtro-presets">
+              {TAMANOS.map(t => (
+                <button
+                  key={t.id}
+                  className={`chip ${tamano === t.id ? 'activo' : ''}`}
+                  disabled={!conPiramide}
+                  onClick={() => { setTamano(t.id); setMostradas(POR_PAGINA) }}
+                  title={conPiramide ? t.nota : 'Con una sola unidad no hay añadidos'}
+                >{t.label}</button>
+              ))}
+            </div>
+            <p className="estr-explica">
+              {conPiramide ? TAMANOS.find(t => t.id === tamano)?.nota : 'Solo cuenta con pirámide: con una unidad no hay añadidos'}
+            </p>
+          </div>
+
+          {!estr.tortuga && <div className="filtro-group">
+            <label className="filtro-label">Nivel del stop</label>
+            <div className="filtro-presets">
+              {NIVELES.map(n => (
+                <button
+                  key={n.id}
+                  className={`chip ${nivelStop === n.id ? 'activo' : ''}`}
+                  onClick={() => { setNivelStop(n.id); setMostradas(POR_PAGINA) }}
+                  title={n.nota}
+                >{n.label}</button>
+              ))}
+            </div>
+            <p className="estr-explica">{NIVELES.find(n => n.id === nivelStop)?.nota}</p>
+          </div>}
+
+          {!estr.tortuga && <div className="filtro-group">
+            <label className="filtro-label">Break even</label>
+            <div className="filtro-presets">
+              {STOPS.map(s => (
+                <button
+                  key={s.id}
+                  className={`chip ${stopModo === s.id ? 'activo' : ''}`}
+                  onClick={() => { setStopModo(s.id); setMostradas(POR_PAGINA) }}
+                  title={s.nota}
+                >{s.label}</button>
+              ))}
+            </div>
+            <p className="estr-explica">{STOPS.find(s => s.id === stopModo)?.nota}</p>
+          </div>}
+
+          <div className="filtro-group">
+            <label className="filtro-label">Objetivo</label>
+            <div className="filtro-presets">
+              {OBJETIVOS.map(o => (
+                <button
+                  key={o.id}
+                  className={`chip ${tpModo === o.id ? 'activo' : ''}`}
+                  onClick={() => { setTpModo(o.id); setMostradas(POR_PAGINA) }}
+                  title={o.nota ?? 'Cierra la posición en cuanto sus unidades suman ese porcentaje del índice'}
+                >{o.label}</button>
+              ))}
+              {tpModo === 'pct' && (
+                <span className="filtro-pct-campo">
+                  <input
+                    className="pag-input filtro-pct"
+                    type="number" min={0.1} max={20} step={0.1}
+                    value={tpPct}
+                    onChange={e => { setTpPct(e.target.value); setMostradas(POR_PAGINA) }}
+                    title="Porcentaje del índice que recorre la posición antes de cerrarse"
+                  />
+                  % del índice
+                </span>
+              )}
+            </div>
+            <p className="estr-explica">
               {tpValor == null
                 ? OBJETIVOS[0].nota
-                : `cierra cuando la posición entera gana un ${tpValor.toLocaleString('es-ES')}% del índice`}
-            </span>
-          </label>
-          <div className="filtro-presets">
-            {OBJETIVOS.map(o => (
-              <button
-                key={o.id}
-                className={`chip ${tpModo === o.id ? 'activo' : ''}`}
-                onClick={() => { setTpModo(o.id); setMostradas(POR_PAGINA) }}
-                title={o.nota ?? 'Cierra la posición en cuanto sus unidades suman ese porcentaje del índice'}
-              >{o.label}</button>
-            ))}
-            {tpModo === 'pct' && (
-              <span className="filtro-pct-campo">
-                <input
-                  className="pag-input filtro-pct"
-                  type="number" min={0.1} max={20} step={0.1}
-                  value={tpPct}
-                  onChange={e => { setTpPct(e.target.value); setMostradas(POR_PAGINA) }}
-                  title="Porcentaje del índice que recorre la posición antes de cerrarse"
-                />
-                % del índice
-              </span>
-            )}
+                : `Cierra cuando la posición entera gana un ${tpValor.toLocaleString('es-ES')}% del índice`}
+            </p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Costes
-            <span className="filtro-valor">
+          <div className="filtro-group">
+            <label className="filtro-label">Costes</label>
+            <div className="filtro-presets">
+              {COSTES.map(c => (
+                <button
+                  key={c}
+                  className={`chip ${Number(coste) === c ? 'activo' : ''}`}
+                  onClick={() => { setCoste(c); setMostradas(POR_PAGINA) }}
+                  title={c === 0 ? 'Sin costes' : `${c} puntos por unidad en cada lado`}
+                >{c === 0 ? 'Sin costes' : `${c.toLocaleString('es-ES')} pts`}</button>
+              ))}
+              <input
+                key={coste}
+                className="pag-input filtro-pct"
+                type="number"
+                min={0}
+                max={50}
+                step={0.1}
+                defaultValue={coste}
+                title="Puntos de coste por unidad y lado"
+                onFocus={e => e.target.select()}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                onBlur={e => {
+                  const n = Number(e.target.value)
+                  if (!Number.isFinite(n) || n < 0) { e.target.value = coste; return }
+                  setCoste(n)
+                  setMostradas(POR_PAGINA)
+                }}
+              />
+            </div>
+            <p className="estr-explica">
               {Number(coste) > 0
                 ? `${Number(coste).toLocaleString('es-ES')} pts por unidad y lado, descontados al abrir y al cerrar`
-                : 'resultados en bruto, sin horquilla ni comisión'}
-            </span>
-          </label>
-          <div className="filtro-presets">
-            {COSTES.map(c => (
-              <button
-                key={c}
-                className={`chip ${Number(coste) === c ? 'activo' : ''}`}
-                onClick={() => { setCoste(c); setMostradas(POR_PAGINA) }}
-                title={c === 0 ? 'Sin costes' : `${c} puntos por unidad en cada lado`}
-              >{c === 0 ? 'Sin costes' : `${c.toLocaleString('es-ES')} pts`}</button>
-            ))}
-            <input
-              key={coste}
-              className="pag-input filtro-pct"
-              type="number"
-              min={0}
-              max={50}
-              step={0.1}
-              defaultValue={coste}
-              title="Puntos de coste por unidad y lado"
-              onFocus={e => e.target.select()}
-              onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-              onBlur={e => {
-                const n = Number(e.target.value)
-                if (!Number.isFinite(n) || n < 0) { e.target.value = coste; return }
-                setCoste(n)
-                setMostradas(POR_PAGINA)
-              }}
-            />
+                : 'Resultados en bruto, sin horquilla ni comisión'}
+            </p>
           </div>
-        </div>
-
-        {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
-          <label className="filtro-label">Periodo</label>
-          <div className="filtro-periodos">
-            {PERIODOS.map(p => (
-              <button
-                key={p.meses}
-                className={`periodo-chip ${meses === p.meses ? 'activo' : ''}`}
-                onClick={() => setMeses(p.meses)}
-              >{p.label}</button>
-            ))}
-          </div>
-        </div>}
-
-        {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
-          <label className="filtro-label">
-            Sesiones a analizar
-            <span className="filtro-valor">
-              las {cantidad} más recientes del periodo · una descarga por sesión
-            </span>
-          </label>
-          <div className="filtro-periodos">
-            {CANTIDADES.map(c => (
-              <button
-                key={c}
-                className={`periodo-chip ${cantidad === c ? 'activo' : ''}`}
-                onClick={() => setCantidad(c)}
-              >{c}</button>
-            ))}
-            {/* la `key` reinicia el campo cuando la cantidad cambia desde los botones */}
-            <input
-              key={cantidad}
-              className="pag-input"
-              type="number"
-              min={1}
-              max={2000}
-              defaultValue={cantidad}
-              title="Escribe cuántas sesiones quieres analizar y pulsa Enter"
-              onFocus={e => e.target.select()}
-              onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-              onBlur={e => {
-                const n = Math.round(Number(e.target.value))
-                if (!Number.isFinite(n) || n < 1) { e.target.value = cantidad; return }
-                setCantidad(Math.min(n, 2000))
-              }}
-            />
-          </div>
-        </div>}
-
-        <button className="btn-filtrar" onClick={analizar} disabled={cargando || dias.size === 0}>
-          {cargando ? 'Analizando…' : 'Analizar sesiones'}
-        </button>
-
-        {cargando && (
-          <div className="velas-cargando">
-            <span className="spinner" />
-            {progreso?.total
-              ? `Descargando velas… ${progreso.done}/${progreso.total}`
-              : 'Buscando sesiones…'}
-            <button className="btn-cancelar-velas" onClick={cancelar}>✕ Cancelar</button>
-          </div>
-        )}
-        {error && <div className="error-global">{error}</div>}
+        </Bloque>
       </div>
 
       {resultados.length === 0 && !cargando && (
         <div className="estr-vacio">
-          <p className="estr-vacio-tit">Elige los filtros y pulsa <strong>Analizar sesiones</strong></p>
-          <p className="estr-vacio-sub">{estr.nota}</p>
+          <p className="estr-vacio-tit">Elige qué analizar y pulsa <strong>Analizar sesiones</strong></p>
+          <p className="estr-vacio-sub">
+            {estr.nota.charAt(0).toUpperCase() + estr.nota.slice(1)}. Después, la operativa y qué sesiones cuentan se cambian al momento.
+          </p>
         </div>
       )}
 
       {resultados.length > 0 && (
         <div className="estr-resultados">
+          <AjustesPuestos base={baseAnalisis} ajustes={ajustesPuestos} onRestablecer={restablecer} />
+
+          {analizadas.length === 0 && (
+            <div className="filtro-vacio">
+              Ninguna sesión cumple lo marcado en «Qué sesiones cuentan».
+              <button className="pag-btn" onClick={() => { setVela1('todas'); setAperturaPos('todas'); setMostradas(POR_PAGINA) }}>
+                Contar todas
+              </button>
+            </div>
+          )}
+
           <Resumen r={resumen} />
 
           <CurvaEquity sesiones={sesionesCurva} />
@@ -1043,8 +1155,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             <label className="filtro-label">
               Gráficos
               <span className="filtro-valor">
-                {visibles.length} de {resultados.length}
+                {visibles.length} de {analizadas.length}
                 {filtros.size > 1 && ` · ${filtros.size} filtros a la vez`}
+                {' · '}solo cambia qué gráficos se ven, no las estadísticas de arriba
               </span>
             </label>
             <div className="filtro-presets">
@@ -1077,7 +1190,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                     velasGrafico={finas5m[s.date] ?? (finasEtiqueta === '5m' ? finas : descarga === 'm5' ? velas : null)}
                     etiquetaVela={estr.etiquetaVela}
                     sinTf={descarga === 'm5'}
-                    ticker={ticker} trades={tradesPara(s.date)}
+                    ticker={tickerVisto} trades={tradesPara(s.date)}
                     pantallaCompleta={aPantalla === s.date}
                     onPantallaCompleta={() => setAPantalla(prev => (prev === s.date ? null : s.date))}
                   />

@@ -6,6 +6,7 @@ import {
   metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, resumenPorGrupo, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
 } from './tortugas'
 import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
+import { Bloque, AjustesPuestos } from './AjustesEstrategia'
 import './Tortugas.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -241,11 +242,11 @@ function Chips({ opciones, valor, onCambio }) {
 
 // Campo numérico que solo aplica al salir o con Enter; la `key` lo reinicia cuando el valor
 // cambia desde los botones
-function Numero({ valor, onCambio, min, max, step = 1, titulo }) {
+function Numero({ valor, onCambio, min, max, step = 1, titulo, ancho = false }) {
   return (
     <input
       key={valor}
-      className="pag-input filtro-pct"
+      className={`pag-input filtro-pct ${ancho ? 'tortugas-numero-ancho' : ''}`}
       type="number" min={min} max={max} step={step} defaultValue={valor} title={titulo}
       onFocus={e => e.target.select()}
       onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
@@ -486,238 +487,295 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const conPosicion = new Set(ordenes.filter(f => f.posicion).map(f => f.indice))
   const nPorIndice = ordenes.filter((f, k) => ordenes.findIndex(x => x.indice === f.indice) === k && (!acciones || conPosicion.has(f.indice)))
 
+  // Los ajustes que no están en el valor con el que arranca este grupo de mercados, para la
+  // barra de encima de los resultados. Qué mercados entran no cuenta: va en el texto de al lado.
+  const iniciales = UNIVERSOS[universo].iniciales
+  const volver = campos => () => setAjustes(a => ({ ...a, ...Object.fromEntries(campos.map(c => [c, iniciales[c]])) }))
+  const ajustesPuestos = [
+    ajustes.lados !== iniciales.lados && { id: 'lados', texto: LADOS.find(l => l.v === ajustes.lados)?.label, quitar: volver(['lados']) },
+    ajustes.riesgo !== iniciales.riesgo && { id: 'riesgo', texto: `Riesgo ${nf(ajustes.riesgo, 2)} %`, quitar: volver(['riesgo']) },
+    ajustes.maxUnidades !== iniciales.maxUnidades && {
+      id: 'unidades', texto: ajustes.maxUnidades === 1 ? 'Sin pirámide' : `Pirámide de ${ajustes.maxUnidades} u`, quitar: volver(['maxUnidades']),
+    },
+    (ajustes.maxGrupo !== iniciales.maxGrupo || ajustes.maxSentido !== iniciales.maxSentido) && {
+      id: 'limites', texto: `Límites ${ajustes.maxGrupo} / ${ajustes.maxSentido}`, quitar: volver(['maxGrupo', 'maxSentido']),
+    },
+    ajustes.media !== iniciales.media && { id: 'media', texto: ajustes.media ? `A favor de la media ${ajustes.media}` : 'Sin media', quitar: volver(['media']) },
+    ajustes.reduccionDD !== iniciales.reduccionDD && {
+      id: 'dd', texto: ajustes.reduccionDD ? 'Reduce en drawdown' : 'Sin reducir en drawdown', quitar: volver(['reduccionDD']),
+    },
+    (ajustes.financiacion !== iniciales.financiacion || (ajustes.financiacion && ajustes.recargo !== iniciales.recargo)) && {
+      id: 'overnight', texto: ajustes.financiacion ? `Overnight tipo + ${nf(ajustes.recargo, 1)} %` : 'Sin coste overnight',
+      quitar: volver(['financiacion', 'recargo']),
+    },
+    ajustes.deslizN !== iniciales.deslizN && {
+      id: 'desliz', texto: ajustes.deslizN ? `Deslizamiento ${nf(ajustes.deslizN, 2)} N` : 'Sin deslizamiento', quitar: volver(['deslizN']),
+    },
+    acciones && ajustes.soloEnIndice !== iniciales.soloEnIndice && {
+      id: 'enIndice', texto: ajustes.soloEnIndice ? 'Solo desde que entró' : 'Con toda su historia', quitar: volver(['soloEnIndice']),
+    },
+    acciones && ajustes.comisiones !== iniciales.comisiones && {
+      id: 'comisiones', texto: ajustes.comisiones ? 'Comisión de IG' : 'Sin comisiones', quitar: volver(['comisiones']),
+    },
+    ajustes.desde !== iniciales.desde && { id: 'desde', texto: `Desde ${ajustes.desde}`, quitar: volver(['desde']) },
+    ajustes.capital !== iniciales.capital && { id: 'capital', texto: `Capital ${eur(ajustes.capital)}`, quitar: volver(['capital']) },
+  ].filter(Boolean)
+  const camposAjuste = ['lados', 'riesgo', 'maxUnidades', 'maxGrupo', 'maxSentido', 'media', 'reduccionDD', 'financiacion',
+    'recargo', 'deslizN', 'desde', 'capital', ...(acciones ? ['soloEnIndice', 'comisiones'] : [])]
+  const baseAjustes = `${futuros ? 'Mercados de las tortugas' : acciones ? 'Acciones del S&P 500' : 'Índices'} · ${nf(mercados.length)} ${
+    futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}`
+
   return (
     <div className="estrategia-panel tortugas">
       <div className="filtro-controls">
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Mercados
-            <span className="filtro-valor">
+        <Bloque n={1} titulo="Mercados" nota="Se bajan al pulsar el botón. Después, cada ajuste se recalcula al momento">
+          <div className="filtro-group">
+            <label className="filtro-label">Qué se prueba</label>
+            <div className="filtro-presets">
+              <Chips opciones={[
+                { v: 'indices', label: 'Índices', nota: 'Los ocho índices de contado' },
+                { v: 'acciones', label: 'Acciones de EE. UU.', nota: 'Las 503 del S&P 500, cada sector un grupo' },
+                { v: 'futuros', label: 'Mercados de las tortugas', nota: 'Los 19 futuros que operaban las tortugas en 1983: bonos, letras, divisas, S&P, metales, energía y blandas' },
+              ]} valor={universo} onCambio={cambiarUniverso} />
+            </div>
+            <p className="estr-explica">
               {futuros
-                ? 'los futuros que operaban las tortugas en 1983, con sus reglas; cada grupo de mercados guarda sus ajustes'
+                ? 'Los futuros que operaban las tortugas en 1983, con sus reglas. Cada grupo de mercados guarda sus ajustes'
                 : acciones
-                  ? 'cada acción con sus ajustes; los de los índices se guardan aparte'
-                  : 'los índices, las acciones del S&P 500 o los mercados de las tortugas, cada uno con sus ajustes'}
-            </span>
-          </label>
-          <div className="filtro-presets">
-            <Chips opciones={[
-              { v: 'indices', label: 'Índices', nota: 'Los ocho índices de contado' },
-              { v: 'acciones', label: 'Acciones de EE. UU.', nota: 'Las 503 del S&P 500, cada sector un grupo' },
-              { v: 'futuros', label: 'Mercados de las tortugas', nota: 'Los 19 futuros que operaban las tortugas en 1983: bonos, letras, divisas, S&P, metales, energía y blandas' },
-            ]} valor={universo} onCambio={cambiarUniverso} />
+                  ? 'Cada acción con sus ajustes; los de los índices se guardan aparte'
+                  : 'Los índices, las acciones del S&P 500 o los mercados de las tortugas, cada uno con sus ajustes'}
+            </p>
           </div>
-        </div>
 
-        {futuros && (
-          <div className="filtro-group">
-            <label className="filtro-label">
-              Futuros
-              <span className="filtro-valor">
+          {futuros && (
+            <div className="filtro-group">
+              <label className="filtro-label">
+                Futuros
+                {listaFuturos.length > 0 && <span className="filtro-valor">{nf(mercados.length)} de {nf(listaFuturos.length)}</span>}
+              </label>
+              <div className="filtro-presets">
+                {listaFuturos.map(x => (
+                  <button key={x.id} className={`chip ${ajustes.mercadosFuera.includes(x.id) ? '' : 'activo'}`}
+                    title={`${x.original} · ${x.simbolo} en Yahoo · grupo ${x.grupo}`}
+                    onClick={() => alternarMercado(x.id)}>{x.nombre}</button>
+                ))}
+              </div>
+              <p className="estr-explica">
                 {listaFuturos.length
-                  ? `${nf(mercados.length)} de ${nf(listaFuturos.length)} · sin grano ni carne, que Dennis ya operaba al límite`
-                  : 'bonos, letras, divisas, S&P 500, metales, energía y blandas: carga los datos para elegir'}
-              </span>
-            </label>
-            <div className="filtro-presets">
-              {listaFuturos.map(x => (
-                <button key={x.id} className={`chip ${ajustes.mercadosFuera.includes(x.id) ? '' : 'activo'}`}
-                  title={`${x.original} · ${x.simbolo} en Yahoo · grupo ${x.grupo}`}
-                  onClick={() => alternarMercado(x.id)}>{x.nombre}</button>
-              ))}
+                  ? 'Sin grano ni carne, que Dennis ya operaba al límite'
+                  : 'Bonos, letras, divisas, S&P 500, metales, energía y blandas: carga los datos para elegir'}
+              </p>
             </div>
-          </div>
-        )}
+          )}
 
-        {universo === 'indices' && (
-          <div className="filtro-group">
-            <label className="filtro-label">
-              Índices
-              <span className="filtro-valor">{ajustes.indices.length} de {INDICES_TORTUGAS.length} · la ventaja sale de diversificar</span>
-            </label>
-            <div className="filtro-presets">
-              {INDICES_TORTUGAS.map(i => (
-                <button key={i.id} className={`chip ${ajustes.indices.includes(i.id) ? 'activo' : ''}`}
-                  title={`${i.ticker} · grupo ${i.grupo} · datos desde ${i.desde.slice(0, 4)}`}
-                  onClick={() => alternarIndice(i.id)}>{i.nombre}</button>
-              ))}
+          {universo === 'indices' && (
+            <div className="filtro-group">
+              <label className="filtro-label">
+                Índices
+                <span className="filtro-valor">{ajustes.indices.length} de {INDICES_TORTUGAS.length}</span>
+              </label>
+              <div className="filtro-presets">
+                {INDICES_TORTUGAS.map(i => (
+                  <button key={i.id} className={`chip ${ajustes.indices.includes(i.id) ? 'activo' : ''}`}
+                    title={`${i.ticker} · grupo ${i.grupo} · datos desde ${i.desde.slice(0, 4)}`}
+                    onClick={() => alternarIndice(i.id)}>{i.nombre}</button>
+                ))}
+              </div>
+              <p className="estr-explica">La ventaja sale de diversificar</p>
             </div>
-          </div>
-        )}
+          )}
 
-        {acciones && (
-          <div className="filtro-group">
-            <label className="filtro-label">
-              Sectores
-              <span className="filtro-valor">
+          {acciones && (
+            <div className="filtro-group">
+              <label className="filtro-label">
+                Sectores
+                {lista.length > 0 && <span className="filtro-valor">{nf(mercados.length)} acciones de {nf(lista.length)}</span>}
+              </label>
+              <div className="filtro-presets">
+                {sectores.map(s => (
+                  <button key={s} className={`chip ${ajustes.sectoresFuera.includes(s) ? '' : 'activo'}`}
+                    title={`${lista.filter(a => a.sector === s).length} acciones`}
+                    onClick={() => alternarSector(s)}>{s}</button>
+                ))}
+              </div>
+              <p className="estr-explica">
                 {lista.length
-                  ? `${nf(mercados.length)} acciones de ${nf(lista.length)} · cada sector es un grupo para el límite de unidades`
-                  : 'las 503 acciones del S&P 500 por sector GICS: carga los datos para elegir'}
-              </span>
-            </label>
-            <div className="filtro-presets">
-              {sectores.map(s => (
-                <button key={s} className={`chip ${ajustes.sectoresFuera.includes(s) ? '' : 'activo'}`}
-                  title={`${lista.filter(a => a.sector === s).length} acciones`}
-                  onClick={() => alternarSector(s)}>{s}</button>
-              ))}
+                  ? 'Cada sector es un grupo para el límite de unidades'
+                  : 'Las 503 acciones del S&P 500 por sector GICS: carga los datos para elegir'}
+              </p>
             </div>
-          </div>
-        )}
+          )}
 
-        {acciones && (
+          {acciones && (
+            <div className="filtro-group">
+              <label className="filtro-label">Historia de cada acción</label>
+              <div className="filtro-presets">
+                <button className={`chip ${ajustes.soloEnIndice ? 'activo' : ''}`}
+                  title="No abre una acción antes de la fecha en que entró en el índice (según Wikipedia)"
+                  onClick={() => poner('soloEnIndice', !ajustes.soloEnIndice)}>Solo desde que entró en el índice</button>
+              </div>
+              <p className="estr-explica">
+                {ajustes.soloEnIndice
+                  ? 'Cada una solo desde que entró en el S&P 500: sin eso, el backtest compraría las ganadoras antes de que lo fueran'
+                  : 'Cada una con toda su historia: es la lista de hoy, así que se compran las que ya se sabe que acabarían en el índice'}
+              </p>
+            </div>
+          )}
+
+          {faltan.length > 0 && res && !cargando && (
+            <p className="estr-pendiente">Faltan los datos de {faltan.join(', ')}: pulsa el botón para incluirlos.</p>
+          )}
+          <button className="btn-filtrar" onClick={cargar} disabled={cargando}>
+            {cargando ? 'Descargando…' : res && !faltan.length ? 'Actualizar datos' : faltan.length && res ? 'Cargar lo que falta' : 'Cargar datos y probar'}
+          </button>
+          {cargando && progreso && (
+            <div className="velas-cargando">
+              <span className="spinner" />
+              {futuros
+                ? 'Futuros de las tortugas (Yahoo)…'
+                : acciones
+                  ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
+                  : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
+            </div>
+          )}
+          {error && <div className="error-global">{error}</div>}
+        </Bloque>
+
+        <Bloque n={2} titulo="Cómo se opera" nota="Se recalcula al momento">
+          <div className="filtro-group">
+            <label className="filtro-label">Lados</label>
+            <div className="filtro-presets"><Chips opciones={LADOS} valor={ajustes.lados} onCambio={v => poner('lados', v)} /></div>
+            <p className="estr-explica">{LADOS.find(l => l.v === ajustes.lados)?.nota}</p>
+          </div>
+
           <div className="filtro-group">
             <label className="filtro-label">
-              Acciones
+              Riesgo por N y unidad
               <span className="filtro-valor">
-                {ajustes.soloEnIndice
-                  ? 'cada una solo desde que entró en el S&P 500: sin eso, el backtest compraría las ganadoras antes de que lo fueran'
-                  : 'cada una con toda su historia: es la lista de hoy, así que se compran las que ya se sabe que acabarían en el índice'}
-                {' · '}
-                {ajustes.comisiones
-                  ? `comisión de IG: ${nf(100 * COMISION_ACCIONES_EEUU.porAccion)} centavos por acción, ${nf(COMISION_ACCIONES_EEUU.minimo)} $ como mínimo por orden (cada unidad es una al entrar y otra al salir)`
-                  : 'sin comisiones'}
+                {nf(ajustes.riesgo, 2)} % por unidad · {nf(ajustes.riesgo * peor.unidades, 1)} % con {peor.unidades} unidades
               </span>
             </label>
             <div className="filtro-presets">
-              <button className={`chip ${ajustes.soloEnIndice ? 'activo' : ''}`}
-                title="No abre una acción antes de la fecha en que entró en el índice (según Wikipedia)"
-                onClick={() => poner('soloEnIndice', !ajustes.soloEnIndice)}>Solo desde que entró en el índice</button>
-              <button className={`chip ${ajustes.comisiones ? 'activo' : ''}`}
-                title="CFD de acciones de EE. UU. en IG: 0,02 $ por acción y 15 $ como mínimo por orden"
-                onClick={() => poner('comisiones', !ajustes.comisiones)}>Comisión de IG</button>
+              <Chips opciones={(acciones ? RIESGOS_ACCIONES : RIESGOS).map(r => ({ v: r, label: `${nf(r, r < 0.1 ? 2 : 1)} %`, nota: r === 1 ? 'El de las tortugas, pensado para futuros poco correlacionados' : undefined }))}
+                valor={ajustes.riesgo} onCambio={v => poner('riesgo', v)} />
+              <Numero valor={ajustes.riesgo} min={0.01} max={5} step={0.05} titulo="% del capital por N y unidad" onCambio={v => poner('riesgo', v)} />
             </div>
-          </div>
-        )}
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Lados
-            <span className="filtro-valor">{LADOS.find(l => l.v === ajustes.lados)?.nota}</span>
-          </label>
-          <div className="filtro-presets"><Chips opciones={LADOS} valor={ajustes.lados} onCambio={v => poner('lados', v)} /></div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Riesgo por N y unidad
-            <span className="filtro-valor">
+            <p className="estr-explica">
               1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad ({nf(ajustes.riesgo * peor.unidades, 1)} % con las {peor.unidades} unidades que caben a la vez{ajustes.lados === 'ambos' ? ' en cada sentido' : ''}).
               Hasta el stop, a {nf(CONFIG_TORTUGAS.stopN)} N, una unidad recién entrada pierde {nf(ajustes.riesgo * CONFIG_TORTUGAS.stopN, 2)} %;
               como el stop sube con cada añadido, lo peor si saltan a la vez todos los stops{ajustes.lados === 'ambos' ? ' de un sentido' : ''} es un {nf(ajustes.riesgo * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
-            </span>
-          </label>
-          <div className="filtro-presets">
-            <Chips opciones={(acciones ? RIESGOS_ACCIONES : RIESGOS).map(r => ({ v: r, label: `${nf(r, r < 0.1 ? 2 : 1)} %`, nota: r === 1 ? 'El de las tortugas, pensado para futuros poco correlacionados' : undefined }))}
-              valor={ajustes.riesgo} onCambio={v => poner('riesgo', v)} />
-            <Numero valor={ajustes.riesgo} min={0.01} max={5} step={0.05} titulo="% del capital por N y unidad" onCambio={v => poner('riesgo', v)} />
+            </p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Pirámide
-            <span className="filtro-valor">
-              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : futuros ? 'mercado' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
-            </span>
-          </label>
-          <div className="filtro-presets">
-            <Chips opciones={UNIDADES.map(u => ({ v: u, label: u === 1 ? 'Sin pirámide' : `${u} u`, nota: u === 4 ? 'Como las tortugas' : u === 7 ? 'Entrada + 6 añadidos' : undefined }))}
-              valor={ajustes.maxUnidades} onCambio={v => poner('maxUnidades', v)} />
-            <Numero valor={ajustes.maxUnidades} min={1} max={12} titulo="Unidades máximas por índice" onCambio={v => poner('maxUnidades', Math.round(v))} />
+          <div className="filtro-group">
+            <label className="filtro-label">Pirámide</label>
+            <div className="filtro-presets">
+              <Chips opciones={UNIDADES.map(u => ({ v: u, label: u === 1 ? 'Sin pirámide' : `${u} u`, nota: u === 4 ? 'Como las tortugas' : u === 7 ? 'Entrada + 6 añadidos' : undefined }))}
+                valor={ajustes.maxUnidades} onCambio={v => poner('maxUnidades', v)} />
+              <Numero valor={ajustes.maxUnidades} min={1} max={12} titulo="Unidades máximas por índice" onCambio={v => poner('maxUnidades', Math.round(v))} />
+            </div>
+            <p className="estr-explica">
+              Hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : futuros ? 'mercado' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
+            </p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Límites de cartera
-            <span className="filtro-valor">
+          <div className="filtro-group">
+            <label className="filtro-label">Límites de cartera</label>
+            <div className="filtro-presets tortugas-limites">
+              <span>grupo</span>
+              <Numero valor={ajustes.maxGrupo} min={1} max={acciones ? 300 : 60} titulo={`Unidades máximas por ${acciones ? 'sector' : 'grupo'} y sentido`} onCambio={v => poner('maxGrupo', Math.round(v))} />
+              <span>sentido</span>
+              <Numero valor={ajustes.maxSentido} min={1} max={acciones ? 1000 : 100} titulo="Unidades máximas por sentido" onCambio={v => poner('maxSentido', Math.round(v))} />
+            </div>
+            <p className="estr-explica">
               {acciones
-                ? 'unidades por sector y por sentido en total: con cientos de acciones, si se llenan con rupturas de una unidad, la pirámide no crece'
+                ? 'Unidades por sector y por sentido en total: con cientos de acciones, si se llenan con rupturas de una unidad, la pirámide no crece'
                 : futuros
-                  ? 'unidades por grupo (tipos, divisas, índices, metales, energía, blandas) y por sentido en total: las tortugas, 6 y 12'
-                  : 'unidades por grupo (EE. UU., Europa, Asia) y por sentido en total'}
-            </span>
-          </label>
-          <div className="filtro-presets tortugas-limites">
-            <span>grupo</span>
-            <Numero valor={ajustes.maxGrupo} min={1} max={acciones ? 300 : 60} titulo={`Unidades máximas por ${acciones ? 'sector' : 'grupo'} y sentido`} onCambio={v => poner('maxGrupo', Math.round(v))} />
-            <span>sentido</span>
-            <Numero valor={ajustes.maxSentido} min={1} max={acciones ? 1000 : 100} titulo="Unidades máximas por sentido" onCambio={v => poner('maxSentido', Math.round(v))} />
+                  ? 'Unidades por grupo (tipos, divisas, índices, metales, energía, blandas) y por sentido en total: las tortugas, 6 y 12'
+                  : 'Unidades por grupo (EE. UU., Europa, Asia) y por sentido en total'}
+            </p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Overnight
-            <span className="filtro-valor">
+          <div className="filtro-group">
+            <label className="filtro-label">Reglas extra</label>
+            <div className="filtro-presets">
+              <Chips opciones={[{ v: 0, label: 'Sin media' }, { v: 200, label: 'A favor de la media 200', nota: 'Largos solo por encima de la media de 200 sesiones; cortos, por debajo' }]}
+                valor={ajustes.media} onCambio={v => poner('media', v)} />
+              <button className={`chip ${ajustes.reduccionDD ? 'activo' : ''}`}
+                title="Por cada 10 % de caída desde el máximo, opera con un capital nominal un 20 % menor (regla de las tortugas)"
+                onClick={() => poner('reduccionDD', !ajustes.reduccionDD)}>Reducir en drawdown</button>
+            </div>
+            <p className="estr-explica">
+              {ajustes.media ? 'Largos solo por encima de la media de 200 sesiones; cortos, por debajo' : 'Entra en cualquier ruptura, sin mirar la tendencia'}
+              {ajustes.reduccionDD ? '. Por cada 10 % de caída desde el máximo, el capital nominal baja un 20 %' : ''}
+            </p>
+          </div>
+        </Bloque>
+
+        <Bloque n={3} titulo="Costes, periodo y capital" nota="Se recalcula al momento">
+          <div className="filtro-group">
+            <label className="filtro-label">Overnight</label>
+            <div className="filtro-presets">
+              <button className={`chip ${!ajustes.financiacion ? 'activo' : ''}`} onClick={() => poner('financiacion', false)}>Sin coste</button>
+              {RECARGOS.map(r => (
+                <button key={r} className={`chip ${ajustes.financiacion && ajustes.recargo === r ? 'activo' : ''}`}
+                  title={r === 2.5 ? 'El recargo de IG en índices' : undefined}
+                  onClick={() => setAjustes(a => ({ ...a, financiacion: true, recargo: r }))}>tipo + {nf(r, 1)} %</button>
+              ))}
+            </div>
+            <p className="estr-explica">
               {ajustes.financiacion
                 ? acciones
-                  ? `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % (el viernes, 3 noches) y cobra los dividendos el día que la acción cotiza sin ellos; el corto, al revés`
-                  : `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % menos el dividendo (el viernes, 3 noches)`
+                  ? `Cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % (el viernes, 3 noches) y cobra los dividendos el día que la acción cotiza sin ellos; el corto, al revés`
+                  : `Cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % menos el dividendo (el viernes, 3 noches)`
                 : futuros
-                  ? 'futuros: lo que cuesta mantenerlos ya va en el precio al empalmar cada contrato con el siguiente (las divisas van al contado, sin el diferencial de tipos)'
-                  : 'sin coste por dormir con la posición: lo que se ganaría con un futuro sin base'}
-            </span>
-          </label>
-          <div className="filtro-presets">
-            <button className={`chip ${!ajustes.financiacion ? 'activo' : ''}`} onClick={() => poner('financiacion', false)}>Sin coste</button>
-            {RECARGOS.map(r => (
-              <button key={r} className={`chip ${ajustes.financiacion && ajustes.recargo === r ? 'activo' : ''}`}
-                title={r === 2.5 ? 'El recargo de IG en índices' : undefined}
-                onClick={() => setAjustes(a => ({ ...a, financiacion: true, recargo: r }))}>tipo + {nf(r, 1)} %</button>
-            ))}
+                  ? 'Futuros: lo que cuesta mantenerlos ya va en el precio al empalmar cada contrato con el siguiente (las divisas van al contado, sin el diferencial de tipos)'
+                  : 'Sin coste por dormir con la posición: lo que se ganaría con un futuro sin base'}
+            </p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Deslizamiento
-            <span className="filtro-valor">en cada relleno, además de medio spread; los huecos de la noche se llenan a la apertura</span>
-          </label>
-          <div className="filtro-presets">
-            <Chips opciones={DESLICES.map(d => ({ v: d, label: d === 0 ? 'Ninguno' : `${nf(d, 2)} N` }))} valor={ajustes.deslizN} onCambio={v => poner('deslizN', v)} />
+          <div className="filtro-group">
+            <label className="filtro-label">Deslizamiento</label>
+            <div className="filtro-presets">
+              <Chips opciones={DESLICES.map(d => ({ v: d, label: d === 0 ? 'Ninguno' : `${nf(d, 2)} N` }))} valor={ajustes.deslizN} onCambio={v => poner('deslizN', v)} />
+            </div>
+            <p className="estr-explica">En cada relleno, además de medio spread; los huecos de la noche se llenan a la apertura</p>
           </div>
-        </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">Filtros</label>
-          <div className="filtro-presets">
-            <Chips opciones={[{ v: 0, label: 'Sin media' }, { v: 200, label: 'A favor de la media 200', nota: 'Largos solo por encima de la media de 200 sesiones; cortos, por debajo' }]}
-              valor={ajustes.media} onCambio={v => poner('media', v)} />
-            <button className={`chip ${ajustes.reduccionDD ? 'activo' : ''}`}
-              title="Por cada 10 % de caída desde el máximo, opera con un capital nominal un 20 % menor (regla de las tortugas)"
-              onClick={() => poner('reduccionDD', !ajustes.reduccionDD)}>Reducir en drawdown</button>
-          </div>
-        </div>
+          {acciones && (
+            <div className="filtro-group">
+              <label className="filtro-label">Comisiones</label>
+              <div className="filtro-presets">
+                <button className={`chip ${ajustes.comisiones ? 'activo' : ''}`}
+                  title="CFD de acciones de EE. UU. en IG: 0,02 $ por acción y 15 $ como mínimo por orden"
+                  onClick={() => poner('comisiones', !ajustes.comisiones)}>Comisión de IG</button>
+              </div>
+              <p className="estr-explica">
+                {ajustes.comisiones
+                  ? `${nf(100 * COMISION_ACCIONES_EEUU.porAccion)} centavos por acción, ${nf(COMISION_ACCIONES_EEUU.minimo)} $ como mínimo por orden (cada unidad es una al entrar y otra al salir)`
+                  : 'Sin comisiones'}
+              </p>
+            </div>
+          )}
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Periodo y capital
-            <span className="filtro-valor">el capital da el tamaño de las órdenes de mañana</span>
-          </label>
-          <div className="filtro-presets">
-            <select className="filtro-otros" value={ajustes.desde} onChange={e => poner('desde', Number(e.target.value))}>
-              {ANIOS.map(a => <option key={a} value={a}>desde {a}</option>)}
-            </select>
-            <Numero valor={ajustes.capital} min={1000} max={100_000_000} step={1000} titulo="Capital en €" onCambio={v => poner('capital', v)} />
+          <div className="filtro-group">
+            <label className="filtro-label">Desde</label>
+            <div className="filtro-presets">
+              <select className="filtro-otros" value={ajustes.desde} onChange={e => poner('desde', Number(e.target.value))}>
+                {ANIOS.map(a => <option key={a} value={a}>desde {a}</option>)}
+              </select>
+            </div>
           </div>
-        </div>
 
-        <button className="btn-filtrar" onClick={cargar} disabled={cargando}>
-          {cargando ? 'Descargando…' : res && !faltan.length ? 'Actualizar datos' : 'Cargar datos y probar'}
-        </button>
-        {cargando && progreso && (
-          <div className="velas-cargando">
-            <span className="spinner" />
-            {futuros
-              ? 'Futuros de las tortugas (Yahoo)…'
-              : acciones
-                ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
-                : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
+          <div className="filtro-group">
+            <label className="filtro-label">Capital</label>
+            <div className="filtro-presets">
+              <Numero valor={ajustes.capital} min={1000} max={100_000_000} step={1000} titulo="Capital en €" ancho onCambio={v => poner('capital', v)} />
+              <span className="estr-explica">€</span>
+            </div>
+            <p className="estr-explica">Da el tamaño de las órdenes de mañana</p>
           </div>
-        )}
-        {error && <div className="error-global">{error}</div>}
+        </Bloque>
       </div>
 
       {!res && !cargando && (
@@ -739,9 +797,10 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
       {res && m && (
         <div className="estr-resultados">
+          <AjustesPuestos base={baseAjustes} ajustes={ajustesPuestos} onRestablecer={volver(camposAjuste)} />
           {faltan.length > 0 && (
             <p className="estr-nota tortugas-aviso">
-              Faltan los datos de {faltan.join(', ')}: pulsa <strong>Cargar datos y probar</strong> para incluirlos.
+              Faltan los datos de {faltan.join(', ')}: pulsa <strong>Cargar lo que falta</strong> para incluirlos.
             </p>
           )}
           <Resumen m={m} res={res} />

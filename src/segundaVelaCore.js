@@ -81,6 +81,9 @@ export const fmtPts = v =>
 // otra vela de otro tamaño en otro tramo del día — es lo que usa la Rule of 4, que coge la
 // cuarta vela de 10 min desde que sale la noticia del FOMC.
 // `modo` 'corto' es el espejo de 'largo': solo vende por debajo de la vela del bracket.
+// `flip` da la vuelta al saltar el stop sin cambiar por dónde se entra: con 'corto' se vende
+// bajo la vela y, si salta el stop en su máximo, se compra ahí con el stop en su mínimo. El
+// modo 'flip' es lo mismo entrando por los dos lados.
 // `colorBracket` ('alcista' o 'bajista') solo deja operar los días en que la vela del bracket
 // cierra de ese color; los demás cuentan como sesiones sin entrada.
 // `piramideN` ({ pasoN, stopN, velasN }) cambia la pirámide por la de las tortugas: una unidad
@@ -89,7 +92,7 @@ export const fmtPts = v =>
 // incluida; si las velas de la sesión no llegan, se completan con `velasPrevias` (la cola de
 // la sesión anterior, para el CSV, que no tiene nada antes de la apertura). Con menos se mide
 // con las que haya, siempre que sean al menos `minVelasN`.
-export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, velasPrevias = null }) {
+export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, velasPrevias = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -203,7 +206,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
     piernas.push(p)
     // con el stop a media vela el nivel donde salta ya no es la entrada del lado contrario,
     // así que darle la vuelta ahí sería entrar a un precio que el mercado no está tocando
-    if (modo !== 'flip' || stopPct !== 1) break
+    if (!flip || stopPct !== 1) break
     if (p.salida.motivo !== 'bracket' || piernas.length >= MAX_PIERNAS) break
     if (p.iSalida >= resto.length - 1) break   // la vuelta caería ya fuera de la sesión
     desde      = p.iSalida

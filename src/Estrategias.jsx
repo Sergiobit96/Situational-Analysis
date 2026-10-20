@@ -57,7 +57,8 @@ const ESTRATEGIAS = [
                  'por encima de él (solo si así se aprieta). N es el rango verdadero medio de las últimas 20 ' +
                  'velas de 5 min al cerrar la primera, ella incluida: con el feed, las de antes de la apertura ' +
                  '(o las que haya, si son al menos 10); con el CSV del DAX, las últimas de la sesión anterior. Como mucho un añadido por vela de 5 min ' +
-                 'y hasta 6 unidades; lo que siga abierto se cierra con la sesión.',
+                 'y hasta 6 unidades; lo que siga abierto se cierra con la sesión. Con flip, si salta el stop en el ' +
+                 'máximo de la vela se compra ahí mismo, con el stop en su mínimo y la misma pirámide hacia arriba.',
     Componente:  EstrategiaSegundaVela,
   },
   {

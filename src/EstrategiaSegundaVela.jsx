@@ -97,6 +97,18 @@ const MODOS = [
   { id: 'flip',  label: 'Con flip',         nota: 'al saltar el stop se da la vuelta a la posición' },
 ]
 
+// Las estrategias con el lado fijo (First bar negative) entran siempre por el suyo, así que
+// sus chips solo deciden si se da la vuelta. 'ambos' es el valor sin vuelta del estado.
+const modosLado = lado => [
+  { id: 'ambos', label: lado === 'corto' ? 'Solo cortos' : 'Solo largos', nota: lado === 'corto' ? 'solo se vende bajo la vela' : 'solo se compra sobre la vela' },
+  {
+    id: 'flip', label: 'Con flip',
+    nota: lado === 'corto'
+      ? 'si salta el stop, compra por encima de la vela con el stop al otro lado'
+      : 'si salta el stop, vende por debajo de la vela con el stop al otro lado',
+  },
+]
+
 // Dónde se pone el stop. Al otro extremo, 1R es el rango entero de la vela; a la mitad se
 // arriesga la mitad, así que la R se hace pequeña y con ella el disparador del break even y
 // el paso de la pirámide.
@@ -220,14 +232,16 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // el objetivo solo cuenta cuando está activado y el porcentaje es un número utilizable
   const tpValor = tpModo === 'pct' && Number(tpPct) > 0 ? Number(tpPct) : null
   const volumenes = estr.tortuga ? VOLUMENES_TORTUGA : VOLUMENES
+  const modos = estr.lado ? modosLado(estr.lado) : MODOS
 
   // Todo lo que define la operativa, en un solo sitio: lo usan las tres descargas, el
   // afinado de las dudosas y el recálculo al tocar un filtro. Lo que la estrategia trae fijo
   // (el lado, el color de la vela, la pirámide de tortugas) manda sobre los chips, que ni
-  // se enseñan.
+  // se enseñan; del de operativa solo queda si se da la vuelta.
   const opcionesMotor = {
     ticker,
     modo: estr.lado ?? modoEfectivo,
+    flip: modoEfectivo === 'flip',
     colorBracket: estr.colorBracket ?? null,
     beR: STOPS.find(x => x.id === stopModo)?.beR ?? null,
     piramide: volumenes.find(v => v.id === volumen)?.piramide ?? 0,
@@ -780,13 +794,13 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           </div>
         </div>
 
-        {!estr.lado && <div className="filtro-group">
+        <div className="filtro-group">
           <label className="filtro-label">
             Operativa
-            <span className="filtro-valor">{MODOS.find(m => m.id === modoEfectivo)?.nota}</span>
+            <span className="filtro-valor">{modos.find(m => m.id === modoEfectivo)?.nota}</span>
           </label>
           <div className="filtro-presets">
-            {MODOS.map(m => {
+            {modos.map(m => {
               const sinFlip = m.id in SIN_FLIP && stopPct !== 1
               return (
                 <button
@@ -799,7 +813,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               )
             })}
           </div>
-        </div>}
+        </div>
 
         <div className="filtro-group">
           <label className="filtro-label">

@@ -278,6 +278,39 @@ test('First bar negative solo vende, y solo si la primera vela cierra en negativ
   assert.equal(negra.entrada.time, T0 + 600)
 })
 
+test('First bar negative con flip compra en el máximo de la vela cuando salta el stop', () => {
+  const sesion = sigue => [...PREVIAS_5M, ...velas5De(
+    PRIMERA_NEGRA,
+    [88, 112, 88, 100],       // rompe por arriba: tampoco con flip se entra en largo de primeras
+    [100, 101, 86, 86.5],     // vende en 87
+    [86.5, 111, 86, 110.5],   // salta el stop en 110 → compra ahí, con el stop en 87
+    sigue,
+  )]
+  const opc = { ...OPC_FBN, piramideN: null }
+
+  const a = analizarSesion({ ...opc, flip: true, velas: sesion([110.5, 120, 110, 119]) })
+  assert.equal(a.lado, 'corto')
+  assert.equal(a.entrada.precio, 87)
+  assert.equal(a.salida.motivo, 'bracket')
+  assert.equal(a.salida.precio, 110)
+  assert.equal(a.piernas.length, 1)
+  assert.equal(a.piernas[0].lado, 'largo')
+  assert.equal(a.piernas[0].entrada.precio, 110)
+  assert.equal(a.piernas[0].salida.motivo, 'cierre')
+  assert.equal(a.resultadoTotalPts, (87 - 110) + (119 - 110))
+
+  // el largo salta en el mínimo de la vela, y ahí se acaba: no hay segunda vuelta
+  const b = analizarSesion({ ...opc, flip: true, velas: sesion([110.5, 112, 86, 86.5]) })
+  assert.equal(b.piernas.length, 1)
+  assert.equal(b.piernas[0].salida.motivo, 'bracket')
+  assert.equal(b.piernas[0].salida.precio, 87)
+
+  // sin flip, la misma sesión es solo la venta parada
+  const c = analizarSesion({ ...opc, velas: sesion([110.5, 120, 110, 119]) })
+  assert.equal(c.piernas.length, 0)
+  assert.equal(c.resultadoTotalPts, 87 - 110)
+})
+
 test('N es el rango verdadero medio de 20 velas de 5 min, la primera incluida', () => {
   const sesion = velas5De(PRIMERA_NEGRA, [88, 89, 86, 86.5])
   const conFeed = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M, ...sesion] })

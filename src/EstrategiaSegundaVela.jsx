@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GraficoVelas from './GraficoVelas'
 import CurvaEquity from './CurvaEquity.jsx'
+import { curvaEquity } from './equity'
 import { INSTRUMENTOS, intradayUrl } from './intradayApi'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
@@ -604,11 +605,23 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       .filter(r => r.analisis.valido)
       .sort((a, b) => a.sesion.date.localeCompare(b.sesion.date))
     if (val.length < 40) return null   // con menos, partir por la mitad no dice nada
-    const trozo = lista => ({
-      desde: lista[0].sesion.date,
-      hasta: lista[lista.length - 1].sesion.date,
-      r: resumir(lista.map(x => x.analisis)),
-    })
+    const trozo = lista => {
+      const r = resumir(lista.map(x => x.analisis))
+      // la curva de cada mitad arranca en cero, con los mismos puntos que la de arriba
+      const ops = lista
+        .filter(x => x.analisis.entrada)
+        .map(x => ({ date: x.sesion.date, pts: x.analisis.resultadoTotalPts ?? x.analisis.resultadoPts }))
+      const nGanan  = ops.filter(o => o.pts > 0).length
+      const nPierden = ops.filter(o => o.pts < 0).length
+      return {
+        desde: lista[0].sesion.date,
+        hasta: lista[lista.length - 1].sesion.date,
+        r,
+        curva: curvaEquity(ops),
+        ganadoraMed:  nGanan   ? r.ganadoPts / nGanan     : null,
+        perdedoraMed: nPierden ? -r.perdidoPts / nPierden : null,
+      }
+    }
     const corte = Math.floor(val.length / 2)
     return { primera: trozo(val.slice(0, corte)), segunda: trozo(val.slice(corte)) }
   }, [analizadas])
@@ -1216,12 +1229,24 @@ function Mitades({ mitades }) {
           {fila('Resultado medio', m => fmtPtsSgn(m.r.resultadoMedPts))}
           {fila('Profit factor',  m => (m.r.nOps === 0 ? '—' : m.r.profitFactor == null ? '∞' : m.r.profitFactor.toFixed(2)))}
           {fila('Ganadoras',      m => fmtPct(m.r.pctGanadas))}
+          {fila('Ganadora media',  m => fmtPtsSgn(m.ganadoraMed))}
+          {fila('Perdedora media', m => fmtPtsSgn(m.perdedoraMed))}
+          {fila('Máximo drawdown', m => fmtPtsSgn(m.curva.maxDD))}
+          {fila('Acumulado / drawdown', m => (m.curva.maxDD < 0 ? (m.curva.total / -m.curva.maxDD).toFixed(2) : '—'))}
+          {fila('Peor DD, del pico al fondo', m => (m.curva.peorDD.sesiones ? `${m.curva.peorDD.sesiones} sesiones` : '—'))}
+          {fila('Drawdown al final', m => (m.curva.ddActual === 0 ? 'en máximos' : fmtPtsSgn(m.curva.ddActual)))}
+          {fila('Mejor sesión',    m => fmtPtsSgn(m.curva.mejor?.pts))}
+          {fila('Peor sesión',     m => fmtPtsSgn(m.curva.peor?.pts))}
+          {fila('Sin la mejor sesión', m => (m.curva.mejor ? fmtPtsSgn(m.curva.total - m.curva.mejor.pts) : '—'))}
+          {fila('Racha perdedora', m => `${m.curva.peorRachaP} seguidas`)}
         </tbody>
       </table>
       <p className="estr-nota">
         <strong>{veredicto()}</strong> Las sesiones filtradas se parten por la mitad en el
         tiempo y cada trozo se mide por separado. Si cambias un filtro y el total mejora pero
         una de las dos mitades se hunde, lo que has encontrado es una casualidad de ese tramo.
+        El drawdown de cada mitad se cuenta desde cero, dentro de su propio tramo. Cuando
+        ganan pocas, mira el acumulado sin la mejor sesión: si se va a cero, todo dependía de un día.
       </p>
     </div>
   )

@@ -259,6 +259,19 @@ test('los precios que IG da en centavos se pasan a dólares', async () => {
   assert.equal(escalar(v, epics['^GDAXI'].escala), v)   // los índices van tal cual
 })
 
+test('las velas grabadas de antes del arranque van delante del directo, sin repetirse y sin avisar', async () => {
+  const { sembrarVelas, registrarVela: registrar, escuchar } = await import('../server/tiempo-real.js')
+  const v = (time, close) => ({ time, open: 1, high: 9, low: 0, close })
+  const avisos = []
+  const dejar = escuchar('ig', 'SEMBRADO', x => avisos.push(x))
+  registrar('ig', 'SEMBRADO', v(300, 3))                                  // llega el directo nuevo
+  sembrarVelas('ig', 'SEMBRADO', [v(240, 2.5), v(120, 1), v(180, 2), v(300, 99)])
+  sembrarVelas('ig', 'SEMBRADO', [v(120, 1), v(180, 2)])                  // otra vez: no se repiten
+  assert.deepEqual(ultimasVelas('ig', 'SEMBRADO', 10).map(x => x.close), [1, 2, 2.5, 3])
+  assert.equal(avisos.length, 1)                                          // solo la del directo
+  dejar()
+})
+
 test('escribir a un gráfico que ya se cerró no tumba el servidor', async () => {
   const { suscribir, registrarVela: registrar } = await import('../server/tiempo-real.js')
   const escritos = []

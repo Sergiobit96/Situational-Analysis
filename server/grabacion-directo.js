@@ -226,6 +226,13 @@ export function crearGrabacion({ dir, tickers, activo, ahora = Date.now, log = c
     velas,
     m1Entre,
 
+    // Los mercados que tienen algo grabado (una carpeta por mercado)
+    mercados() {
+      try {
+        return readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => decodeURIComponent(e.name))
+      } catch { return [] }
+    },
+
     // Los ratos grabados de un mercado; el que sigue en marcha, abierto hasta el infinito
     cubiertos(ticker) {
       const lista = tramos(ticker).map(([a, b]) => [a, b])

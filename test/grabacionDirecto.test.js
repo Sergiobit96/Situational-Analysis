@@ -135,6 +135,16 @@ test('los tramos se recortan a velas enteras', () => {
   assert.equal(cuboDesde(cambio, 1440), Date.UTC(2026, 9, 25, 23) / 1000)
 })
 
+test('dice qué mercados tienen algo grabado', () => {
+  const { g, dir } = grabacionDePrueba()
+  try {
+    assert.deepEqual(g.mercados(), [])
+    g.anotar('^GDAXI', vela(T0, 101))
+    g.anotar('^GDAXI', vela(T0 + 60, 102))
+    assert.deepEqual(g.mercados(), ['^GDAXI'])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('el CSV grabado se lee sin las líneas rotas', () => {
   assert.deepEqual(parsearCsvGrabado('60,1,2,0.5,1.5\nbasura\n120,1,1,1\n60,1,3,0.5,2\n'), [{ time: 60, open: 1, high: 3, low: 0.5, close: 2 }])
 })

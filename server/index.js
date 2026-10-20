@@ -12,7 +12,7 @@ import { crearIG, IG_RESOLUCION, epicDeMercadoIg, intervalosPendientes } from '.
 import { crearGrabacion, inicioCubo, tramosEnteros } from './grabacion-directo.js'
 import { crearMt5, simbolosDeEnv } from './mt5.js'
 import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
-import { suscribir, resumenTiempoReal, escucharFuente } from './tiempo-real.js'
+import { suscribir, resumenTiempoReal, escucharFuente, sembrarVelas } from './tiempo-real.js'
 import { crearBot, RULE_OF_4 } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
@@ -2807,6 +2807,11 @@ const grabacion = ig && process.env.DIRECTO_GRABAR !== '0'
     })
   : null
 if (grabacion) {
+  // El directo en memoria (el de los bots y los gráficos de sus sesiones) se pierde en cada
+  // reinicio: se rellena con los tres últimos días grabados, antes de escuchar el directo
+  // nuevo para no volver a escribirlos
+  const arranque = Math.floor(Date.now() / 1000)
+  for (const ticker of grabacion.mercados()) sembrarVelas('ig', ticker, grabacion.m1Entre(ticker, arranque - 3 * 86400, arranque + 60))
   escucharFuente('ig', (ticker, vela) => { if (!epicDeMercadoIg(ticker)) grabacion.anotar(ticker, vela) })
   grabacion.iniciar()
 }

@@ -45,6 +45,19 @@ export function registrarVela(fuente, ticker, vela) {
   }
 }
 
+// Velas de antes de arrancar el servidor (las grabadas a disco): van delante de las que ya
+// haya, sin avisar a nadie, porque no son nuevas. Sin ellas, tras un reinicio el bot y sus
+// gráficos se quedaban sin lo de la sesión en curso anterior al arranque.
+export function sembrarVelas(fuente, ticker, previas) {
+  const clave = `${fuente}|${ticker}`
+  let s = series.get(clave)
+  if (!s) series.set(clave, s = { velas: [], actualizado: 0 })
+  const primera = s.velas[0]?.time ?? Infinity
+  const antes = previas.filter(v => Number.isFinite(v?.time) && v.time < primera).sort((a, b) => a.time - b.time)
+  s.velas.unshift(...antes)
+  if (s.velas.length > MAX_VELAS) s.velas.splice(0, s.velas.length - MAX_VELAS)
+}
+
 export function ultimasVelas(fuente, ticker, n = AL_CONECTAR) {
   return series.get(`${fuente}|${ticker}`)?.velas.slice(-n) ?? []
 }

@@ -31,13 +31,13 @@ const VERSION = 2                      // la de lo guardado en disco: otra oblig
 export const simboloYahoo = ticker => ticker.replace(/\./g, '-')
 const masDias = (fecha, n) => new Date(Date.parse(`${fecha}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
 
-// El último cierre de Nueva York (16:30, un día entre semana) antes de `t`: una serie bajada
-// antes de él ya no está al día
-export function ultimoCierre(t) {
+// El último cierre (a las 16:30 de Nueva York, un día entre semana; `cierreMin` y `zona` lo
+// cambian) antes de `t`: una serie bajada antes de él ya no está al día
+export function ultimoCierre(t, cierreMin = CIERRE_MIN, zona = ZONA) {
   for (let d = 0; d < 8; d++) {
-    const fecha = masDias(fechaEnZona(t, ZONA), -d)
-    const cierre = instanteEnZona(fecha, CIERRE_MIN, ZONA)
-    if (cierre <= t && ![0, 6].includes(diaSemanaEnZona(cierre, ZONA))) return cierre
+    const fecha = masDias(fechaEnZona(t, zona), -d)
+    const cierre = instanteEnZona(fecha, cierreMin, zona)
+    if (cierre <= t && ![0, 6].includes(diaSemanaEnZona(cierre - 60, zona))) return cierre
   }
   return t
 }
@@ -81,24 +81,26 @@ export function decodificarSerie({ f0, dd, dec, p, div, sp }) {
   return velas
 }
 
-// La respuesta de Yahoo (chart v8 con events=div|split) en velas con la fecha de Nueva York,
-// sin la del día en curso si la sesión no ha cerrado. El dividendo y el split van en la vela
-// del día que cotiza sin él (o en la siguiente, si ese día no hay vela).
-export function velasDeYahoo(r, ahora) {
+// La respuesta de Yahoo (chart v8 con events=div|split) en velas con la fecha de Nueva York
+// (`zona` la cambia: Yahoo fecha las divisas a medianoche de Londres) y su volumen, sin la del
+// día en curso si la sesión no ha cerrado a la hora `cierreMin`, ni la de mañana que los
+// futuros abren la víspera. El dividendo y el split van en la vela del día que cotiza sin él
+// (o en la siguiente, si ese día no hay vela).
+export function velasDeYahoo(r, ahora, { cierreMin = CIERRE_MIN, zona = ZONA } = {}) {
   const ts = r?.timestamp ?? []
   const q = r?.indicators?.quote?.[0] ?? {}
-  const hoy = fechaEnZona(ahora, ZONA)
-  const sinCerrar = ahora < instanteEnZona(hoy, CIERRE_MIN, ZONA)
+  const hoy = fechaEnZona(ahora, zona)
+  const sinCerrar = ahora < instanteEnZona(hoy, cierreMin, zona)
   const velas = []
   for (let i = 0; i < ts.length; i++) {
     const [open, high, low, close] = [q.open?.[i], q.high?.[i], q.low?.[i], q.close?.[i]]
     if ([open, high, low, close].some(x => x == null || !Number.isFinite(x))) continue
-    const date = fechaEnZona(ts[i], ZONA)
-    if (date === velas.at(-1)?.date || (date >= hoy && sinCerrar)) continue
-    velas.push({ date, open, high, low, close })
+    const date = fechaEnZona(ts[i], zona)
+    if (date === velas.at(-1)?.date || date > hoy || (date === hoy && sinCerrar)) continue
+    velas.push({ date, open, high, low, close, volume: q.volume?.[i] ?? 0 })
   }
   const velaDel = t => {
-    const fecha = fechaEnZona(t, ZONA)
+    const fecha = fechaEnZona(t, zona)
     let lo = 0, hi = velas.length
     while (lo < hi) { const mid = (lo + hi) >> 1; if (velas[mid].date < fecha) lo = mid + 1; else hi = mid }
     return velas[lo]
@@ -137,10 +139,14 @@ export function recortarSerie(s, desde) {
 const ultimaFecha = s => (s.f0 ? new Date(Date.parse(`${s.f0}T00:00:00Z`) + s.dd.reduce((a, d) => a + d, 0) * 86_400_000).toISOString().slice(0, 10) : null)
 
 // ── Descarga y caché ──
-// `pedirYahoo(url)` hace la petición con la cookie y el crumb de Yahoo y devuelve el JSON
-export function crearAccionesEeuu({ dir, pedirYahoo, ahora = () => Math.floor(Date.now() / 1000), log = console.log }) {
+// El diario entero de una serie de Yahoo, guardado en disco hasta el siguiente cierre.
+// `pedirYahoo(url)` hace la petición con la cookie y el crumb de Yahoo y devuelve el JSON;
+// `simbolo(ticker)` dice cómo lo llama Yahoo; `horario(ticker)`, la zona de sus fechas y a qué
+// hora de esa zona cierra el día ({ zona, cierreMin }); y `preparar(velas, ticker)`, lo que se
+// guarda: { velas, info } (las velas que se codifican y lo que se quiera apuntar con ellas).
+export function crearDiarioYahoo({ dir, pedirYahoo, simbolo = simboloYahoo, horario = () => ({ zona: ZONA, cierreMin: CIERRE_MIN }), preparar = velas => ({ velas }), version = VERSION, ahora = () => Math.floor(Date.now() / 1000), log = console.log }) {
   try { mkdirSync(dir, { recursive: true }) } catch { /* no crítico */ }
-  const archivo = ticker => join(dir, `${simboloYahoo(ticker)}.json.gz`)
+  const archivo = ticker => join(dir, `${simbolo(ticker).replace(/[^\w.-]/g, '_')}.json.gz`)
   const enCurso = new Map()
   let activas = 0
   const esperando = []
@@ -155,7 +161,7 @@ export function crearAccionesEeuu({ dir, pedirYahoo, ahora = () => Math.floor(Da
     await turno()
     try {
       const t = ahora()
-      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(simboloYahoo(ticker))}?interval=1d&period1=${PRIMER_DIA}&period2=${t}&events=div%7Csplit`
+      const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(simbolo(ticker))}?interval=1d&period1=${PRIMER_DIA}&period2=${t}&events=div%7Csplit`
       let json
       for (let intento = 0; ; intento++) {
         try { json = await pedirYahoo(url); break } catch (err) {
@@ -166,22 +172,23 @@ export function crearAccionesEeuu({ dir, pedirYahoo, ahora = () => Math.floor(Da
       }
       const r = json?.chart?.result?.[0]
       if (!r) throw new Error(json?.chart?.error?.description ?? 'Yahoo no da la serie')
-      const velas = velasDeYahoo(r, t)
+      const { velas, info } = preparar(velasDeYahoo(r, t, horario(ticker)), ticker)
       if (velas.length < 2) throw new Error('Yahoo no da velas')
-      const guardado = { version: VERSION, ticker, descargado: t, serie: codificarSerie(velas) }
+      const guardado = { version, ticker, descargado: t, serie: codificarSerie(velas), ...(info ? { info } : {}) }
       try {
         writeFileSync(`${archivo(ticker)}.tmp`, gzipSync(JSON.stringify(guardado)))
         renameSync(`${archivo(ticker)}.tmp`, archivo(ticker))
-      } catch (err) { log(`[acciones] no se ha podido guardar ${ticker}: ${err.message}`) }
+      } catch (err) { log(`[diario de Yahoo] no se ha podido guardar ${ticker}: ${err.message}`) }
       return guardado
     } finally { soltar() }
   }
 
-  // La serie de una acción: la del disco si se bajó después del último cierre; si no, de
-  // Yahoo (y si Yahoo falla, la del disco aunque sea vieja, avisando)
+  // La serie: la del disco si se bajó después del último cierre; si no, de Yahoo (y si Yahoo
+  // falla, la del disco aunque sea vieja, avisando)
   async function serie(ticker) {
     const visto = leer(ticker)
-    if (visto?.version === VERSION && visto.descargado >= ultimoCierre(ahora())) return visto
+    const { zona, cierreMin } = horario(ticker)
+    if (visto?.version === version && visto.descargado >= ultimoCierre(ahora(), cierreMin, zona)) return visto
     if (!enCurso.has(ticker)) enCurso.set(ticker, bajar(ticker).finally(() => enCurso.delete(ticker)))
     try {
       return await enCurso.get(ticker)
@@ -190,6 +197,13 @@ export function crearAccionesEeuu({ dir, pedirYahoo, ahora = () => Math.floor(Da
       return { ...visto, aviso: `Yahoo: ${err.message}; datos hasta el ${ultimaFecha(visto.serie)}` }
     }
   }
+
+  return { serie }
+}
+
+// Las acciones del S&P 500
+export function crearAccionesEeuu({ dir, pedirYahoo, ahora, log }) {
+  const { serie } = crearDiarioYahoo({ dir, pedirYahoo, ahora, log })
 
   // Las series de varias acciones, desde `desde` (o, con `soloAlta`, desde que entraron en el
   // índice si fue después) con el calentamiento por delante, codificadas

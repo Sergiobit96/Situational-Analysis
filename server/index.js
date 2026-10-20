@@ -23,6 +23,7 @@ import { crearTelegram } from './telegram.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
+import { crearFuturosTortugas } from './futuros-tortugas.js'
 import { gzipSync } from 'zlib'
 import Anthropic from '@anthropic-ai/sdk'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
@@ -2719,17 +2720,37 @@ async function obtenerRangoYahoo(simbolo, intervalo, desde, hasta) {
 // enseñando cuántas lleva. En producción se guardan en el volumen. Van comprimidas: el S&P 500
 // entero, cada una desde un año antes de entrar en el índice, son 15 MB así (medido el
 // 19-oct-2026; con su historia entera desde 1990, unos 25) y cuatro veces más sin comprimir.
+async function pedirYahooConCrumb(url) {
+  const auth = await getYFAuth()
+  const resp = await fetch(`${url}${auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''}`, { headers: auth ? { ...YF_HEADERS, Cookie: auth.cookie } : YF_HEADERS })
+  if (!resp.ok) throw new Error(`Yahoo: HTTP ${resp.status}`)
+  return resp.json()
+}
 const accionesEeuu = crearAccionesEeuu({
   dir: process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/acciones-eeuu' : join(DISK_CACHE_DIR, 'acciones-eeuu'),
-  pedirYahoo: async url => {
-    const auth = await getYFAuth()
-    const resp = await fetch(`${url}${auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : ''}`, { headers: auth ? { ...YF_HEADERS, Cookie: auth.cookie } : YF_HEADERS })
-    if (!resp.ok) throw new Error(`Yahoo: HTTP ${resp.status}`)
-    return resp.json()
-  },
+  pedirYahoo: pedirYahooConCrumb,
 })
 
 app.get('/api/tortugas/acciones/universo', (req, res) => res.json(accionesEeuu.universo()))
+
+// Los mercados de las tortugas de 1983 (server/futuros-tortugas.js): los 19 de una vez, que
+// son poco más de 1 MB comprimidos
+const futurosTortugas = crearFuturosTortugas({
+  dir: process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/futuros-tortugas' : join(DISK_CACHE_DIR, 'futuros-tortugas'),
+  pedirYahoo: pedirYahooConCrumb,
+})
+app.get('/api/tortugas/futuros', async (req, res) => {
+  const desde = String(req.query.desde ?? '2000-01-01')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) return res.status(400).json({ error: 'desde: YYYY-MM-DD' })
+  try {
+    const cuerpo = Buffer.from(JSON.stringify(await futurosTortugas.series({ desde })))
+    res.set('Content-Type', 'application/json; charset=utf-8')
+    if (!/\bgzip\b/.test(req.get('Accept-Encoding') ?? '')) return res.send(cuerpo)
+    res.set({ 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' }).send(gzipSync(cuerpo))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
 
 app.get('/api/tortugas/acciones', async (req, res) => {
   const tickers = String(req.query.tickers ?? '').split(',').map(t => t.trim()).filter(Boolean)

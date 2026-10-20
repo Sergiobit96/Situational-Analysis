@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createChart, AreaSeries, HistogramSeries, PriceScaleMode, CrosshairMode } from 'lightweight-charts'
 import { madridOffsetAt } from './timezone'
 import {
-  INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, backtestTortugas,
+  INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, prepararColumnas, backtestTortugas,
   metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, resumenPorGrupo, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
 } from './tortugas'
-import { prepararAccion, COMISION_ACCIONES_EEUU } from './accionesEeuu'
+import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
 import './Tortugas.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -121,6 +121,23 @@ async function bajarAcciones({ completas, signal, alAvanzar }) {
   return { datos: cacheAcciones, fallos, avisos }
 }
 
+// Los mercados de las tortugas de 1983 (server/futuros-tortugas.js): los 19 de una vez, ya
+// empalmados en el servidor, y preparados para el motor al llegar
+let cacheFuturos = null             // { lista, mercados: { id: serie del motor }, cuando }
+const futurosEnCache = () => (cacheFuturos && Date.now() - cacheFuturos.cuando < VIGENCIA_MS ? cacheFuturos : null)
+const PRIMER_ANIO_FUTUROS = 2000
+// los futuros no pagan financiación de CFD ni comisión por acción: el coste es el deslizamiento
+const infoFuturo = m => ({ id: m.id, ticker: m.simbolo, nombre: m.nombre, original: m.original, grupo: m.grupo, zona: 'America/New_York', cierre: '17:00', desde: '1900-01-01', spread: 0, dividendo: 0 })
+
+async function bajarFuturos(signal) {
+  const j = await pedirJson(`${API}/api/tortugas/futuros?desde=${PRIMER_ANIO_FUTUROS}-01-01`, signal)
+  const porId = new Map(j.mercados.map(m => [m.id, m]))
+  const mercados = {}
+  for (const s of j.series) if (s.p.length) mercados[s.id] = prepararColumnas(infoFuturo(porId.get(s.id)), decodificarColumnas(s))
+  cacheFuturos = { lista: j.mercados, mercados, cuando: Date.now() }
+  return { datos: cacheFuturos, fallos: j.fallos.map(f => `${porId.get(f.id)?.nombre ?? f.id} (${f.error})`), avisos: j.avisos }
+}
+
 // ── Ajustes ─────────────────────────────────────────────────────────────────
 
 const AJUSTES_INICIALES = {
@@ -150,9 +167,24 @@ const AJUSTES_ACCIONES = {
   soloEnIndice: CONFIG_TORTUGAS.soloEnIndice,
   comisiones: CONFIG_TORTUGAS.comisiones,
 }
+// Los mercados de las tortugas, con sus reglas: 1 % por unidad, 4 unidades por mercado, 6 por
+// grupo muy correlacionado y 12 por sentido, largos y cortos. Sin financiación: en un futuro, lo
+// que cuesta mantenerlo ya va en el precio al empalmar un contrato con el siguiente.
+const AJUSTES_FUTUROS = {
+  ...AJUSTES_INICIALES,
+  mercadosFuera: [],
+  lados: 'ambos',
+  riesgo: 1,
+  maxUnidades: 4,
+  maxGrupo: 6,
+  maxSentido: 12,
+  financiacion: false,
+  desde: 2001,
+}
 const UNIVERSOS = {
   indices:  { clave: 'sa.tortugas', iniciales: AJUSTES_INICIALES },
   acciones: { clave: 'sa.tortugas.acciones', iniciales: AJUSTES_ACCIONES },
+  futuros:  { clave: 'sa.tortugas.futuros', iniciales: AJUSTES_FUTUROS },
 }
 const CLAVE_UNIVERSO = 'sa.tortugas.universo'
 const PRIMER_ANIO = 1990
@@ -167,7 +199,10 @@ function leerAjustes(universo) {
   }
 }
 function leerUniverso() {
-  try { return localStorage.getItem(CLAVE_UNIVERSO) === 'acciones' ? 'acciones' : 'indices' } catch { return 'indices' }
+  try {
+    const u = localStorage.getItem(CLAVE_UNIVERSO)
+    return UNIVERSOS[u] ? u : 'indices'
+  } catch { return 'indices' }
 }
 
 const LADOS = [
@@ -190,8 +225,9 @@ const sgn = (v, dec = 1) => Number.isFinite(v) ? `${v > 0 ? '+' : v < 0 ? '−' 
 const eur = (v, dec = 0) => Number.isFinite(v) ? `${v < 0 ? '−' : ''}${nf(Math.abs(v), dec)} €` : '—'
 const pct = (v, dec = 1) => Number.isFinite(v) ? `${sgn(v, dec)} %` : '—'
 const dia = f => f ? f.split('-').reverse().join('/') : '—'
-// un precio con los decimales que pide su tamaño (las acciones ajustadas por splits valían céntimos)
-const nfp = v => nf(v, Math.abs(v) >= 100 ? 1 : Math.abs(v) >= 1 ? 2 : 4)
+// un precio con los decimales que pide su tamaño (las acciones ajustadas por splits valían
+// céntimos; el yen va en milésimas de dólar)
+const nfp = v => nf(v, Math.abs(v) >= 100 ? 1 : Math.abs(v) >= 1 ? 2 : Math.abs(v) >= 0.01 ? 4 : 6)
 const tono = v => v > 0 ? 'positivo' : v < 0 ? 'negativo' : ''
 const nombreSistema = s => (s === '1+2' ? 'S1 + S2' : `S${s}`)
 
@@ -229,11 +265,13 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const juntos = sistema === '1+2'
   const [universo, setUniverso] = useState(leerUniverso)
   const acciones = universo === 'acciones'
-  const [todosAjustes, setTodosAjustes] = useState(() => ({ indices: leerAjustes('indices'), acciones: leerAjustes('acciones') }))
+  const futuros = universo === 'futuros'
+  const [todosAjustes, setTodosAjustes] = useState(() => Object.fromEntries(Object.keys(UNIVERSOS).map(u => [u, leerAjustes(u)])))
   const ajustes = todosAjustes[universo]
   const setAjustes = f => setTodosAjustes(t => ({ ...t, [universo]: f(t[universo]) }))
   const [datos, setDatos] = useState(datosEnCache)
   const [datosAcciones, setDatosAcciones] = useState(accionesEnCache)
+  const [datosFuturos, setDatosFuturos] = useState(futurosEnCache)
   const [cargando, setCargando] = useState(false)
   const [progreso, setProgreso] = useState(null)
   const [error, setError] = useState(null)
@@ -264,6 +302,13 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     else if (sectores.filter(s => !fuera.has(s)).length > 1) fuera.add(sector)
     return { ...a, sectoresFuera: [...fuera] }
   })
+  const listaFuturos = useMemo(() => datosFuturos?.lista ?? [], [datosFuturos])
+  const alternarMercado = id => setAjustes(a => {
+    const fuera = new Set(a.mercadosFuera)
+    if (fuera.has(id)) fuera.delete(id)
+    else if (listaFuturos.filter(x => !fuera.has(x.id)).length > 1) fuera.add(id)
+    return { ...a, mercadosFuera: [...fuera] }
+  })
   const cambiarUniverso = u => {
     if (u === universo) return
     abortRef.current?.abort()
@@ -292,8 +337,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     capital: ajustes.capital,
     soloEnIndice: ajustes.soloEnIndice ?? CONFIG_TORTUGAS.soloEnIndice,
     comisiones: ajustes.comisiones ?? CONFIG_TORTUGAS.comisiones,
-  }), [ajustes, sistema])
-  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera])
+    // en futuros, sin tope de nominal: las letras, con su N diminuta, llevan un nominal enorme,
+    // como el eurodólar de las tortugas (un millón de dólares por contrato)
+    apalancamiento: universo === 'futuros' ? 0 : CONFIG_TORTUGAS.apalancamiento,
+  }), [ajustes, sistema, universo])
+  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera, ajustes.mercadosFuera])
 
   // los indicadores solo dependen de los datos: se calculan una vez por índice
   const preparados = useMemo(() => {
@@ -308,17 +356,22 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     ? datosAcciones.universo.acciones.map(a => datosAcciones.mercados[a.ticker]).filter(Boolean) : []), [acciones, datosAcciones])
   const tipos = datos[TICKER_TIPO] ?? null
   const mercados = useMemo(() => {
+    if (futuros) {
+      const fuera = new Set(ajustes.mercadosFuera)
+      return listaFuturos.filter(x => !fuera.has(x.id)).map(x => datosFuturos.mercados[x.id]).filter(Boolean)
+    }
     if (!acciones) return ajustes.indices.map(id => preparados[id]).filter(Boolean)
     const fuera = new Set(ajustes.sectoresFuera)
     return accionesPreparadas.filter(x => !fuera.has(x.info.grupo))
-  }, [acciones, preparados, ajustes.indices, accionesPreparadas, ajustes.sectoresFuera])
+  }, [futuros, listaFuturos, datosFuturos, ajustes.mercadosFuera, acciones, preparados, ajustes.indices, accionesPreparadas, ajustes.sectoresFuera])
   // con «solo desde que entró», el servidor manda cada acción desde un año antes de entrar en
   // el índice: sin esa casilla hace falta su historia entera
-  const faltan = !acciones ? ajustes.indices.filter(id => !preparados[id])
+  const faltan = futuros ? (datosFuturos ? [] : ['los mercados de las tortugas'])
+    : !acciones ? ajustes.indices.filter(id => !preparados[id])
     : !datosAcciones || (!cfg.soloEnIndice && !datosAcciones.completas) ? ['las acciones'] : []
 
-  // en índices se prueba con los que haya (y se avisa de los que faltan); en acciones, con todas
-  const listo = mercados.length > 0 && (!acciones || !faltan.length)
+  // en índices se prueba con los que haya (y se avisa de los que faltan); en lo demás, con todo
+  const listo = mercados.length > 0 && (universo === 'indices' || !faltan.length)
   const res = useMemo(() => listo ? backtestTortugas(mercados, tipos, cfg) : null, [listo, mercados, tipos, cfg])
   const m = useMemo(() => res && metricasTortugas(res), [res])
   const ordenes = useMemo(() => res ? ordenesManana(res, ajustes.capital) : [], [res, ajustes.capital])
@@ -329,6 +382,27 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     abortRef.current = ctrl
     setCargando(true)
     setError(null)
+    if (futuros) {
+      setProgreso({ hechos: 0, total: null })
+      try {
+        const [{ datos: nuevos, fallos, avisos }, tipo] = await Promise.all([
+          bajarFuturos(ctrl.signal),
+          bajarDiario(TICKER_TIPO, ctrl.signal).catch(e => { if (e.name === 'AbortError') throw e; return null }),
+        ])
+        if (ctrl.signal.aborted) return
+        setDatosFuturos(nuevos)
+        if (tipo) setDatos(d => ({ ...d, [TICKER_TIPO]: tipo }))
+        const avisosTexto = [fallos.length && `Yahoo no dio ${fallos.join(' · ')}`, avisos.length && avisos.join(' · ')].filter(Boolean)
+        if (avisosTexto.length) setError(avisosTexto.join('. '))
+      } catch (e) {
+        if (e.name === 'AbortError') return
+        setError(`No se pudieron bajar los mercados de las tortugas: ${e.message}`)
+      }
+      setCargando(false)
+      setProgreso(null)
+      setMostradas(25)
+      return
+    }
     if (acciones) {
       setProgreso({ hechos: 0, total: null })
       try {
@@ -399,9 +473,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   // sistemas, cada índice puede llevar dos pirámides.
   const gruposDe = xs => Object.values(xs.reduce((n, g) => ({ ...n, [g]: (n[g] ?? 0) + 1 }), {}))
   const peor = peorHastaStops({
-    grupos: acciones
-      ? gruposDe(lista.filter(a => !ajustes.sectoresFuera.includes(a.sector)).map(a => a.sector))
-      : gruposDe(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.grupo)),
+    grupos: futuros
+      ? gruposDe(listaFuturos.filter(x => !ajustes.mercadosFuera.includes(x.id)).map(x => x.grupo))
+      : acciones
+        ? gruposDe(lista.filter(a => !ajustes.sectoresFuera.includes(a.sector)).map(a => a.sector))
+        : gruposDe(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.grupo)),
     maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
     sistemas: sistemasDe(sistema).length,
   })
@@ -417,20 +493,43 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Mercados
             <span className="filtro-valor">
-              {acciones
-                ? 'cada acción con sus ajustes; los de los índices se guardan aparte'
-                : 'los índices o las acciones del S&P 500, cada uno con sus ajustes'}
+              {futuros
+                ? 'los futuros que operaban las tortugas en 1983, con sus reglas; cada grupo de mercados guarda sus ajustes'
+                : acciones
+                  ? 'cada acción con sus ajustes; los de los índices se guardan aparte'
+                  : 'los índices, las acciones del S&P 500 o los mercados de las tortugas, cada uno con sus ajustes'}
             </span>
           </label>
           <div className="filtro-presets">
             <Chips opciones={[
               { v: 'indices', label: 'Índices', nota: 'Los ocho índices de contado' },
               { v: 'acciones', label: 'Acciones de EE. UU.', nota: 'Las 503 del S&P 500, cada sector un grupo' },
+              { v: 'futuros', label: 'Mercados de las tortugas', nota: 'Los 19 futuros que operaban las tortugas en 1983: bonos, letras, divisas, S&P, metales, energía y blandas' },
             ]} valor={universo} onCambio={cambiarUniverso} />
           </div>
         </div>
 
-        {!acciones && (
+        {futuros && (
+          <div className="filtro-group">
+            <label className="filtro-label">
+              Futuros
+              <span className="filtro-valor">
+                {listaFuturos.length
+                  ? `${nf(mercados.length)} de ${nf(listaFuturos.length)} · sin grano ni carne, que Dennis ya operaba al límite`
+                  : 'bonos, letras, divisas, S&P 500, metales, energía y blandas: carga los datos para elegir'}
+              </span>
+            </label>
+            <div className="filtro-presets">
+              {listaFuturos.map(x => (
+                <button key={x.id} className={`chip ${ajustes.mercadosFuera.includes(x.id) ? '' : 'activo'}`}
+                  title={`${x.original} · ${x.simbolo} en Yahoo · grupo ${x.grupo}`}
+                  onClick={() => alternarMercado(x.id)}>{x.nombre}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {universo === 'indices' && (
           <div className="filtro-group">
             <label className="filtro-label">
               Índices
@@ -519,7 +618,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <label className="filtro-label">
             Pirámide
             <span className="filtro-valor">
-              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
+              hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : futuros ? 'mercado' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
             </span>
           </label>
           <div className="filtro-presets">
@@ -535,7 +634,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             <span className="filtro-valor">
               {acciones
                 ? 'unidades por sector y por sentido en total: con cientos de acciones, si se llenan con rupturas de una unidad, la pirámide no crece'
-                : 'unidades por grupo (EE. UU., Europa, Asia) y por sentido en total'}
+                : futuros
+                  ? 'unidades por grupo (tipos, divisas, índices, metales, energía, blandas) y por sentido en total: las tortugas, 6 y 12'
+                  : 'unidades por grupo (EE. UU., Europa, Asia) y por sentido en total'}
             </span>
           </label>
           <div className="filtro-presets tortugas-limites">
@@ -554,7 +655,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
                 ? acciones
                   ? `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % (el viernes, 3 noches) y cobra los dividendos el día que la acción cotiza sin ellos; el corto, al revés`
                   : `cada noche el largo paga tipo a 3 meses + ${nf(ajustes.recargo, 1)} % menos el dividendo (el viernes, 3 noches)`
-                : 'sin coste por dormir con la posición: lo que se ganaría con un futuro sin base'}
+                : futuros
+                  ? 'futuros: lo que cuesta mantenerlos ya va en el precio al empalmar cada contrato con el siguiente (las divisas van al contado, sin el diferencial de tipos)'
+                  : 'sin coste por dormir con la posición: lo que se ganaría con un futuro sin base'}
             </span>
           </label>
           <div className="filtro-presets">
@@ -607,9 +710,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         {cargando && progreso && (
           <div className="velas-cargando">
             <span className="spinner" />
-            {acciones
-              ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
-              : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
+            {futuros
+              ? 'Futuros de las tortugas (Yahoo)…'
+              : acciones
+                ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
+                : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
           </div>
         )}
         {error && <div className="error-global">{error}</div>}
@@ -619,7 +724,10 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         <div className="estr-vacio">
           <p className="estr-vacio-tit">Pulsa <strong>Cargar datos y probar</strong></p>
           <p className="estr-vacio-sub">
-            {acciones
+            {futuros
+              ? <>Baja de Yahoo los 19 futuros de las tortugas desde 2000, empalmados en cada vencimiento, y las divisas al
+                  contado (unos segundos; la primera vez del día, algo más).</>
+              : acciones
               ? <>Baja el diario de Yahoo de las 503 acciones del S&P 500{ajustes.soloEnIndice ? ', cada una desde un año antes de entrar en el índice' : ' con toda su historia'}. La
                   primera vez del día, el servidor tarda un minuto en traerlas de Yahoo; después, unos segundos. Cada ajuste
                   recalcula en un par de segundos.{datosAcciones && !datosAcciones.completas && !ajustes.soloEnIndice
@@ -637,15 +745,28 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </p>
           )}
           <Resumen m={m} res={res} />
-          <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} acciones={acciones} />
+          <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} acciones={acciones} futuros={futuros} />
           <CurvaTortugas res={res} />
           <Anual res={res} />
-          {acciones ? <PorSector res={res} /> : <PorIndice res={res} />}
+          {acciones ? <PorSector res={res} /> : <PorIndice res={res} futuros={futuros} />}
           <Piramide res={res} />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
-          <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} />
-          <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} />
-          {acciones ? (
+          <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} futuros={futuros} />
+          <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} futuros={futuros} />
+          {futuros ? (
+            <p className="estr-nota">
+              Los mercados de las reglas de las tortugas (Curtis Faith) con el futuro de hoy de cada uno en Yahoo, desde 2000:
+              la gasolina RBOB por la sin plomo, el E-mini por el S&P 500 grande y el euro por el marco y el franco francés.
+              Yahoo da el contrato más cercano y salta al siguiente al vencer: la serie está empalmada hacia atrás en cada
+              cambio (el día lo dice el volumen dentro de la ventana de vencimiento de cada contrato), así que los precios
+              de hace años no son los que cotizaban, pero sí lo que se movían. Las divisas, al contado (en el futuro, Yahoo
+              cambia cada mes a un contrato sin volumen), sin el diferencial de tipos que lleva el futuro. El eurodólar ya
+              no existe y las letras a 90 días salen del tipo a 3 meses (100 − ^IRX): su N es diminuta, así que su unidad
+              lleva un nominal enorme, como el eurodólar de las tortugas; por eso aquí no hay tope de nominal. Las tortugas
+              además cobraban los intereses del dinero que no estaba en margen; aquí no. Las órdenes son stop, con el
+              deslizamiento elegido y sin comisión.
+            </p>
+          ) : acciones ? (
             <p className="estr-nota">
               Velas diarias de Yahoo, ajustadas por los splits (por eso las de hace años salen a céntimos; la comisión
               y las acciones enteras se cuentan con las acciones de entonces). La lista es la de hoy del S&P 500 (Wikipedia, con la fecha
@@ -709,24 +830,25 @@ function Resumen({ m, res }) {
 // La volatilidad con la que se mide todo: N de cada índice al último cierre, en puntos y en %
 // del precio, con lo que sale de él (cada cuánto se añade, a qué distancia va el stop y el
 // tamaño de una unidad)
-function NDeHoy({ filas, paso, stopN, acciones }) {
+function NDeHoy({ filas, paso, stopN, acciones, futuros }) {
   if (acciones && !filas.length) return null
   const pts = acciones ? '$' : 'pts'
   const dec = acciones ? 2 : 1
+  const fn = x => (futuros ? nfp(x) : nf(x, dec))
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
-        <strong>{acciones ? 'N de las acciones con posición' : 'N de cada índice'}</strong>
+        <strong>{acciones ? 'N de las acciones con posición' : futuros ? 'N de cada mercado' : 'N de cada índice'}</strong>
         <span className="estr-nota">ATR de Wilder de 20 sesiones, al último cierre</span>
       </div>
       <div className="tortugas-n">
         {filas.map(f => (
           <div key={f.indice} className="tortugas-n-caja" title={`${f.nombre} · cierre ${nf(f.cierre, 2)} el ${dia(f.ultimoDia)}`}>
             <span className="tortugas-n-nombre">{acciones ? f.indice : f.nombre}</span>
-            <span className="tortugas-n-valor">{nf(f.n, dec)} <small>{pts}</small></span>
+            <span className="tortugas-n-valor">{fn(f.n)} <small>{pts}</small></span>
             <span className="tortugas-n-sub">{nf(100 * f.n / f.cierre, 2)} % del precio</span>
-            <span className="tortugas-n-sub">añade cada {nf(paso * f.n, dec)} {pts}</span>
-            <span className="tortugas-n-sub">stop a {nf(stopN * f.n, dec)} {pts}</span>
+            <span className="tortugas-n-sub">añade cada {fn(paso * f.n)} {pts}</span>
+            <span className="tortugas-n-sub">stop a {fn(stopN * f.n)} {pts}</span>
             <span className="tortugas-n-sub">unidad {acciones ? `${nf(f.unidad)} acciones` : `${nf(f.unidad, 2)} €/pt`}</span>
           </div>
         ))}
@@ -808,7 +930,7 @@ function Anual({ res }) {
   )
 }
 
-function PorIndice({ res }) {
+function PorIndice({ res, futuros }) {
   const filas = useMemo(() => resumenPorIndice(res), [res])
   const hayCortos = res.cfg.lados !== 'largos'
   const hayLargos = res.cfg.lados !== 'cortos'
@@ -824,7 +946,7 @@ function PorIndice({ res }) {
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
             <tr>
-              <th>Por índice</th><th>Desde</th><th>Operaciones</th><th>Ganadoras</th><th>Neto</th>
+              <th>{futuros ? 'Por mercado' : 'Por índice'}</th><th>Desde</th><th>Operaciones</th><th>Ganadoras</th><th>Neto</th>
               {hayLargos && hayCortos && <><th>Largos</th><th>Cortos</th></>}
               {juntos && <><th>Sistema 1</th><th>Sistema 2</th></>}
               <th>Financiación</th><th>Comprar y mantener</th><th>Su peor caída</th>
@@ -853,7 +975,9 @@ function PorIndice({ res }) {
           El sistema 1 deja <strong className={tono(s1.neto)}>{eur(s1.neto)}</strong> en {nf(s1.n)} operaciones ({nf(s1.n ? 100 * s1.ganan / s1.n : NaN, 0)} % ganadoras)
           y el 2, con las rupturas que el 1 se salta, <strong className={tono(s2.neto)}>{eur(s2.neto)}</strong> en {nf(s2.n)} ({nf(s2.n ? 100 * s2.ganan / s2.n : NaN, 0)} % ganadoras).{' '}
         </>}
-        Comprar y mantener es el índice de precio, sin dividendos (salvo el DAX, que los incluye), en el mismo periodo:
+        {futuros
+          ? 'Comprar y mantener es el futuro empalmado (estar siempre en el contrato más cercano, con lo que cuesta pasar de uno a otro) o, en divisas, el contado, en el mismo periodo: '
+          : 'Comprar y mantener es el índice de precio, sin dividendos (salvo el DAX, que los incluye), en el mismo periodo: '}
         sirve de referencia para la rentabilidad y, sobre todo, para la caída.
       </p>
     </div>
@@ -1015,14 +1139,14 @@ const distanciaN = f => Math.min(
   f.venta && !f.posicion ? (f.cierre - f.venta.nivel) / f.n : Infinity,
 )
 
-function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones }) {
+function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones, futuros }) {
   const filas = useMemo(() => {
     if (!acciones) return todas
     const conPosicion = todas.filter(f => f.posicion)
     const cercanas = todas.filter(f => !f.posicion && Number.isFinite(distanciaN(f))).sort((a, b) => distanciaN(a) - distanciaN(b)).slice(0, CERCANAS)
     return [...conPosicion, ...cercanas]
   }, [todas, acciones])
-  const nivel = o => o ? `${acciones ? nfp(o.nivel) : nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
+  const nivel = o => o ? `${acciones || futuros ? nfp(o.nivel) : nf(o.nivel, 2)}${o.k ? ` (${o.k})` : ' (añadido)'}` : ''
   const fuera = f => {
     if (!juntos) return f.filtro ? 'fuera · la última de 20 ganó: espera la de 55' : 'fuera'
     if (f.sistema === 1) return f.filtro ? 'fuera · la última de 20 ganó: se la salta y la coge el S2' : 'fuera'
@@ -1032,13 +1156,13 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones }) {
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
         <strong>Órdenes stop para la próxima sesión</strong>
-        <span className="estr-nota">con el último cierre de cada {acciones ? 'acción' : 'índice'} ({dia(ultimoDato)} el más reciente) y {eur(capital)}</span>
+        <span className="estr-nota">con el último cierre de cada {acciones ? 'acción' : futuros ? 'mercado' : 'índice'} ({dia(ultimoDato)} el más reciente) y {eur(capital)}</span>
       </div>
       <div className="tortugas-tabla-wrap">
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
             <tr>
-              <th>{acciones ? 'Acción' : 'Índice'}</th>{juntos && <th>Sistema</th>}<th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th>
+              <th>{acciones ? 'Acción' : futuros ? 'Mercado' : 'Índice'}</th>{juntos && <th>Sistema</th>}<th>Cierre</th><th>N</th><th>Unidad</th><th>Posición</th>
               {acciones && <th title="Lo que le falta al precio para llegar a la ruptura, en N">A cuánto</th>}
               <th>Compra stop</th><th>Venta stop</th><th>Salida stop</th>
             </tr>
@@ -1048,18 +1172,18 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones }) {
               <tr key={`${f.indice}-${f.sistema}`}>
                 <th title={acciones ? `${f.nombre} · ${f.grupo}` : undefined}>{acciones ? f.indice : f.nombre}</th>
                 {juntos && <td>S{f.sistema}</td>}
-                <td title={dia(f.ultimoDia)}>{acciones ? nfp(f.cierre) : nf(f.cierre, 2)}</td>
-                <td>{nf(f.n, acciones ? 2 : 1)}</td>
+                <td title={dia(f.ultimoDia)}>{acciones || futuros ? nfp(f.cierre) : nf(f.cierre, 2)}</td>
+                <td>{futuros ? nfp(f.n) : nf(f.n, acciones ? 2 : 1)}</td>
                 <td>{acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
                 <td className="tortugas-izq">
                   {f.posicion
-                    ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${acciones ? nfp(f.posicion.medio) : nf(f.posicion.medio, 1)}`
+                    ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${acciones || futuros ? nfp(f.posicion.medio) : nf(f.posicion.medio, 1)}`
                     : fuera(f)}
                 </td>
                 {acciones && <td>{f.posicion ? '' : `${nf(distanciaN(f), 2)} N`}</td>}
                 <td>{nivel(f.compra)}</td>
                 <td>{nivel(f.venta)}</td>
-                <td>{f.salida != null ? (acciones ? nfp(f.salida) : nf(f.salida, 2)) : ''}</td>
+                <td>{f.salida != null ? (acciones || futuros ? nfp(f.salida) : nf(f.salida, 2)) : ''}</td>
               </tr>
             ))}
           </tbody>
@@ -1075,10 +1199,10 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones }) {
   )
 }
 
-function Operaciones({ res, mostradas, onMas, acciones }) {
+function Operaciones({ res, mostradas, onMas, acciones, futuros }) {
   const filas = useMemo(() => [...res.abiertas, ...[...res.operaciones].reverse()], [res])
   const juntos = res.cfg.sistema === '1+2'
-  const precio = acciones ? nfp : v => nf(v, 1)
+  const precio = acciones || futuros ? nfp : v => nf(v, 1)
   return (
     <div className="estr-resumen">
       <div className="tortugas-cabecera">
@@ -1089,7 +1213,7 @@ function Operaciones({ res, mostradas, onMas, acciones }) {
         <table className="estr-mitades-tabla tortugas-tabla">
           <thead>
             <tr>
-              <th>{acciones ? 'Acción' : 'Índice'}</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th>
+              <th>{acciones ? 'Acción' : futuros ? 'Mercado' : 'Índice'}</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th>
               <th title={acciones ? 'Todas las unidades juntas, en acciones de las de entonces' : 'Todas las unidades juntas, en € por punto'}>Tamaño</th><th title="Tamaño por precio medio de entrada">Nominal</th>
               <th title={acciones ? 'Ajustado por los splits posteriores' : undefined}>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th>{acciones && <th>Comisiones</th>}<th>% capital</th>
             </tr>
@@ -1103,7 +1227,7 @@ function Operaciones({ res, mostradas, onMas, acciones }) {
                 <td>{dia(o.entrada)}</td>
                 <td>{o.salida ? dia(o.salida) : 'abierta'}</td>
                 <td>{o.dias ?? ''}</td>
-                <td>{acciones ? nfp(o.n) : nf(o.n, 1)}</td>
+                <td>{acciones || futuros ? nfp(o.n) : nf(o.n, 1)}</td>
                 <td>{o.unidades}</td>
                 {acciones
                   ? <td>{nf(o.acciones)} acc.</td>

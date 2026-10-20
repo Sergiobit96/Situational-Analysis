@@ -8,6 +8,43 @@ export function intradayUrl(tkr, date, timeframe) {
   return `/api/yf-intraday?${new URLSearchParams({ ticker: tkr, date, timeframe })}`
 }
 
+// Sesiones que van en cada lote: pocas para que la primera tanda se pinte enseguida, y
+// por debajo del máximo del servidor
+const POR_LOTE = 25
+
+// Las velas de muchas sesiones, en el orden de `fechas` y a medida que llegan. Lo que el
+// servidor ya tiene guardado sale en lotes de una sola petición; solo lo que falta se
+// pide sesión a sesión y en serie, que es lo que aguanta el límite por IP de Dukascopy.
+// Cancelar lanza el AbortError; cualquier otro fallo deja esa sesión sin velas.
+export async function* velasDeSesiones(tkr, fechas, timeframe, signal) {
+  for (let i = 0; i < fechas.length; i += POR_LOTE) {
+    const bloque = fechas.slice(i, i + POR_LOTE)
+    let guardadas = {}
+    if (DUKA_TICKERS.has(tkr)) {
+      try {
+        const q = new URLSearchParams({ ticker: tkr, timeframe, fechas: bloque.join(',') })
+        const r = await fetch(`/api/velas15m/lote?${q}`, { signal })
+        if (r.ok) guardadas = (await r.json()).sesiones ?? {}
+      } catch (e) {
+        if (e.name === 'AbortError') throw e
+      }
+    }
+    for (const fecha of bloque) {
+      let datos = guardadas[fecha]
+      if (!datos) {
+        try {
+          const d = await (await fetch(intradayUrl(tkr, fecha, timeframe), { signal })).json()
+          datos = { velas: d.velas ?? [], fuente: d.fuente ?? null }
+        } catch (e) {
+          if (e.name === 'AbortError') throw e
+          datos = { velas: [], fuente: null }
+        }
+      }
+      yield { fecha, ...datos }
+    }
+  }
+}
+
 // Instrumentos con datos de Dukascopy, con su nombre para la interfaz
 export const INSTRUMENTOS = [
   { label: 'DAX',          value: '^GDAXI' },

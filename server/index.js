@@ -40,9 +40,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // según lo que deje pasar la red (ver server/dukascopy-transport.js)
 instalarTransporteDukascopy()
 
-// Cache en disco para datos Dukascopy (usa /tmp en producción, local en dev)
+// Cache en disco para datos Dukascopy. En Railway va al volumen de /data: en /tmp se
+// borraba con cada despliegue, y con ella todo lo descargado, así que tras cada push las
+// estrategias volvían a pedirle al feed sesión a sesión lo que ya habían bajado. Sin
+// volumen, /tmp como antes; en local, junto al servidor.
 const DISK_CACHE_DIR = process.env.NODE_ENV === 'production'
-  ? '/tmp/.duka-cache'
+  ? (existsSync('/data') ? '/data/.duka-cache' : '/tmp/.duka-cache')
   : join(__dirname, '.duka-cache')
 try { mkdirSync(DISK_CACHE_DIR, { recursive: true }) } catch { /* non-critical */ }
 
@@ -679,8 +682,11 @@ async function obtenerVelasIntradayYF(ticker, date, interval = '15m') {
 // Datos históricos son inmutables → disco no caduca. Solo hoy y ayer pueden actualizarse.
 const DUKA_TIMEFRAMES = new Set(['m1', 'm5', 'm15', 'm30', 'h1'])
 
-async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
-  const tf       = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
+// Sesión cerrada (ayer y antes): sus datos ya no cambian y pueden ir al disco
+const sesionCerrada = date => date <= new Date(Date.now() - 86400_000).toISOString().slice(0, 10)
+
+// Las velas de ese día que ya están guardadas, sin salir a la red; null si no las hay
+function velasDukascopyGuardadas(instrument, date, tf) {
   const cacheKey = `duka_${instrument}_${date}_${tf}`
 
   // 1. Cache en memoria
@@ -688,16 +694,19 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
   if (cached) return cached
 
   // 2. Cache en disco: ayer y antes (sesión cerrada → datos inmutables)
-  const ayer    = new Date(Date.now() - 86400_000).toISOString().slice(0, 10)
-  const useDisk = date <= ayer
+  if (!sesionCerrada(date)) return null
+  const disk = diskCacheGet(cacheKey)
+  if (disk) toCache(cacheKey, disk, 6 * 60 * 60_000)
+  return disk
+}
 
-  if (useDisk) {
-    const disk = diskCacheGet(cacheKey)
-    if (disk) {
-      toCache(cacheKey, disk, 6 * 60 * 60_000)
-      return disk
-    }
-  }
+async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
+  const tf       = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
+  const cacheKey = `duka_${instrument}_${date}_${tf}`
+
+  const guardadas = velasDukascopyGuardadas(instrument, date, tf)
+  if (guardadas) return guardadas
+  const useDisk = sesionCerrada(date)
 
   // 3. Sin caché: si la fuente está marcada como caída, no gastar otro timeout de 10 s
   if (dukaCaido()) return []
@@ -1091,6 +1100,40 @@ app.get('/api/velas15m', async (req, res) => {
     res.json({ ticker, date, velas, fuente })
   } catch (err) {
     console.error('[velas15m]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Varias sesiones en una sola petición, solo con lo que ya está guardado: con la caché
+// caliente, 500 sesiones de una estrategia son veinte viajes en vez de 500 en serie. No
+// sale a la red: lo que no esté (o lo que el feed tenga vacío y tire de otra fuente) no
+// viene en la respuesta, y el cliente lo pide con /api/velas15m, que es quien sabe ir al
+// feed a su ritmo y a los fallbacks.
+const MAX_SESIONES_LOTE = 60
+
+app.get('/api/velas15m/lote', async (req, res) => {
+  try {
+    const { ticker, timeframe = 'm15' } = req.query
+    const instrument = YF_TO_DUKASCOPY[ticker]
+    const fechas = String(req.query.fechas ?? '').split(',').filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f))
+    if (!instrument || !fechas.length) return res.status(400).json({ error: 'ticker de Dukascopy y fechas requeridos' })
+    if (fechas.length > MAX_SESIONES_LOTE) return res.status(400).json({ error: `máximo ${MAX_SESIONES_LOTE} fechas por lote` })
+    const tf = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
+
+    const sesiones = {}
+    for (const date of fechas) {
+      let velas = velasDukascopyGuardadas(instrument, date, tf)
+      // Sin las velas de ese timeframe pero con el fichero de 1 min del día ya en disco
+      // (otro timeframe, el backfill): se agregan en local, sin pedirle nada al feed. La
+      // horaria sale de ficheros de mes, que esto no mira.
+      if (!velas && tf !== 'h1' && sesionCerrada(date) && diaEnCacheDukascopy(instrument, Date.parse(`${date}T00:00:00Z`) / 1000)) {
+        try { velas = await obtenerVelasDukascopy(instrument, date, tf) } catch { velas = null }
+      }
+      if (velas?.length) sesiones[date] = { velas, fuente: `Dukascopy ${timeframe}` }
+    }
+    res.json({ ticker, timeframe, sesiones })
+  } catch (err) {
+    console.error('[velas15m/lote]', err.message)
     res.status(500).json({ error: err.message })
   }
 })

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GraficoVelas from './GraficoVelas'
 import CurvaEquity from './CurvaEquity.jsx'
 import { curvaEquity } from './equity'
-import { INSTRUMENTOS, intradayUrl } from './intradayApi'
+import { INSTRUMENTOS, intradayUrl, velasDeSesiones } from './intradayApi'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
 import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
@@ -208,9 +208,10 @@ const fmtSgn = v => v == null ? '—'
   : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('es-ES', { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 1 })}`
 const fmtPtsSgn = v => v == null ? '—' : `${fmtSgn(v)} pts`
 
-// Descarga y analiza las sesiones de una en una: Dukascopy limita por IP en cuanto
-// se le piden muchos ficheros seguidos, así que se va en serie y cada resultado se
-// pinta en cuanto llega (con el botón de cancelar disponible todo el rato).
+// Descarga y analiza las sesiones por orden: lo que el servidor ya tiene guardado llega en
+// lotes, y lo que falta va de una en una porque Dukascopy limita por IP en cuanto se le
+// piden muchos ficheros seguidos. Cada resultado se pinta en cuanto llega (con el botón
+// de cancelar disponible todo el rato).
 export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' }) {
   const estr = estrategiaDe(estrategiaId)
   const [ticker,     setTicker]     = useState('^GDAXI')
@@ -329,9 +330,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         const d = await (await fetch(`${API}/api/dax-historico?${q}`, { signal: ctrl.signal })).json()
         for (const s of d.sesiones ?? []) mapa.set(s.date, s.finas)
       } else {
-        for (const fecha of dudosas) {
-          const d = await (await fetch(intradayUrl(ticker, fecha, 'm5'), { signal: ctrl.signal })).json()
-          if (d.velas?.length) mapa.set(fecha, d.velas)
+        for await (const { fecha, velas } of velasDeSesiones(ticker, dudosas, 'm5', ctrl.signal)) {
+          if (velas.length) mapa.set(fecha, velas)
         }
       }
       return mapa
@@ -342,12 +342,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     await paso('1m', async dudosas => {
       const mapa = new Map()
       const tkr = fuente === 'csv' ? '^GDAXI' : ticker
-      for (const fecha of dudosas) {
-        if (ctrl.signal.aborted) break
-        try {
-          const d = await (await fetch(intradayUrl(tkr, fecha, 'm1'), { signal: ctrl.signal })).json()
-          if (d.velas?.length) mapa.set(fecha, d.velas)
-        } catch (e) { if (e.name === 'AbortError') break }
+      for await (const { fecha, velas } of velasDeSesiones(tkr, dudosas, 'm1', ctrl.signal)) {
+        if (velas.length) mapa.set(fecha, velas)
       }
       return mapa
     })
@@ -442,16 +438,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
       const opciones = opcionesMotor
       const acumuladas = []
-      for (const fecha of fechas) {
-        if (ctrl.signal.aborted) return
-        let velas5 = [], fuenteVelas = null
-        try {
-          const d = await (await fetch(intradayUrl(ticker, fecha, 'm5'), { signal: ctrl.signal })).json()
-          velas5      = d.velas ?? []
-          fuenteVelas = d.fuente ?? null
-        } catch (e) {
-          if (e.name === 'AbortError') return
-        }
+      for await (const { fecha, velas: velas5, fuente: fuenteVelas } of velasDeSesiones(ticker, fechas, 'm5', ctrl.signal)) {
         if (ctrl.signal.aborted) return
 
         // El feed devuelve el día entero (00:00-23:59). Se recorta a la ventana con media hora
@@ -511,18 +498,10 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       setProgreso({ done: 0, total: lista.length })
 
       const acumuladas = []
-      for (const s of lista) {
+      const porFecha = new Map(lista.map(s => [s.date, s]))
+      for await (const { fecha, velas, fuente } of velasDeSesiones(ticker, lista.map(s => s.date), descarga, ctrl.signal)) {
         if (ctrl.signal.aborted) return
-        let velas = [], fuente = null
-        try {
-          const rv = await fetch(intradayUrl(ticker, s.date, descarga), { signal: ctrl.signal })
-          const dv = await rv.json()
-          velas  = dv.velas ?? []
-          fuente = dv.fuente ?? null
-        } catch (e) {
-          if (e.name === 'AbortError') return
-        }
-        if (ctrl.signal.aborted) return
+        const s = porFecha.get(fecha)
         const prep = prepararSesion(estr, ticker, velas)
         const nDiario = nDe?.(s.date) ?? null
         const fila = {

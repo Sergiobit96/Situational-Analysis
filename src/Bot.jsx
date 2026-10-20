@@ -6,7 +6,8 @@ import { GraficoSesion, Piramide, LineaDelDia, CurvaResultados, BarraResultado }
 import './Bot.css'
 
 // Un bot del motor de server/bot-srs.js en la demo de IG: el SRS, en varias sesiones del día,
-// o la Rule of 4, los días del FOMC (`api`, `nombre` y `notaDia` dicen cuál). Enseña las
+// la Rule of 4, los días del FOMC, o First bar negative (`api`, `nombre` y `notaDia` dicen
+// cuál; la configuración de este último trae `piramideN`, y con ella cambia su formulario). Enseña las
 // sesiones de hoy, el historial al lado de lo que habría hecho el backtest (calculado aquí,
 // con el mismo motor que la pestaña Estrategias, sobre las velas que el bot guarda al cierre)
 // y la configuración. Telegram y el ensayo de órdenes son de la cuenta, no de un bot: van solo
@@ -35,7 +36,7 @@ const ESTADOS_CORTOS = {
   'esperando-vuelta':  'esperando la vuelta',
   'sin-operar':        'no opera',
 }
-const MOTIVOS = { stop: 'stop', breakeven: 'break even', cierre: 'cierre', manual: 'a mano', objetivo: 'objetivo', bracket: 'stop' }
+const MOTIVOS = { stop: 'stop', breakeven: 'break even', cierre: 'cierre', manual: 'a mano', objetivo: 'objetivo', bracket: 'stop', stopN: 'stop a 2 N' }
 
 const num = (n, dec = 1) => n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 const pts = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n)}`)
@@ -61,14 +62,18 @@ const ladoTexto = lado => (lado === 'largo' ? 'Compra' : 'Venta')
 const describirPiernas = d => piernasDe(d).map(p => `${ladoTexto(p.lado)}${p.unidades?.length > 1 ? ` ×${p.unidades.length}` : ''}`).join(' → ')
 
 // Lo que habría hecho el backtest esa sesión, con la configuración del día (y el mismo tope
-// de posiciones de la pirámide que el bot)
+// de posiciones de la pirámide que el bot). Con la pirámide de las tortugas, N sale de las
+// velas de antes de la apertura que el bot guardó al medirlo (`previasN`)
+const aVelas = filas => filas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
 function backtestDe(d, maxUnidades) {
   if (!d.velas?.length) return null
-  const velas = d.velas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
+  const velas = aVelas(d.velas)
   const c = d.config
+  const piramideN = c.piramideN && c.piramide ? { pasoN: c.piramide, stopN: c.stopN ?? 2, velasN: c.velasN ?? 20, minVelasN: c.minVelasN } : null
   const a = analizarSesion({
-    velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: c.piramide ?? 0,
+    velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: piramideN ? 0 : c.piramide ?? 0,
     tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades, tpPct: null, ventana: d.ventana,
+    colorBracket: c.colorBracket ?? null, piramideN, velasPrevias: d.previasN ? aVelas(d.previasN) : null,
   })
   if (!a.valido) return { valido: false, motivo: a.motivo }
   if (!a.entrada) return { valido: true, resultadoPts: null }
@@ -170,6 +175,8 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const operados = historial.filter(d => d.resultadoPts != null)
   const totalEur = operados.reduce((n, d) => n + (d.resultadoEur ?? 0), 0)
   const maxUnidades = datos.maxUnidades ?? 4
+  // First bar negative: solo vende, con el stop en el máximo de la vela y la pirámide en N
+  const tortuga = !!config.piramideN
 
   // Las sesiones de hoy: las que siguen en "hoy" y las que ya cerraron hoy, que el servidor
   // pasa al historial al momento
@@ -320,6 +327,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
       <section className="bot-bloque">
         <h3>Configuración</h3>
         <div className="bot-form">
+          {!tortuga && <>
           <label>Operativa
             <select value={editando.modo} onChange={e => cambiar('modo', e.target.value)}>
               <option value="flip">Con flip the switch</option>
@@ -340,12 +348,15 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
               <option value={2}>Al recorrer 2R</option>
             </select>
           </label>
+          </>}
           <label>Pirámide
             <select value={editando.piramide ?? ''} onChange={e => cambiar('piramide', e.target.value === '' ? null : Number(e.target.value))}>
               <option value="">No</option>
-              <option value={0.5}>Una más cada 0,5R a favor</option>
-              <option value={1}>Una más cada 1R a favor</option>
-              <option value={2}>Una más cada 2R a favor</option>
+              {tortuga ? <option value={0.5}>Una más cada ½ N, con el stop a 2 N de la última</option> : <>
+                <option value={0.5}>Una más cada 0,5R a favor</option>
+                <option value={1}>Una más cada 1R a favor</option>
+                <option value={2}>Una más cada 2R a favor</option>
+              </>}
             </select>
           </label>
           <label>Cada añadido
@@ -364,13 +375,24 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             <input type="number" min="0.01" max="10" step="0.1" value={editando.rangoMaxPct} onChange={e => cambiar('rangoMaxPct', e.target.value)} />
           </label>
         </div>
-        <p className="bot-nota">
-          El tamaño sale del riesgo, que es lo que se pierde si salta el stop: ese % del saldo de la cuenta entre los puntos hasta el stop (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
-          Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
-          Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
-          La pirámide abre como mucho {datos.maxUnidades ?? 4} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
-          Un cambio vale para las sesiones que aún no han fijado su bracket.
-        </p>
+        {tortuga ? (
+          <p className="bot-nota">
+            Solo vende, y solo los días en que la primera vela de 5 min cierra en negativo: al perder su mínimo, con el stop en su máximo.
+            El tamaño sale del riesgo, que es lo que se pierde si salta ese stop: ese % del saldo de la cuenta entre el rango de la vela (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
+            La entrada va a mercado, pero solo si el precio no se ha ido del mínimo más de lo que digas.
+            La pirámide añade otra posición cada ½ N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
+            N es el rango verdadero medio de las 20 velas de 5 min hasta la primera, ella incluida.
+            Un cambio vale para las sesiones que aún no han fijado su bracket.
+          </p>
+        ) : (
+          <p className="bot-nota">
+            El tamaño sale del riesgo, que es lo que se pierde si salta el stop: ese % del saldo de la cuenta entre los puntos hasta el stop (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
+            Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
+            Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
+            La pirámide abre como mucho {datos.maxUnidades ?? 4} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
+            Un cambio vale para las sesiones que aún no han fijado su bracket.
+          </p>
+        )}
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
           const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct } = form
           guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
@@ -469,6 +491,10 @@ function SesionHoy({ cuentas, nombre, maxUnidades, ahora }) {
         )}
         <div className="bot-dato"><span>Bracket</span><b>{d.bracket ? `${precio(d.bracket.rango)} puntos` : '—'}</b>
           <small>{d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : 'esperando su vela'}</small></div>
+        {d.n > 0 && (
+          <div className="bot-dato"><span>N</span><b>{precio(d.n)}</b>
+            <small>añade cada {precio(d.n * (d.config.piramide ?? 0.5))} · stop a {precio(d.n * (d.config.stopN ?? 2))}</small></div>
+        )}
         <div className="bot-dato"><span>Riesgo</span><b>{plan ? `${Math.round(plan.riesgoEur)} €` : '—'}</b>
           <small>{plan ? `${num(plan.tamano, 1)} contratos de ${plan.valorPunto} ${plan.moneda}/punto` : ''}</small></div>
         {antes && (
@@ -480,7 +506,7 @@ function SesionHoy({ cuentas, nombre, maxUnidades, ahora }) {
             <small>deslizamiento {pts(op.deslizamiento)}{vivas.length > 1 ? ` · ${num(contratos, 1)} contratos` : ''}</small></div>
         )}
         {op && !op.salida && (
-          <div className="bot-dato"><span>Stop{op.be ? ' (break even)' : ''}</span><b>{precio(op.stop)}</b>
+          <div className="bot-dato"><span>Stop{op.be ? ' (break even)' : op.stopMovido ? ' (a 2 N)' : ''}</span><b>{precio(op.stop)}</b>
             <small className={tono(alStop)}>si salta: {eur(alStop)}</small></div>
         )}
         {d.salida && (

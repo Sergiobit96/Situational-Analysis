@@ -26,13 +26,15 @@ export function abiertoSrs(d) {
 
 // Dónde entraría el siguiente añadido de la pirámide: como nivelAnadido de server/bot-srs.js,
 // n veces `piramide` R a favor del nivel de la orden de entrada (R, el riesgo inicial de la
-// pierna; n, las posiciones abiertas). null si no hay pirámide o ya está llena.
+// pierna; n, las posiciones abiertas). Con la de las tortugas (First bar negative), `piramide`
+// N desde la última posición, como nivelAnadidoN. null si no hay pirámide o ya está llena.
 export function siguienteAnadidoSrs(d, maxUnidades) {
   const op = d.operacion
   const paso = d.config?.piramide
   if (!op || op.salida || op.sinAnadidos || !paso || !(op.riesgo > 0)) return null
   const n = op.unidades?.length ?? 1
   if (n >= maxUnidades) return null
+  if (d.config.piramideN) return d.n > 0 ? (op.unidades?.at(-1)?.entrada ?? op.entrada) + dir(op.lado) * paso * d.n : null
   return (op.nivelOrden ?? op.entrada) + dir(op.lado) * n * paso * op.riesgo
 }
 

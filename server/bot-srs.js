@@ -41,6 +41,13 @@
 // de Nueva York) y dos horas de duración, y el bracket en la cuarta vela de 10 min. Es otro
 // bot, con su registro, su configuración y sus referencias (R4-…): los dos pueden tener a la
 // vez posiciones en el mismo índice, que IG no compensa (las órdenes van con forceOpen).
+//
+// Y First bar negative (FIRST_BAR_NEGATIVE, referencias FBN-…): en la sesión de cada bolsa, el
+// bracket es la primera vela de 5 min y solo se opera si cierra en negativo, vendiendo al
+// perder su mínimo con el stop en su máximo. La pirámide es la de las tortugas: una posición
+// más cada ½ N desde el precio de la última, y el stop de todas a 2 N de ella (solo
+// apretando). N es el rango verdadero medio de 20 velas de 5 min al cerrar la del bracket,
+// ella incluida, como en la pestaña Estrategias; sin N, la pierna no añade.
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
 import { offsetMadrid } from './velas-grafico.js'
@@ -125,16 +132,20 @@ const conBracket = (ticker, fecha, abre, cierra, minutosVela, nBracket) => ({
   finBracket:  abre + nBracket * minutosVela * 60,
 })
 
-// La sesión de un instrumento en curso en `t` (o la de ese día, si ya cerró), en su bolsa.
-// null en fin de semana.
-export function sesionDe(ticker, t) {
+// La sesión de un instrumento en curso en `t` (o la de ese día, si ya cerró), en su bolsa,
+// con la vela del bracket que diga la estrategia. null en fin de semana.
+function sesionEnBolsa(ticker, t, minutosVela, nBracket) {
   const s = SESIONES_BOT[ticker]
   if (!s) return null
   const dow = diaSemanaEnZona(t, s.zona)
   if (dow === 0 || dow === 6) return null
   const fecha = fechaEnZona(t, s.zona)
-  return conBracket(ticker, fecha, instanteEnZona(fecha, s.apertura, s.zona), instanteEnZona(fecha, s.cierre, s.zona), MINUTOS_VELA, 2)
+  return conBracket(ticker, fecha, instanteEnZona(fecha, s.apertura, s.zona), instanteEnZona(fecha, s.cierre, s.zona), minutosVela, nBracket)
 }
+// El SRS: la segunda vela de 15 min
+export const sesionDe = (ticker, t) => sesionEnBolsa(ticker, t, MINUTOS_VELA, 2)
+// First bar negative: la primera de 5 min
+export const sesionFirstBar = (ticker, t) => sesionEnBolsa(ticker, t, 5, 1)
 
 // La próxima apertura de un instrumento a partir de `t` (para enseñarla en la pestaña)
 export function proximaApertura(ticker, t) {
@@ -187,6 +198,24 @@ export const RULE_OF_4 = {
   },
   sesionDe: sesionRuleOf4, proximaApertura: proximaRuleOf4,
 }
+// Lo que la pestaña no cambia va también en la configuración, para que cada sesión lo lleve
+// apuntado y el backtest de la pestaña Bot lo use: solo ventas (`modo`), solo con la vela en
+// negativo (`colorBracket`) y la pirámide en N (`piramide` es el paso, en N).
+export const FIRST_BAR_NEGATIVE = {
+  id: 'first-bar-negative', nombre: 'First bar negative', prefijo: 'FBN-', etiquetaLog: 'first bar negative', aviso: 'First bar negative · ',
+  minutosVela: 5, nBracket: 1,
+  modos: ['corto'],
+  configInicial: {
+    ...CONFIG_INICIAL,
+    modo: 'corto', stopPct: 1, beR: null,
+    piramide: 0.5, tamanoAnadido: 1,
+    colorBracket: 'bajista', piramideN: true, stopN: 2, velasN: 20, minVelasN: 10,
+  },
+  describir: {
+    piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta ${MAX_UNIDADES - 1} añadidos`}`,
+  },
+  sesionDe: sesionFirstBar, proximaApertura,
+}
 
 // ── Piernas y posiciones ──
 // Cada sesión tiene una pierna en curso (`operacion`: un sentido, con una o varias
@@ -205,6 +234,25 @@ const contrario = lado => (lado === 'largo' ? 'corto' : 'largo')
 // Dónde entra la posición n+1 de la pirámide: n tramos de `piramide` R desde el nivel de la
 // rotura, que es desde donde cuenta el backtest
 const nivelAnadido = (op, cfg, n) => op.nivelOrden + (op.lado === 'largo' ? 1 : -1) * n * cfg.piramide * op.riesgo
+// Con la pirámide de las tortugas (cfg.piramideN), `piramide` N desde el precio de la última
+// posición, como el backtest. null sin N
+const nivelAnadidoN = (op, cfg, n) => (n > 0 ? op.unidades.at(-1).entrada + (op.lado === 'largo' ? 1 : -1) * cfg.piramide * n : null)
+const redondear = x => Math.round(x * 10) / 10
+
+// Rango verdadero medio de las `k` últimas velas (cada una desde el cierre de la anterior), o de
+// las que haya si son al menos `minimo`. Es el N de rangoVerdaderoMedio en
+// src/segundaVelaCore.js, que el servidor no puede importar.
+export function rangoVerdaderoMedio(velas, k, minimo = k) {
+  if (velas.length < minimo) return null
+  k = Math.min(k, velas.length)
+  let suma = 0
+  for (let i = velas.length - k; i < velas.length; i++) {
+    const v = velas[i]
+    const c = velas[i - 1]?.close
+    suma += c == null ? v.high - v.low : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+  }
+  return suma / k
+}
 
 // ── La decisión (pura) ──
 // Con el apunte de la sesión, la configuración, la hora, las últimas velas de 1 min en
@@ -236,8 +284,8 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
     const n = op.unidades?.length ?? 1
     if (cfg.activo && cfg.piramide && n < MAX_UNIDADES && !op.sinAnadidos && precio != null
         && Math.floor(ahora / 300) !== op.ultimoCubo5 && !(op.esperaAnadir > ahora)) {
-      const nivel = nivelAnadido(op, cfg, n)
-      if (largo ? precio >= nivel : precio <= nivel) return { accion: 'anadir' }
+      const nivel = cfg.piramideN ? nivelAnadidoN(op, cfg, dia.n) : nivelAnadido(op, cfg, n)
+      if (nivel != null && (largo ? precio >= nivel : precio <= nivel)) return { accion: 'anadir' }
     }
     if (cfg.beR != null && !op.be) {
       const despues = velas.filter(v => v.time + 60 > op.hora)
@@ -264,7 +312,7 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
 
   const { high, low } = dia.bracket
   for (const v of velas.filter(x => x.time >= ses.finBracket)) {
-    if (v.high > high) return { accion: 'entrar', lado: 'largo' }
+    if (cfg.modo !== 'corto' && v.high > high) return { accion: 'entrar', lado: 'largo' }
     if (cfg.modo !== 'largo' && v.low < low) return { accion: 'entrar', lado: 'corto' }
   }
   return { accion: 'nada' }
@@ -335,7 +383,7 @@ const DESCRIBIR = {
 
 // ── El bot ──
 // `avisar(texto)` recibe lo que pasa (para Telegram); si falla, el bot sigue a lo suyo.
-// `estrategia`: SRS (por defecto) o RULE_OF_4.
+// `estrategia`: SRS (por defecto), RULE_OF_4 o FIRST_BAR_NEGATIVE.
 export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS }) {
   const E = estrategia
   const inicial = E.configInicial
@@ -461,6 +509,38 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     }
   }
 
+  // El N de la pirámide de las tortugas, al cerrar la vela del bracket: el rango verdadero medio
+  // de las `velasN` últimas velas de 5 min, ella incluida. Del directo si las tiene todas (el
+  // servidor estaba en marcha antes de la apertura); si no, del histórico de IG, y si este
+  // falla, del directo si llega al mínimo. Se guardan las de antes de la del bracket para que el
+  // backtest de la pestaña Bot mida el mismo N. Sin N, la pierna no añade.
+  async function medirN(dia, ses) {
+    const cfg = dia.config
+    const k = cfg.velasN ?? 20
+    const minimo = cfg.minVelasN ?? k
+    // una más de las que se miden: la más vieja solo pone el cierre del que parte la siguiente
+    const desde = ses.velaBracket - k * 300
+    const hasta = ses.velaBracket + 300
+    let velas = agruparDirecto(directo(dia.ticker), desde, hasta, 5)
+    let de = 'del directo'
+    if (velas.length < k + 1) {
+      try {
+        const hist = await historico(dia.ticker, desde, hasta)
+        if (hist.length > velas.length) { velas = hist; de = 'del histórico de IG' }
+      } catch (err) { de = `del directo; el histórico de IG falla: ${err.message}` }
+    }
+    velas = velas.filter(v => v.time <= ses.velaBracket)
+    const n = rangoVerdaderoMedio(velas, k, minimo)
+    if (!(n > 0)) {
+      dia.n = null
+      apuntar(dia, `Sin N: hay ${velas.length} velas de 5 min hasta la del bracket (${de}) y hacen falta ${minimo}. Hoy la pierna no añade`)
+      return
+    }
+    dia.n = n
+    dia.previasN = velas.filter(v => v.time < ses.velaBracket).map(v => [v.time, v.open, v.high, v.low, v.close])
+    apuntar(dia, `N = ${n.toFixed(1)} puntos, con ${Math.min(k, velas.length)} velas de 5 min ${de}`, { aviso: false })
+  }
+
   // El bracket y el plan del día: qué contrato, cuántos y si cabe en el margen
   async function bracketYPlan(dia, ses) {
     const cfg = dia.config
@@ -486,11 +566,19 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       dia.cierreBracket = v.close
       const pct = rango / v.close * 100
       apuntar(dia, `Bracket ${v.low.toFixed(1)} – ${v.high.toFixed(1)} (${rango.toFixed(1)} puntos, ${pct.toFixed(2)}%)`)
+      // la vela tiene que cerrar del color que pide la estrategia (blanca si cierra por encima de
+      // su apertura, como en el backtest)
+      if (cfg.colorBracket && (v.close >= v.open ? 'alcista' : 'bajista') !== cfg.colorBracket) {
+        dia.estado = 'sin-operar'
+        apuntar(dia, `La vela cierra en ${v.close >= v.open ? 'positivo' : 'negativo'} (abre ${v.open.toFixed(1)}, cierra ${v.close.toFixed(1)}): hoy no se opera`)
+        return
+      }
       if (!(rango > 0) || pct > cfg.rangoMaxPct) {
         dia.estado = 'sin-operar'
         apuntar(dia, `Rango fuera del límite (${cfg.rangoMaxPct}% del precio): hoy no se opera`)
         return
       }
+      if (cfg.piramideN && cfg.piramide) await medirN(dia, ses)
     }
     const { rango } = dia.bracket
 
@@ -508,7 +596,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
           return
         }
       }
-      const rota = despues.find(x => x.high > v.high || (cfg.modo !== 'largo' && x.low < v.low))
+      const rota = despues.find(x => (cfg.modo !== 'corto' && x.high > v.high) || (cfg.modo !== 'largo' && x.low < v.low))
       if (rota) {
         dia.estado = 'sin-operar'
         apuntar(dia, `La rotura fue a las ${horaMadrid(rota.time)} con el bot parado: hoy no se entra`)
@@ -559,7 +647,8 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     dia.plan = plan
     dia.estado = 'esperando-rotura'
     apuntar(dia, `Plan: ${plan.tamano} contratos de ${plan.epic} (${plan.valorPunto} ${plan.moneda} por punto), ${Math.round(plan.riesgoEur)} € hasta el stop`
-      + ` (el ${String(cfg.riesgoPct).replace('.', ',')}% de ${Math.round(cuenta.saldo).toLocaleString('es-ES')} € son ${Math.round(riesgoEur)} €)`)
+      + ` (el ${String(cfg.riesgoPct).replace('.', ',')}% de ${Math.round(cuenta.saldo).toLocaleString('es-ES')} € son ${Math.round(riesgoEur)} €)`
+      + (dia.n ? `. N = ${dia.n.toFixed(1)}: añade cada ${(cfg.piramide * dia.n).toFixed(1)} puntos y lleva el stop a ${(cfg.stopN * dia.n).toFixed(1)} de la última` : ''))
   }
 
   // Entra en la rotura (o, con `vuelta`, en el sentido contrario tras saltar el stop) si el
@@ -720,8 +809,28 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     return op.lado === 'largo' ? Math.max(op.stop, medio) : Math.min(op.stop, medio)
   }
 
+  // Con la pirámide de las tortugas, el stop de toda la pierna a `stopN` N de la última posición;
+  // también solo se aprieta. `extra`, una que va a entrar a ese precio
+  function stopN(dia, extra = null) {
+    const op = dia.operacion
+    const ultima = extra ?? op.unidades.at(-1).entrada
+    const nuevo = redondear(op.lado === 'largo' ? ultima - dia.config.stopN * dia.n : ultima + dia.config.stopN * dia.n)
+    return op.lado === 'largo' ? Math.max(op.stop, nuevo) : Math.min(op.stop, nuevo)
+  }
+
   async function ajustarStops(dia) {
     const op = dia.operacion
+    if (dia.config.piramideN) {
+      const stop = stopN(dia)
+      if (stop === op.stop && op.unidades.every(u => u.salida || u.stop === stop)) return
+      const movido = stop !== op.stop
+      const fallos = await moverStops(dia, stop)
+      if (fallos.length) { apuntar(dia, `IG no deja mover el stop a ${stop}: ${fallos[0]}`); return }
+      // de aquí en adelante, si salta, es el stop a 2 N y no el del bracket
+      if (movido) op.stopMovido = true
+      apuntar(dia, `Stop de las ${op.unidades.length} posiciones a ${stop}${movido ? `, a ${dia.config.stopN} N de la última` : ''}`)
+      return
+    }
     const stop = stopMedio(op)
     // con el stop en el precio medio la pierna ya no pierde: como en el backtest, cuenta como
     // break even, y de un break even no se da la vuelta
@@ -743,18 +852,28 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const tope = cfg.deslizamientoMaxR * dia.bracket.rango
     const m = await ig.operar.datosMercado(dia.ticker, plan.epic)
     const precio = largo ? m.oferta : m.bid
-    // el último nivel alcanzado: si el precio se saltó alguno, entra en el de ahora
-    const n = Math.floor((largo ? precio - op.nivelOrden : op.nivelOrden - precio) / (cfg.piramide * op.riesgo) + 1e-9)
-    if (n < op.unidades.length) return
-    const nivel = nivelAnadido(op, cfg, n)
-    const exceso = largo ? precio - nivel : nivel - precio
-    if (exceso > tope) {
-      op.esperaAnadir = ahora() + 5
-      if (op.avisoAnadido !== n) {
-        op.avisoAnadido = n
-        apuntar(dia, `Añadido en espera: el precio va ${exceso.toFixed(1)} puntos más allá de su nivel (${nivel.toFixed(1)}), y el tope es ${tope.toFixed(1)}`, { aviso: false })
+    let n, nivel
+    if (cfg.piramideN) {
+      // tortugas: el nivel cuenta desde el precio de la última, y si el precio ya lo ha pasado
+      // entra al de ahora, como el backtest con una vela que abre más allá; la siguiente contará
+      // desde ahí
+      n = op.unidades.length
+      nivel = nivelAnadidoN(op, cfg, dia.n)
+      if (nivel == null || (largo ? precio < nivel : precio > nivel)) return
+    } else {
+      // el último nivel alcanzado: si el precio se saltó alguno, entra en el de ahora
+      n = Math.floor((largo ? precio - op.nivelOrden : op.nivelOrden - precio) / (cfg.piramide * op.riesgo) + 1e-9)
+      if (n < op.unidades.length) return
+      nivel = nivelAnadido(op, cfg, n)
+      const exceso = largo ? precio - nivel : nivel - precio
+      if (exceso > tope) {
+        op.esperaAnadir = ahora() + 5
+        if (op.avisoAnadido !== n) {
+          op.avisoAnadido = n
+          apuntar(dia, `Añadido en espera: el precio va ${exceso.toFixed(1)} puntos más allá de su nivel (${nivel.toFixed(1)}), y el tope es ${tope.toFixed(1)}`, { aviso: false })
+        }
+        return
       }
-      return
     }
     let tamano = Math.max(plan.tamanoMin ?? 0.1, Math.round(plan.tamano * cfg.tamanoAnadido * 10) / 10)
     // el margen: lo que queda del disponible tras guardar el de las entradas de los demás y un colchón
@@ -780,8 +899,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
         tamano = cabe
       }
     }
-    const stop = stopMedio(op, { tamano, entrada: precio })
-    const limite = m.aMercado ? null : (largo ? nivel + tope : nivel - tope)
+    const stop = cfg.piramideN ? stopN(dia, precio) : stopMedio(op, { tamano, entrada: precio })
+    // donde IG no admite órdenes a mercado, el límite va a un tope del nivel (o del precio de
+    // ahora, si la de las tortugas ya lo ha pasado)
+    const desdeNivel = cfg.piramideN ? precio : nivel
+    const limite = m.aMercado ? null : (largo ? desdeNivel + tope : desdeNivel - tope)
     const referencia = referenciaNueva(dia)
     // tras un rechazo de IG por falta de fondos, los reintentos no se apuntan hasta que entre
     const reintento = op.sinFondos != null
@@ -954,7 +1076,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       apuntar(dia, `Salió ${idas.length} de ${pendientes.length} posiciones por el stop: se cierran las demás`)
       if ((await cerrarUnidades(dia, vivas)).length) return
     }
-    terminarPierna(dia, op.be ? 'breakeven' : 'stop', ses)
+    terminarPierna(dia, op.stopMovido ? 'stopN' : op.be ? 'breakeven' : 'stop', ses)
   }
 
   // Salidas apuntadas al precio del stop porque IG aún no las tenía en la actividad: se
@@ -1141,7 +1263,8 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       }
     }
     if ('modo' in cambios) {
-      if (!['largo', 'ambos', 'flip'].includes(cambios.modo)) throw new Error('Modo no válido: largo, ambos o flip')
+      const modos = E.modos ?? ['largo', 'ambos', 'flip']
+      if (!modos.includes(cambios.modo)) throw new Error(`Modo no válido: ${modos.join(', ')}`)
       c.modo = cambios.modo
     }
     if ('stopPct' in cambios) {
@@ -1169,7 +1292,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const antes = datos.config
     datos.config = c
     guardar()
-    const lineas = Object.entries(DESCRIBIR).filter(([k]) => antes[k] !== c[k]).map(([k, describir]) => describir(c[k]))
+    const lineas = Object.entries({ ...DESCRIBIR, ...E.describir }).filter(([k]) => antes[k] !== c[k]).map(([k, describir]) => describir(c[k]))
     for (const t of Object.keys(SESIONES_BOT)) {
       if (!!antes.instrumentos[t] !== !!c.instrumentos[t]) lineas.push(`${SESIONES_BOT[t].nombre}: ${c.instrumentos[t] ? 'activado' : 'desactivado'}`)
     }

@@ -13,7 +13,7 @@ import { crearGrabacion, inicioCubo, tramosEnteros } from './grabacion-directo.j
 import { crearMt5, simbolosDeEnv } from './mt5.js'
 import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
 import { suscribir, resumenTiempoReal, escucharFuente, sembrarVelas } from './tiempo-real.js'
-import { crearBot, RULE_OF_4 } from './bot-srs.js'
+import { crearBot, RULE_OF_4, FIRST_BAR_NEGATIVE } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
@@ -3015,6 +3015,32 @@ app.post('/api/bot/rule-of-4/parar', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ── Bot de First bar negative en la demo de IG (FIRST_BAR_NEGATIVE en server/bot-srs.js) ──
+// El motor del SRS con la primera vela de 5 min de cada sesión: solo vende, y solo si esa vela
+// cierra en negativo, con la pirámide de las tortugas. Como la Rule of 4: su registro, sus
+// referencias (FBN-…), opera donde BOT_OPERA=1, el mismo Telegram y la misma clave. Nace apagado.
+const BOT_FBN_PATH = process.env.BOT_FBN || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-first-bar-negative.json' : 'Bot First bar negative.json')
+const botFbn = bot ? crearBot({ ig, archivo: BOT_FBN_PATH, estrategia: FIRST_BAR_NEGATIVE, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+if (botFbn && BOT_OPERA) botFbn.arrancar()
+if (botFbn) console.log(`[first bar negative] registro en ${BOT_FBN_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+
+app.get('/api/bot/first-bar-negative', (req, res) => {
+  if (!botFbn) return sinBot(res)
+  res.json({ archivo: BOT_FBN_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botFbn.estado() })
+})
+
+app.put('/api/bot/first-bar-negative/config', (req, res) => {
+  if (!botFbn) return sinBot(res)
+  try { res.json(botFbn.cambiarConfig(req.body ?? {})) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+
+app.post('/api/bot/first-bar-negative/parar', async (req, res) => {
+  if (!botFbn) return sinBot(res)
+  try { res.json(await botFbn.pararYCerrar()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
 // ── Bot de las tortugas en la demo de IG (ver server/bot-tortugas.js) ──
 // Como el SRS: existe con IG en la demo, opera solo donde BOT_OPERA=1 y avisa por el mismo
 // Telegram. Va bajo /api/bot, con la misma clave. Sus niveles salen del diario de cada mercado:
@@ -3101,7 +3127,7 @@ if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT
 // similar), que es el único que puede avisar si se cae el proceso entero. Sin clave: no
 // enseña nada más que esto.
 const vigilancia = crearVigilancia({
-  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['Tortugas', botTortugas]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
+  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
   avisar: avisarServidor,
 })
 if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)

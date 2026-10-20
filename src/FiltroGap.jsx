@@ -5,33 +5,46 @@ import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
 import { DUKA_TICKERS, INSTRUMENTOS as PRESETS, intradayUrl } from './intradayApi'
 import { conClaveBot } from './claveBot'
+import {
+  TODOS_LOS_DIAS, FILTROS_INICIALES, fechasEspeciales, filtrarSesiones, contarOpciones, hayFiltros,
+} from './filtroGapCore'
 
 const DIAS = [
-  { n: 1, label: 'L', nombre: 'Lunes' },
-  { n: 2, label: 'M', nombre: 'Martes' },
-  { n: 3, label: 'X', nombre: 'Miércoles' },
-  { n: 4, label: 'J', nombre: 'Jueves' },
-  { n: 5, label: 'V', nombre: 'Viernes' },
+  { n: 1, label: 'Lun', nombre: 'Lunes' },
+  { n: 2, label: 'Mar', nombre: 'Martes' },
+  { n: 3, label: 'Mié', nombre: 'Miércoles' },
+  { n: 4, label: 'Jue', nombre: 'Jueves' },
+  { n: 5, label: 'Vie', nombre: 'Viernes' },
 ]
 
+const DIRECCIONES = [
+  { v: 'both', label: 'Ambas'       },
+  { v: 'up',   label: '▲ Al alza'   },
+  { v: 'down', label: '▼ A la baja' },
+]
+
+// Umbrales del gap mínimo; el 0 es «Todos»
 const GAP_SIZES = [0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
 
 // Gaps sugeridos en puntos: varían mucho según la escala de precio del instrumento
 // (p.ej. 50 pts es pequeño para el DAX pero enorme para la Plata), así que se eligen
 // por ticker en vez de un único set de chips válido para todos.
 const GAP_PTS_SUGERIDOS = {
-  '^GDAXI': [10, 25, 50, 100, 200, 400],
-  '^FTSE':  [10, 20, 40, 75, 150, 300],
-  '^GSPC':  [5, 10, 20, 40, 75, 150],
-  '^NDX':   [10, 25, 50, 100, 200, 400],
-  '^DJI':   [25, 50, 100, 200, 400, 800],
-  '^RUT':   [2, 5, 10, 20, 40, 75],
-  '^N225':  [50, 100, 200, 400, 800, 1500],
-  'XAUUSD': [5, 10, 20, 40, 75, 150],
-  'XAGUSD': [0.1, 0.25, 0.5, 1, 2, 4],
-  'USOIL':  [0.25, 0.5, 1, 2, 4, 8],
+  '^GDAXI': [0, 10, 25, 50, 100, 200, 400],
+  '^FTSE':  [0, 10, 20, 40, 75, 150, 300],
+  '^GSPC':  [0, 5, 10, 20, 40, 75, 150],
+  '^NDX':   [0, 10, 25, 50, 100, 200, 400],
+  '^DJI':   [0, 25, 50, 100, 200, 400, 800],
+  '^RUT':   [0, 2, 5, 10, 20, 40, 75],
+  '^N225':  [0, 50, 100, 200, 400, 800, 1500],
+  'XAUUSD': [0, 5, 10, 20, 40, 75, 150],
+  'XAGUSD': [0, 0.1, 0.25, 0.5, 1, 2, 4],
+  'USOIL':  [0, 0.25, 0.5, 1, 2, 4, 8],
 }
-const GAP_PTS_DEFAULT = [0.5, 1, 2, 5, 10, 25]
+const GAP_PTS_DEFAULT = [0, 0.5, 1, 2, 5, 10, 25]
+
+const umbralesGap = (gapModo, tkr) => (gapModo === 'pct' ? GAP_SIZES : (GAP_PTS_SUGERIDOS[tkr] ?? GAP_PTS_DEFAULT))
+const fmtUmbral   = (g, gapModo) => (gapModo === 'pct' ? `${g}%` : `${g} pts`)
 
 const EVENTOS_DEF = [
   { id: 'FOMC', label: 'FOMC',  title: 'Fed rate decision' },
@@ -42,14 +55,37 @@ const EVENTOS_DEF = [
   { id: 'GDP',  label: 'GDP',   title: 'Gross Domestic Product' },
   { id: 'PMI',  label: 'PMI',   title: 'Purchasing Managers Index' },
 ]
+const EVENTO_IDS = EVENTOS_DEF.map(e => e.id)
+
+const DIAS_ESPECIALES = [
+  { id: 'primerMes',  label: 'Primer día del mes',       title: 'Primer día de negociación del mes' },
+  { id: 'ultimoMes',  label: 'Último día del mes',       title: 'Último día de negociación del mes' },
+  { id: 'primerTrim', label: 'Primer día del trimestre', title: 'Primer día de negociación del trimestre (ene/abr/jul/oct)' },
+  { id: 'ultimoTrim', label: 'Último día del trimestre', title: 'Último día de negociación del trimestre (mar/jun/sep/dic)' },
+  { id: 'festivo',    label: 'Después de un festivo',    title: 'Día siguiente a un festivo de mercado (se saltó al menos un día hábil)' },
+]
+const DIA_ESP_IDS = DIAS_ESPECIALES.map(d => d.id)
 
 const PERIODOS = [
-  { meses: 3,  label: '3m'  },
-  { meses: 6,  label: '6m'  },
-  { meses: 12, label: '12m' },
-  { meses: 24, label: '2a'  },
-  { meses: 60, label: '5a'  },
+  { meses: 3,   label: '3 meses' },
+  { meses: 6,   label: '6 meses' },
+  { meses: 12,  label: '1 año'   },
+  { meses: 24,  label: '2 años'  },
+  { meses: 60,  label: '5 años'  },
+  { meses: 120, label: '10 años' },
 ]
+
+const TIMEFRAMES = [
+  { label: '1m',  duka: 'm1'  },
+  { label: '5m',  duka: 'm5'  },
+  { label: '15m', duka: 'm15' },
+  { label: '30m', duka: 'm30' },
+  { label: '1h',  duka: 'h1'  },
+]
+
+// Listas vacías fijas, para que los useMemo no se recalculen en cada render sin datos
+const SIN_SESIONES = []
+const SIN_VELAS    = []
 
 const STOCKS = {
   '^GDAXI': [
@@ -857,43 +893,59 @@ function nombreInstrumento(tkr) {
   return tkr
 }
 
-// Lee los filtros de búsqueda desde la query string (para que una búsqueda sea
-// compartible/recargable), con los mismos valores por defecto que sin URL.
-function leerFiltrosDeURL() {
+// Lee la búsqueda desde la query string (para que sea compartible y sobreviva a recargar),
+// con los mismos valores por defecto que sin URL.
+function leerBusquedaDeURL() {
   const p = new URLSearchParams(window.location.search)
+  const lista = k => (p.get(k) ?? '').split(',').filter(Boolean)
   return {
-    ticker:         p.get('ticker') || '^GDAXI',
-    dias:           p.has('dias')   ? new Set(p.get('dias').split(',').filter(Boolean).map(Number)) : new Set([1, 2, 3, 4, 5]),
-    dir:            p.get('dir') || 'both',
-    gapMin:         p.has('gapMin') ? parseFloat(p.get('gapMin')) || 0 : 0,
-    gapModo:        p.get('gapModo') === 'pts' ? 'pts' : 'pct',
-    meses:          p.has('meses')  ? parseInt(p.get('meses'), 10) || 12 : 12,
-    eventosActivos: p.has('eventos') ? new Set(p.get('eventos').split(',').filter(Boolean)) : new Set(),
-    diasEspeciales: p.has('diasEsp') ? new Set(p.get('diasEsp').split(',').filter(Boolean)) : new Set(),
+    ticker: p.get('ticker') || '^GDAXI',
+    meses:  parseInt(p.get('meses'), 10) || 12,
+    filtros: {
+      dias:    p.has('dias') ? new Set(lista('dias').map(Number).filter(n => TODOS_LOS_DIAS.includes(n))) : new Set(TODOS_LOS_DIAS),
+      dir:     ['up', 'down'].includes(p.get('dir')) ? p.get('dir') : 'both',
+      gapMin:  parseFloat(p.get('gapMin')) || 0,
+      gapModo: p.get('gapModo') === 'pts' ? 'pts' : 'pct',
+      eventos: new Set(lista('eventos').filter(id => EVENTO_IDS.includes(id))),
+      diasEsp: new Set(lista('diasEsp').filter(id => DIA_ESP_IDS.includes(id))),
+    },
   }
 }
 
+// Un botón de filtro con cuántas sesiones quedarían al marcarlo (sin número mientras cargan)
+function ChipFiltro({ activo, cuenta, onClick, title, children }) {
+  return (
+    <button
+      className={`chip gf-chip ${activo ? 'activo' : ''} ${cuenta === 0 && !activo ? 'sin-sesiones' : ''}`}
+      aria-pressed={activo}
+      onClick={onClick}
+      title={title}
+    >
+      {children}
+      {cuenta != null && <span className="chip-cuenta">{cuenta}</span>}
+    </button>
+  )
+}
+
 export default function FiltroGap() {
-  const [filtrosURL] = useState(leerFiltrosDeURL)
-  const [ticker,        setTicker]        = useState(filtrosURL.ticker)
-  const [dias,          setDias]          = useState(filtrosURL.dias)
-  const [dir,           setDir]           = useState(filtrosURL.dir)
-  const [gapMin,        setGapMin]        = useState(filtrosURL.gapMin)
-  const [gapModo,       setGapModo]       = useState(filtrosURL.gapModo) // 'pct' | 'pts'
-  const [meses,         setMeses]         = useState(filtrosURL.meses)
-  const [eventosActivos, setEventosActivos] = useState(filtrosURL.eventosActivos)
-  const [cargando,      setCargando]      = useState(false)
-  const [resultado,     setResultado]     = useState(null)
-  const [error,         setError]         = useState(null)
-  const [seleccion,     setSeleccion]     = useState(null)
-  const [velas,         setVelas]         = useState([])
-  const [fuenteVelas,   setFuenteVelas]   = useState(null)
-  const [cargandoVelas, setCargandoVelas] = useState(false)
-  const [timeframe,     setTimeframe]     = useState('m15')
-  const [fechaManual,   setFechaManual]   = useState('')
-  const [cotizacion,        setCotizacion]        = useState(null)
-  const [cargandoCotizacion, setCargandoCotizacion] = useState(false)
-  const abortVelasRef = useRef(null)
+  const [deURL] = useState(leerBusquedaDeURL)
+  // El mercado y el histórico son lo que se le pide al servidor; los filtros van después,
+  // sobre las sesiones que manda, y por eso cambian al momento
+  const [ticker,      setTicker]      = useState(deURL.ticker)
+  const [textoTicker, setTextoTicker] = useState(deURL.ticker)
+  const [meses,       setMeses]       = useState(deURL.meses)
+  const [filtros,     setFiltros]     = useState(deURL.filtros)
+  // El gap mínimo escrito a mano, cuando no es uno de los botones
+  const [gapOtro, setGapOtro] = useState(() => {
+    const { gapMin, gapModo } = deURL.filtros
+    return umbralesGap(gapModo, deURL.ticker).includes(gapMin) ? '' : String(gapMin)
+  })
+  const [indiceAcciones, setIndiceAcciones] = useState(null)
+  const [busquedaAccion, setBusquedaAccion] = useState('')
+  const [timeframe,   setTimeframe]   = useState('m15')
+  const [errorPPT,    setErrorPPT]    = useState(null)
+  const [exportando,     setExportando]     = useState(false)
+  const [exportProgreso, setExportProgreso] = useState(null)  // { done, total }
   const [trades] = useTrades()
 
   // Operaciones del diario que coinciden con un ticker+fecha concretos (para marcarlas en el gráfico)
@@ -901,147 +953,191 @@ export default function FiltroGap() {
     t.ticker === tkr && (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha)
   )
 
-  // ── Modo multi-instrumento (fecha concreta) ──
-  const [indiceAcciones, setIndiceAcciones] = useState(null)
-  const [busquedaAccion, setBusquedaAccion] = useState('')
-  const [instrManual, setInstrManual] = useState(new Set())
-  const [velasMulti,  setVelasMulti]  = useState({})   // { ticker: {velas,fuente,loading} }
-  const [fechaMulti,  setFechaMulti]  = useState(null)
+  // ── Sesiones del periodo, todas: el servidor no filtra nada ──
+  // `clave` dice de qué mercado y periodo son; mientras no sea el que se ve, se está cargando
+  const claveDatos = `${ticker}|${meses}`
+  const [datos, setDatos] = useState({ clave: null, resultado: null, esp: null, error: null })
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetch(`/api/gap-filter?${new URLSearchParams({ ticker, meses })}`, { signal: ctrl.signal })
+      .then(async r => {
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error ?? 'No se pudieron traer las sesiones')
+        const esp = fechasEspeciales(d.sesiones, d.fechaInicio, new Date().toISOString().slice(0, 7))
+        setDatos({ clave: claveDatos, resultado: d, esp, error: null })
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError') setDatos({ clave: claveDatos, resultado: null, esp: null, error: e.message })
+      })
+    return () => ctrl.abort()
+  }, [claveDatos, ticker, meses])
+  const cargando   = datos.clave !== claveDatos
+  const resultado  = cargando ? null : datos.resultado
+  const esp        = cargando ? null : datos.esp
+  const errorDatos = cargando ? null : datos.error
+  const todas      = resultado?.sesiones ?? SIN_SESIONES
+
+  const umbrales  = umbralesGap(filtros.gapModo, ticker)
+  const visibles  = useMemo(() => filtrarSesiones(todas, filtros, esp), [todas, filtros, esp])
+  const cuentas   = useMemo(() => contarOpciones(todas, filtros, esp, {
+    umbrales, eventos: EVENTO_IDS, diasEsp: DIA_ESP_IDS,
+  }), [todas, filtros, esp, umbrales])
+  const c = resultado ? cuentas : null
+
+  // Paginación: orden descendente (más reciente primero) para ver datos actuales sin scroll.
+  // La página va con la lista en la que se eligió: si cambian los filtros, se vuelve a la 1.ª
+  const ordenadas = useMemo(() => [...visibles].reverse(), [visibles])
+  const [pag, setPag] = useState({ de: null, n: 0 })
+  const pagina         = pag.de === ordenadas ? pag.n : 0
+  const irAPagina      = n => setPag({ de: ordenadas, n })
+  const totalPaginas   = Math.max(1, Math.ceil(ordenadas.length / PAGE_SIZE))
+  const sesionesPagina = ordenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
+
+  // ── Filtros ──
+  const cambiar  = cambios => setFiltros(f => ({ ...f, ...cambios }))
+  const alternar = (grupo, valor) => setFiltros(f => {
+    const s = new Set(f[grupo]); s.has(valor) ? s.delete(valor) : s.add(valor)
+    return { ...f, [grupo]: s }
+  })
+  const elegirGap      = g => { cambiar({ gapMin: g }); setGapOtro('') }
+  const escribirGap    = texto => { setGapOtro(texto); const n = parseFloat(texto); cambiar({ gapMin: n > 0 ? n : 0 }) }
+  const cambiarModoGap = modo => {
+    if (modo === filtros.gapModo) return
+    cambiar({ gapModo: modo, gapMin: 0 }); setGapOtro('')
+  }
+  // el modo del gap (% o puntos) es una preferencia, no un filtro: se queda
+  const quitarFiltros  = () => { setFiltros(f => ({ ...FILTROS_INICIALES, gapModo: f.gapModo })); setGapOtro('') }
+
+  // ── Sesión que se ve en grande ──
+  // La pulsada en la lista mientras siga pasando los filtros; si no, la más reciente que pase.
+  // "Ver un día concreto" la cambia por esa fecha, o por varios mercados a la vez.
+  const [fechaElegida, setFechaElegida] = useState(null)
+  const [fechaSuelta,  setFechaSuelta]  = useState(null)
+  const [fechaManual,  setFechaManual]  = useState('')
+  const [instrManual,  setInstrManual]  = useState(new Set())
+  const [velasMulti,   setVelasMulti]   = useState({})   // { ticker: {velas,fuente,loading} }
+  const [fechaMulti,   setFechaMulti]   = useState(null)
   const abortMultiRef = useRef({})
-  const [pagina,         setPagina]         = useState(0)
-  const [diasEspeciales, setDiasEspeciales] = useState(filtrosURL.diasEspeciales)
-  const [exportando,     setExportando]     = useState(false)
-  const [exportProgreso, setExportProgreso] = useState(null)  // { done, total }
+  const seleccion = fechaMulti ? null
+    : fechaSuelta ? (todas.find(s => s.date === fechaSuelta) ?? { date: fechaSuelta })
+    : (visibles.find(s => s.date === fechaElegida) ?? visibles.at(-1) ?? null)
 
-  const toggleDia = n => setDias(prev => {
-    const s = new Set(prev); s.has(n) ? s.delete(n) : s.add(n); return s
-  })
+  const cerrarMulti = () => {
+    Object.values(abortMultiRef.current).forEach(ctrl => ctrl.abort())
+    abortMultiRef.current = {}
+    setVelasMulti({})
+    setFechaMulti(null)
+  }
 
-  const toggleEvento = id => setEventosActivos(prev => {
-    const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s
-  })
+  const elegirSesion = s => { setFechaElegida(s.date); setFechaSuelta(null); cerrarMulti() }
+
+  const elegirMercado = valor => {
+    const tkr = valor.trim().toUpperCase()
+    if (!tkr) return
+    setTextoTicker(tkr)
+    if (tkr === ticker) return
+    setTicker(tkr)
+    // los puntos de un mercado no valen para otro: 50 pts es poco en el DAX y muchísimo en la plata
+    if (filtros.gapModo === 'pts') { cambiar({ gapMin: 0 }); setGapOtro('') }
+    setFechaElegida(null)
+    setFechaSuelta(null)
+    cerrarMulti()
+  }
 
   const toggleInstrManual = val => setInstrManual(prev => {
     const s = new Set(prev); s.has(val) ? s.delete(val) : s.add(val); return s
   })
 
-  const toggleDiaEspecial = id => setDiasEspeciales(prev => {
-    const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s
-  })
-
-  // Calcula qué fechas son primer/último día de negociación del mes y del trimestre
-  const fechasEspeciales = useMemo(() => {
-    const all = resultado?.sesiones ?? []
-    if (all.length === 0) return null
-    const byMes = {}
-    for (const s of all) {
-      const key = s.date.slice(0, 7) // 'YYYY-MM'
-      if (!byMes[key]) byMes[key] = []
-      byMes[key].push(s.date)
-    }
-    const primerMes    = new Set()
-    const ultimoMes    = new Set()
-    const primerTrim   = new Set()
-    const ultimoTrim   = new Set()
-    const inicioTrim   = new Set(['01','04','07','10'])
-    const finTrim      = new Set(['03','06','09','12'])
-    for (const [key, fechas] of Object.entries(byMes)) {
-      const ord = [...fechas].sort()
-      const mes = key.slice(5, 7)
-      primerMes.add(ord[0])
-      ultimoMes.add(ord[ord.length - 1])
-      if (inicioTrim.has(mes)) primerTrim.add(ord[0])
-      if (finTrim.has(mes))    ultimoTrim.add(ord[ord.length - 1])
-    }
-    return { primerMes, ultimoMes, primerTrim, ultimoTrim }
-  }, [resultado])
-
-  // Filtrado secundario por evento y día especial (client-side, instantáneo)
-  const sesionesVisibles = (() => {
-    let all = resultado?.sesiones ?? []
-    if (eventosActivos.size > 0)
-      all = all.filter(s => s.eventos?.some(e => eventosActivos.has(e)))
-    if (diasEspeciales.size > 0 && fechasEspeciales)
-      all = all.filter(s =>
-        (diasEspeciales.has('primerMes')  && fechasEspeciales.primerMes.has(s.date))  ||
-        (diasEspeciales.has('ultimoMes')  && fechasEspeciales.ultimoMes.has(s.date))  ||
-        (diasEspeciales.has('primerTrim') && fechasEspeciales.primerTrim.has(s.date)) ||
-        (diasEspeciales.has('ultimoTrim') && fechasEspeciales.ultimoTrim.has(s.date)) ||
-        (diasEspeciales.has('festivo')    && s.eventos?.includes('FESTIVO'))
-      )
-    return all
-  })()
-
-  // Paginación: orden descendente (más reciente primero) para ver datos actuales sin scroll
-  const sesionesOrdenadas = [...sesionesVisibles].reverse()
-  const totalPaginas      = Math.max(1, Math.ceil(sesionesOrdenadas.length / PAGE_SIZE))
-  const sesionsPagina     = sesionesOrdenadas.slice(pagina * PAGE_SIZE, (pagina + 1) * PAGE_SIZE)
-
-  // Resetear página al cambiar resultados o filtros secundarios
-  useEffect(() => { setPagina(0) }, [resultado, eventosActivos, diasEspeciales])
-
-  const buscar = async () => {
-    if (!ticker.trim() || dias.size === 0) return
-    setCargando(true)
-    setError(null)
-    setResultado(null)
-    setSeleccion(null)
-    setVelas([])
-    setFuenteVelas(null)
-    setVelasMulti({})
-    setFechaMulti(null)
-    try {
-      const p = new URLSearchParams({
-        ticker: ticker.trim(),
-        dias:   [...dias].sort().join(','),
-        dir,
-        gapMin,
-        gapModo,
-        meses,
-        ...(diasEspeciales.size > 0 ? { diasEsp: [...diasEspeciales].join(',') } : {}),
-      })
-      const res  = await fetch(`/api/gap-filter?${p}`)
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      setResultado(data)
-      if (data.sesiones.length > 0) setSeleccion(data.sesiones[data.sesiones.length - 1])
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setCargando(false)
-    }
+  const irAFecha = () => {
+    if (!fechaManual) return
+    cerrarMulti()
+    // Sin mercados marcados, la fecha se ve con el de arriba
+    if (instrManual.size === 0) { setFechaSuelta(fechaManual); return }
+    setFechaSuelta(null)
+    const tickers = [...instrManual]
+    setVelasMulti(Object.fromEntries(tickers.map(t => [t, { velas: [], fuente: null, loading: true }])))
+    setFechaMulti(fechaManual)
+    tickers.forEach(tkr => {
+      const ctrl = new AbortController()
+      abortMultiRef.current[tkr] = ctrl
+      fetch(intradayUrl(tkr, fechaManual, timeframe), { signal: ctrl.signal })
+        .then(r => r.json())
+        .then(d => {
+          if (!ctrl.signal.aborted)
+            setVelasMulti(prev => ({ ...prev, [tkr]: { velas: d.velas ?? [], fuente: d.fuente ?? null, loading: false } }))
+        })
+        .catch(e => {
+          if (e.name !== 'AbortError')
+            setVelasMulti(prev => ({ ...prev, [tkr]: { velas: [], fuente: null, loading: false } }))
+        })
+    })
   }
 
-  // Si se abre un enlace con una búsqueda ya en la URL, la relanza automáticamente
+  // Velas intradía de la sesión que se ve, con el timeframe elegido
+  const abortVelasRef = useRef(null)
+  const fechaVelas = seleccion?.date ?? null
+  const claveVelas = fechaVelas ? `${ticker}|${fechaVelas}|${timeframe}` : null
+  const [velasDe, setVelasDe] = useState({ clave: null, velas: [], fuente: null })
   useEffect(() => {
-    if (window.location.search) buscar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!fechaVelas) return
+    const ctrl = new AbortController()
+    abortVelasRef.current = ctrl
+    fetch(intradayUrl(ticker, fechaVelas, timeframe), { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => setVelasDe({ clave: claveVelas, velas: d.velas ?? [], fuente: d.fuente ?? null }))
+      .catch(e => {
+        if (e.name === 'AbortError') return
+        console.error(e)
+        setVelasDe({ clave: claveVelas, velas: [], fuente: null })
+      })
+    return () => ctrl.abort()
+  }, [claveVelas, ticker, fechaVelas, timeframe])
+  const cargandoVelas = claveVelas !== null && velasDe.clave !== claveVelas
+  const velas         = cargandoVelas ? SIN_VELAS : velasDe.velas
+  const fuenteVelas   = cargandoVelas ? null : velasDe.fuente
 
-  // Mantiene la URL sincronizada con los filtros actuales, para que la búsqueda
-  // sea compartible por enlace y sobreviva a recargar la página
+  const cancelarVelas = () => {
+    abortVelasRef.current?.abort()
+    setVelasDe({ clave: claveVelas, velas: [], fuente: null })
+  }
+
+  // Última cotización del mercado que se ve, junto al buscador
+  const [cotizacion, setCotizacion] = useState({ para: null, datos: null })
+  useEffect(() => {
+    const ctrl = new AbortController()
+    fetch(`/api/ultima-cotizacion?ticker=${encodeURIComponent(ticker)}`, { signal: ctrl.signal })
+      .then(r => r.json())
+      .then(d => setCotizacion({ para: ticker, datos: d.error ? null : d }))
+      .catch(e => { if (e.name !== 'AbortError') setCotizacion({ para: ticker, datos: null }) })
+    return () => ctrl.abort()
+  }, [ticker])
+  const cargandoCotizacion = cotizacion.para !== ticker
+  const cot = cargandoCotizacion ? null : cotizacion.datos
+
+  // Mantiene la URL sincronizada con la búsqueda, para que sea compartible por enlace y
+  // sobreviva a recargar la página
   useEffect(() => {
     const p = new URLSearchParams({
-      ticker: ticker.trim(),
-      dias:   [...dias].sort().join(','),
-      dir,
-      gapMin,
-      gapModo,
+      ticker,
+      dias:    [...filtros.dias].sort().join(','),
+      dir:     filtros.dir,
+      gapMin:  filtros.gapMin,
+      gapModo: filtros.gapModo,
       meses,
-      ...(eventosActivos.size > 0 ? { eventos: [...eventosActivos].join(',') } : {}),
-      ...(diasEspeciales.size > 0 ? { diasEsp: [...diasEspeciales].join(',') } : {}),
+      ...(filtros.eventos.size > 0 ? { eventos: [...filtros.eventos].join(',') } : {}),
+      ...(filtros.diasEsp.size > 0 ? { diasEsp: [...filtros.diasEsp].join(',') } : {}),
     })
-    window.history.replaceState(null, '', `?${p}`)
-  }, [ticker, dias, dir, gapMin, gapModo, meses, eventosActivos, diasEspeciales])
+    window.history.replaceState(null, '', `?${p}${window.location.hash}`)
+  }, [ticker, meses, filtros])
 
   // Genera el PPT con el gráfico intradía de cada coincidencia (una llamada + un render
   // por sesión, igual que al hacer clic en una sesión en la lista de resultados).
   const exportarPPT = async () => {
-    const lista = sesionesVisibles
+    const lista = visibles
     if (lista.length === 0) return
-    const tkr = resultado?.ticker ?? ticker
+    const tkr = ticker
     setExportando(true)
-    setError(null)
+    setErrorPPT(null)
     setExportProgreso({ done: 0, total: lista.length })
     try {
       const sesionesConGrafico = []
@@ -1069,10 +1165,10 @@ export default function FiltroGap() {
           ticker:   tkr,
           sesiones: sesionesConGrafico,
           filtros: {
-            dias:    [...dias].sort().join(', '),
-            dir,
-            gapMin,
-            gapModo,
+            dias:    [...filtros.dias].sort().join(', '),
+            dir:     filtros.dir,
+            gapMin:  filtros.gapMin,
+            gapModo: filtros.gapModo,
             periodo: PERIODOS.find(p => p.meses === meses)?.label,
           },
         }),
@@ -1090,433 +1186,406 @@ export default function FiltroGap() {
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      setError(e.message)
+      setErrorPPT(e.message)
     } finally {
       setExportando(false)
       setExportProgreso(null)
     }
   }
 
-  const irAFecha = () => {
-    if (!fechaManual) return
-    if (instrManual.size === 0) {
-      // Sin chips seleccionados → comportamiento anterior (un solo ticker)
-      setVelasMulti({})
-      setFechaMulti(null)
-      setSeleccion({ date: fechaManual })
-      setVelas([])
-    } else {
-      // Multi-instrumento
-      setSeleccion(null)
-      setVelas([])
-      Object.values(abortMultiRef.current).forEach(c => c.abort())
-      abortMultiRef.current = {}
-      const tickers = [...instrManual]
-      const init = {}
-      tickers.forEach(t => { init[t] = { velas: [], fuente: null, loading: true } })
-      setVelasMulti(init)
-      setFechaMulti(fechaManual)
-      tickers.forEach(tkr => {
-        const ctrl = new AbortController()
-        abortMultiRef.current[tkr] = ctrl
-        fetch(intradayUrl(tkr, fechaManual, timeframe), { signal: ctrl.signal })
-          .then(r => r.json())
-          .then(d => {
-            if (!ctrl.signal.aborted)
-              setVelasMulti(prev => ({ ...prev, [tkr]: { velas: d.velas ?? [], fuente: d.fuente ?? null, loading: false } }))
-          })
-          .catch(e => {
-            if (e.name !== 'AbortError')
-              setVelasMulti(prev => ({ ...prev, [tkr]: { velas: [], fuente: null, loading: false } }))
-          })
-      })
-    }
-  }
+  const nombre        = nombreInstrumento(ticker)
+  const periodoLabel  = PERIODOS.find(p => p.meses === meses)?.label ?? `${meses} meses`
+  const textoPendiente = textoTicker.trim() !== '' && textoTicker.trim() !== ticker
 
-  const cancelarVelas = () => {
-    abortVelasRef.current?.abort()
-    setCargandoVelas(false)
-  }
+  // Los filtros puestos, cada uno con su forma de quitarlo, para la barra del resumen
+  const activos = [
+    filtros.dias.size !== TODOS_LOS_DIAS.length && {
+      id: 'dias',
+      texto: filtros.dias.size === 0 ? 'Ningún día' : DIAS.filter(d => filtros.dias.has(d.n)).map(d => d.label).join(', '),
+      quitar: () => cambiar({ dias: new Set(TODOS_LOS_DIAS) }),
+    },
+    filtros.dir !== 'both' && {
+      id: 'dir', texto: filtros.dir === 'up' ? 'Gap al alza' : 'Gap a la baja', quitar: () => cambiar({ dir: 'both' }),
+    },
+    filtros.gapMin !== 0 && {
+      id: 'gap', texto: `Gap ≥ ${fmtUmbral(filtros.gapMin, filtros.gapModo)}`, quitar: () => elegirGap(0),
+    },
+    filtros.eventos.size > 0 && {
+      id: 'eventos',
+      texto: EVENTOS_DEF.filter(e => filtros.eventos.has(e.id)).map(e => e.label).join(' o '),
+      quitar: () => cambiar({ eventos: new Set() }),
+    },
+    filtros.diasEsp.size > 0 && {
+      id: 'diasEsp',
+      texto: DIAS_ESPECIALES.filter(d => filtros.diasEsp.has(d.id)).map(d => d.label).join(' o '),
+      quitar: () => cambiar({ diasEsp: new Set() }),
+    },
+  ].filter(Boolean)
 
-  // Carga velas intraday cuando cambia la sesión seleccionada o el timeframe
-  useEffect(() => {
-    if (!seleccion) return
-    const controller = new AbortController()
-    abortVelasRef.current = controller
-    const tkr = resultado?.ticker ?? ticker
-    setCargandoVelas(true)
-    setVelas([])
-    fetch(intradayUrl(tkr, seleccion.date, timeframe), { signal: controller.signal })
-      .then(r => r.json())
-      .then(d => {
-        if (controller.signal.aborted) return
-        if (d.velas?.length) setVelas(d.velas)
-        setFuenteVelas(d.fuente ?? null)
-      })
-      .catch(e => { if (e.name !== 'AbortError') console.error(e) })
-      .finally(() => { if (!controller.signal.aborted) setCargandoVelas(false) })
-    return () => controller.abort()
-  }, [seleccion, timeframe])
-
-  // Última cotización del ticker escrito/seleccionado, junto al buscador de instrumento
-  // (debounced para no disparar una petición por cada letra tecleada)
-  useEffect(() => {
-    const tkr = ticker.trim()
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      if (!tkr) { setCotizacion(null); return }
-      setCargandoCotizacion(true)
-      fetch(`/api/ultima-cotizacion?ticker=${encodeURIComponent(tkr)}`, { signal: controller.signal })
-        .then(r => r.json())
-        .then(d => { if (!controller.signal.aborted) setCotizacion(d.error ? null : d) })
-        .catch(e => { if (e.name !== 'AbortError') setCotizacion(null) })
-        .finally(() => { if (!controller.signal.aborted) setCargandoCotizacion(false) })
-    }, 500)
-    return () => { clearTimeout(timer); controller.abort() }
-  }, [ticker])
+  const claseFuente = f => `fuente-tag ${f.startsWith('Duka') ? 'dukascopy' : f.startsWith('Stooq') ? 'stooq' : 'yahoo'}`
 
   return (
     <div className="filtro-page">
 
-      {/* ── Panel de controles ── */}
-      <div className="filtro-controls">
-
-        <div className="filtro-group">
-          <label className="filtro-label">Instrumento</label>
-          <div className="filtro-ticker-row">
-            <input
-              className="filtro-input"
-              value={ticker}
-              onChange={e => setTicker(e.target.value.toUpperCase())}
-              onKeyDown={e => e.key === 'Enter' && buscar()}
-              placeholder="^GDAXI, ^GSPC…"
-            />
-            {cargandoCotizacion && <span className="spinner" />}
-            {!cargandoCotizacion && cotizacion && (
-              <div className="ultima-cotizacion" title={`Cierre ${cotizacion.date}`}>
-                <span className="ultima-cotizacion-precio">{fmtPrecio(cotizacion.price)}</span>
-                {cotizacion.changePct != null && (
-                  <span className={`ultima-cotizacion-var ${cotizacion.changePct >= 0 ? 'verde' : 'rojo'}`}>
-                    {cotizacion.changePct > 0 ? '+' : ''}{cotizacion.changePct.toFixed(2)}%
-                    {cotizacion.changePts != null && (
-                      <span className="ultima-cotizacion-pts">
-                        {' '}({cotizacion.changePts > 0 ? '+' : ''}{fmtPrecio(cotizacion.changePts)})
-                      </span>
-                    )}
-                  </span>
-                )}
-                {cotizacion.prevClose != null && (
-                  <span className="ultima-cotizacion-prev">Ant. {fmtPrecio(cotizacion.prevClose)}</span>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="filtro-presets">
-            {PRESETS.map(p => (
-              <button
-                key={p.value}
-                className={`chip ${ticker === p.value ? 'activo' : ''}`}
-                onClick={() => {
-                  setTicker(p.value)
-                  setIndiceAcciones(STOCKS[p.value] ? p.value : null)
-                  setBusquedaAccion('')
-                }}
-              >{p.label}</button>
-            ))}
-          </div>
-
-          {/* ── Acciones del índice seleccionado ── */}
-          {indiceAcciones && STOCKS[indiceAcciones] && (() => {
-            const q = busquedaAccion.trim().toLowerCase()
-            const acciones = STOCKS[indiceAcciones]
-            const filtradas = q
-              ? acciones.filter(s => s.name.toLowerCase().includes(q) || s.ticker.toLowerCase().includes(q))
-              : acciones
-            return (
-              <div className="acciones-panel">
-                <div className="acciones-header">
-                  <span>Acciones · {PRESETS.find(p => p.value === indiceAcciones)?.label}</span>
-                  <button
-                    className="clear-eventos"
-                    onClick={() => { setIndiceAcciones(null); setBusquedaAccion('') }}
-                  >× cerrar</button>
-                </div>
-                <input
-                  type="text"
-                  className="acciones-buscador"
-                  placeholder="Buscar empresa o ticker…"
-                  value={busquedaAccion}
-                  onChange={e => setBusquedaAccion(e.target.value)}
-                />
-                <select
-                  className="acciones-select"
-                  value={filtradas.some(s => s.ticker === ticker) ? ticker : ''}
-                  onChange={e => setTicker(e.target.value)}
-                  disabled={filtradas.length === 0}
-                >
-                  <option value="" disabled>
-                    {filtradas.length === 0 ? 'Sin resultados' : `Elegir acción… (${filtradas.length})`}
-                  </option>
-                  {filtradas.map(s => (
-                    <option key={s.ticker} value={s.ticker}>{s.name} · {s.ticker}</option>
-                  ))}
-                </select>
-              </div>
-            )
-          })()}
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">Día de la semana</label>
-          <div className="filtro-dias">
-            {DIAS.map(d => (
-              <button
-                key={d.n}
-                className={`dia-chip ${dias.has(d.n) ? 'activo' : ''}`}
-                onClick={() => toggleDia(d.n)}
-                title={d.nombre}
-              >{d.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">Dirección del gap</label>
-          <div className="filtro-dir">
-            {[
-              { v: 'both', label: '↕  Ambos'      },
-              { v: 'up',   label: '▲  Gap arriba' },
-              { v: 'down', label: '▼  Gap abajo'  },
-            ].map(d => (
-              <button
-                key={d.v}
-                className={`dir-chip ${dir === d.v ? 'activo' : ''}`}
-                onClick={() => setDir(d.v)}
-              >{d.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Gap mínimo&nbsp;
-            <span className="filtro-valor">
-              {gapMin === 0 ? 'cualquiera' : `≥ ${gapMin}${gapModo === 'pct' ? '%' : ' pts'}`}
-            </span>
-          </label>
-          <div className="gap-modo-row">
-            <select
-              className="gap-modo-select"
-              value={gapModo}
-              onChange={e => { setGapModo(e.target.value); setGapMin(0) }}
+      {/* ── Mercado e histórico: lo que se le pide al servidor ── */}
+      <section className="filtro-controls">
+        <div className="gf-mercado">
+          <div className="filtro-group">
+            <span className="filtro-label">Mercado</span>
+            <div className="filtro-presets">
+              {PRESETS.map(p => (
+                <button
+                  key={p.value}
+                  className={`chip ${ticker === p.value ? 'activo' : ''}`}
+                  aria-pressed={ticker === p.value}
+                  onClick={() => {
+                    elegirMercado(p.value)
+                    // el panel de acciones, si está abierto, pasa a las del índice nuevo
+                    setIndiceAcciones(prev => (prev && STOCKS[p.value] ? p.value : null))
+                    setBusquedaAccion('')
+                  }}
+                >{p.label}</button>
+              ))}
+            </div>
+            <form
+              className="filtro-ticker-row"
+              onSubmit={e => { e.preventDefault(); elegirMercado(textoTicker) }}
             >
-              <option value="pct">%</option>
-              <option value="pts">Puntos</option>
-            </select>
-            {gapModo === 'pct' ? (
-              <div className="filtro-gap-sizes">
-                {GAP_SIZES.map(g => (
-                  <button
-                    key={g}
-                    className={`gap-chip ${gapMin === g ? 'activo' : ''}`}
-                    onClick={() => setGapMin(g)}
-                  >{g === 0 ? 'Todos' : `${g}%`}</button>
-                ))}
-              </div>
-            ) : (
-              <>
-                <div className="filtro-gap-sizes">
-                  {[0, ...(GAP_PTS_SUGERIDOS[ticker] ?? GAP_PTS_DEFAULT)].map(g => (
-                    <button
-                      key={g}
-                      className={`gap-chip ${gapMin === g ? 'activo' : ''}`}
-                      onClick={() => setGapMin(g)}
-                    >{g === 0 ? 'Todos' : g}</button>
-                  ))}
+              <input
+                className="filtro-input"
+                value={textoTicker}
+                onChange={e => setTextoTicker(e.target.value.toUpperCase())}
+                placeholder="Otro: AAPL, ^IBEX…"
+                aria-label="Ticker del mercado"
+              />
+              {textoPendiente && <button type="submit" className="btn-ir-fecha">Cargar</button>}
+              {cargandoCotizacion && <span className="spinner" />}
+              {cot && (
+                <div className="ultima-cotizacion" title={`Cierre ${cot.date}`}>
+                  <span className="ultima-cotizacion-precio">{fmtPrecio(cot.price)}</span>
+                  {cot.changePct != null && (
+                    <span className={`ultima-cotizacion-var ${cot.changePct >= 0 ? 'verde' : 'rojo'}`}>
+                      {cot.changePct > 0 ? '+' : ''}{cot.changePct.toFixed(2)}%
+                      {cot.changePts != null && (
+                        <span className="ultima-cotizacion-pts">
+                          {' '}({cot.changePts > 0 ? '+' : ''}{fmtPrecio(cot.changePts)})
+                        </span>
+                      )}
+                    </span>
+                  )}
+                  {cot.prevClose != null && (
+                    <span className="ultima-cotizacion-prev">Ant. {fmtPrecio(cot.prevClose)}</span>
+                  )}
                 </div>
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  inputMode="decimal"
-                  className="filtro-input-puntos"
-                  placeholder="Personalizado"
-                  value={gapMin === 0 ? '' : gapMin}
-                  onChange={e => setGapMin(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-                />
-              </>
-            )}
-          </div>
-        </div>
+              )}
+            </form>
 
-        <div className="filtro-group">
-          <label className="filtro-label">Histórico</label>
-          <div className="filtro-periodos">
-            {PERIODOS.map(p => (
-              <button
-                key={p.meses}
-                className={`periodo-chip ${meses === p.meses ? 'activo' : ''}`}
-                onClick={() => setMeses(p.meses)}
-              >{p.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Evento económico
-            {eventosActivos.size > 0 && (
-              <button className="clear-eventos" onClick={() => setEventosActivos(new Set())}>
-                × limpiar
+            {/* ── Acciones del índice ── */}
+            {!indiceAcciones && STOCKS[ticker] && (
+              <button className="gf-enlace" onClick={() => setIndiceAcciones(ticker)}>
+                Ver las acciones del {nombre} ({STOCKS[ticker].length}) ▾
               </button>
             )}
-          </label>
-          <div className="filtro-eventos">
-            {EVENTOS_DEF.map(ev => (
-              <button
-                key={ev.id}
-                className={`evento-chip ev-${ev.id.toLowerCase()} ${eventosActivos.has(ev.id) ? 'activo' : ''}`}
-                onClick={() => toggleEvento(ev.id)}
-                title={ev.title}
-              >{ev.label}</button>
-            ))}
+            {indiceAcciones && STOCKS[indiceAcciones] && (() => {
+              const q = busquedaAccion.trim().toLowerCase()
+              const acciones = STOCKS[indiceAcciones]
+              const filtradas = q
+                ? acciones.filter(s => s.name.toLowerCase().includes(q) || s.ticker.toLowerCase().includes(q))
+                : acciones
+              return (
+                <div className="acciones-panel">
+                  <div className="acciones-header">
+                    <span>Acciones · {nombreInstrumento(indiceAcciones)}</span>
+                    <button
+                      className="clear-eventos"
+                      onClick={() => { setIndiceAcciones(null); setBusquedaAccion('') }}
+                    >× cerrar</button>
+                  </div>
+                  <input
+                    type="text"
+                    className="acciones-buscador"
+                    placeholder="Buscar empresa o ticker…"
+                    value={busquedaAccion}
+                    onChange={e => setBusquedaAccion(e.target.value)}
+                  />
+                  <select
+                    className="acciones-select"
+                    value={filtradas.some(s => s.ticker === ticker) ? ticker : ''}
+                    onChange={e => elegirMercado(e.target.value)}
+                    disabled={filtradas.length === 0}
+                  >
+                    <option value="" disabled>
+                      {filtradas.length === 0 ? 'Sin resultados' : `Elegir acción… (${filtradas.length})`}
+                    </option>
+                    {filtradas.map(s => (
+                      <option key={s.ticker} value={s.ticker}>{s.name} · {s.ticker}</option>
+                    ))}
+                  </select>
+                </div>
+              )
+            })()}
+          </div>
+
+          <div className="filtro-group">
+            <span className="filtro-label">Histórico</span>
+            <div className="filtro-presets">
+              {PERIODOS.map(p => (
+                <button
+                  key={p.meses}
+                  className={`chip ${meses === p.meses ? 'activo' : ''}`}
+                  aria-pressed={meses === p.meses}
+                  onClick={() => setMeses(p.meses)}
+                >{p.label}</button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Día especial
-            {diasEspeciales.size > 0 && (
-              <button className="clear-eventos" onClick={() => setDiasEspeciales(new Set())}>× limpiar</button>
-            )}
-          </label>
-          <div className="filtro-dias-esp">
-            {[
-              { id: 'primerMes',  label: '1º mes',       title: 'Primer día de negociación del mes' },
-              { id: 'ultimoMes',  label: 'Último mes',   title: 'Último día de negociación del mes' },
-              { id: 'festivo',    label: 'Festivo+1',    title: 'Día siguiente a un festivo de mercado (se saltó al menos un día hábil)' },
-              { id: 'primerTrim', label: '1º trim.',      title: 'Primer día de negociación del trimestre (ene/abr/jul/oct)' },
-              { id: 'ultimoTrim', label: 'Último trim.', title: 'Último día de negociación del trimestre (mar/jun/sep/dic)' },
-            ].map(d => (
-              <button
-                key={d.id}
-                className={`dia-esp-chip ${diasEspeciales.has(d.id) ? 'activo' : ''}`}
-                onClick={() => toggleDiaEspecial(d.id)}
-                title={d.title}
-              >{d.label}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="filtro-group">
-          <label className="filtro-label">
-            Ir a fecha concreta
-            {instrManual.size > 0 && (
-              <button className="clear-eventos" onClick={() => setInstrManual(new Set())}>× limpiar</button>
-            )}
-          </label>
-          <div className="fecha-manual-row">
-            <input
-              type="date"
-              className="filtro-input-fecha"
-              value={fechaManual}
-              onChange={e => setFechaManual(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && irAFecha()}
-            />
-            <button
-              className="btn-ir-fecha"
-              onClick={irAFecha}
-              disabled={!fechaManual}
-            >Ver</button>
-          </div>
-          <div className="filtro-presets" style={{ marginTop: '0.4rem' }}>
-            {PRESETS.map(p => (
-              <button
-                key={p.value}
-                className={`chip ${instrManual.has(p.value) ? 'activo' : ''}`}
-                onClick={() => toggleInstrManual(p.value)}
-              >{p.label}</button>
-            ))}
-          </div>
-          {instrManual.size > 0 && (
-            <p className="instr-manual-hint">
-              {instrManual.size === 1 ? '1 instrumento' : `${instrManual.size} instrumentos`} seleccionados
+        {/* ── Un día suelto, de uno o varios mercados ── */}
+        <details className="gf-dia">
+          <summary>
+            Ver un día concreto
+            <span className="gf-nota">de este mercado o de varios a la vez</span>
+          </summary>
+          <div className="gf-dia-cuerpo">
+            <div className="fecha-manual-row">
+              <input
+                type="date"
+                className="filtro-input-fecha"
+                value={fechaManual}
+                onChange={e => setFechaManual(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && irAFecha()}
+              />
+              <button className="btn-ir-fecha" onClick={irAFecha} disabled={!fechaManual}>Ver</button>
+            </div>
+            <p className="gf-nota">
+              {instrManual.size === 0
+                ? <>Sin marcar ninguno se ve el {nombre}. Marca varios para verlos uno al lado del otro:</>
+                : <>{instrManual.size === 1 ? '1 mercado marcado' : `${instrManual.size} mercados marcados`}{' '}
+                    <button className="clear-eventos" onClick={() => setInstrManual(new Set())}>× desmarcar</button></>}
             </p>
+            <div className="filtro-presets">
+              {PRESETS.map(p => (
+                <button
+                  key={p.value}
+                  className={`chip ${instrManual.has(p.value) ? 'activo' : ''}`}
+                  aria-pressed={instrManual.has(p.value)}
+                  onClick={() => toggleInstrManual(p.value)}
+                >{p.label}</button>
+              ))}
+            </div>
+          </div>
+        </details>
+      </section>
+
+      {/* ── Filtros: sobre las sesiones ya traídas, al momento ── */}
+      <section className="filtro-controls">
+        <div className="gf-cabecera">
+          <div>
+            <h2 className="gf-titulo">Filtros</h2>
+            <p className="gf-nota">Se aplican al momento. El número de cada botón es cuántas sesiones quedarían al marcarlo.</p>
+          </div>
+          {hayFiltros(filtros) && <button className="pag-btn" onClick={quitarFiltros}>Quitar filtros</button>}
+        </div>
+
+        <div className="gf-rejilla">
+          <div className="filtro-group">
+            <span className="filtro-label">
+              Día de la semana
+              {filtros.dias.size !== TODOS_LOS_DIAS.length && (
+                <button className="clear-eventos" onClick={() => cambiar({ dias: new Set(TODOS_LOS_DIAS) })}>todos</button>
+              )}
+            </span>
+            <div className="filtro-presets">
+              {DIAS.map(d => (
+                <ChipFiltro
+                  key={d.n}
+                  activo={filtros.dias.has(d.n)}
+                  cuenta={c?.dias[d.n]}
+                  onClick={() => alternar('dias', d.n)}
+                  title={d.nombre}
+                >{d.label}</ChipFiltro>
+              ))}
+            </div>
+          </div>
+
+          <div className="filtro-group">
+            <span className="filtro-label">Dirección del gap</span>
+            <div className="filtro-presets">
+              {DIRECCIONES.map(d => (
+                <ChipFiltro
+                  key={d.v}
+                  activo={filtros.dir === d.v}
+                  cuenta={c?.dir[d.v]}
+                  onClick={() => cambiar({ dir: d.v })}
+                >{d.label}</ChipFiltro>
+              ))}
+            </div>
+          </div>
+
+          <div className="filtro-group">
+            <span className="filtro-label">
+              Gap mínimo
+              <span className="filtro-valor">
+                {filtros.gapMin === 0 ? 'cualquiera' : `≥ ${fmtUmbral(filtros.gapMin, filtros.gapModo)}`}
+              </span>
+            </span>
+            <div className="gf-gap-fila">
+              <div className="gf-segmento" role="group" aria-label="Medir el gap en">
+                <button
+                  className={filtros.gapModo === 'pct' ? 'activo' : ''}
+                  aria-pressed={filtros.gapModo === 'pct'}
+                  onClick={() => cambiarModoGap('pct')}
+                >%</button>
+                <button
+                  className={filtros.gapModo === 'pts' ? 'activo' : ''}
+                  aria-pressed={filtros.gapModo === 'pts'}
+                  onClick={() => cambiarModoGap('pts')}
+                >Puntos</button>
+              </div>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                inputMode="decimal"
+                className="gf-gap-otro"
+                placeholder={filtros.gapModo === 'pct' ? 'Otro %' : 'Otros pts'}
+                value={gapOtro}
+                onChange={e => escribirGap(e.target.value)}
+                aria-label="Gap mínimo a mano"
+              />
+            </div>
+            <div className="filtro-presets">
+              {umbrales.map(g => (
+                <ChipFiltro
+                  key={g}
+                  activo={filtros.gapMin === g}
+                  cuenta={c?.gap[g]}
+                  onClick={() => elegirGap(g)}
+                >{g === 0 ? 'Todos' : filtros.gapModo === 'pct' ? `${g}%` : g}</ChipFiltro>
+              ))}
+            </div>
+          </div>
+
+          <div className="filtro-group">
+            <span className="filtro-label">
+              Noticia ese día
+              {filtros.eventos.size > 0 && (
+                <button className="clear-eventos" onClick={() => cambiar({ eventos: new Set() })}>× quitar</button>
+              )}
+            </span>
+            <div className="filtro-presets">
+              {EVENTOS_DEF.map(ev => (
+                <ChipFiltro
+                  key={ev.id}
+                  activo={filtros.eventos.has(ev.id)}
+                  cuenta={c?.eventos[ev.id]}
+                  onClick={() => alternar('eventos', ev.id)}
+                  title={ev.title}
+                ><span className={`gf-punto ev-${ev.id.toLowerCase()}`} aria-hidden="true" />{ev.label}</ChipFiltro>
+              ))}
+            </div>
+            {filtros.eventos.size > 0 && <p className="gf-nota">Sesiones con cualquiera de las marcadas</p>}
+          </div>
+
+          <div className="filtro-group">
+            <span className="filtro-label">
+              Día especial
+              {filtros.diasEsp.size > 0 && (
+                <button className="clear-eventos" onClick={() => cambiar({ diasEsp: new Set() })}>× quitar</button>
+              )}
+            </span>
+            <div className="filtro-presets">
+              {DIAS_ESPECIALES.map(d => (
+                <ChipFiltro
+                  key={d.id}
+                  activo={filtros.diasEsp.has(d.id)}
+                  cuenta={c?.diasEsp[d.id]}
+                  onClick={() => alternar('diasEsp', d.id)}
+                  title={d.title}
+                >{d.label}</ChipFiltro>
+              ))}
+            </div>
+            {filtros.diasEsp.size > 0 && <p className="gf-nota">Sesiones que sean cualquiera de los marcados</p>}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Lo que queda con los filtros ── */}
+      <div className="gf-resumen">
+        <div className="gf-resumen-texto">
+          {cargando && <><span className="spinner" /> Trayendo las sesiones · {nombre} · {periodoLabel}…</>}
+          {resultado && (
+            <>
+              <strong>{visibles.length}</strong>
+              {visibles.length !== todas.length && <span className="resumen-filtrado"> de {todas.length}</span>}
+              {' '}sesion{visibles.length === 1 ? '' : 'es'} · {nombre}
+              {resultado.fuente      && <span className="resumen-fuente"> · {resultado.fuente}</span>}
+              {resultado.fechaInicio && <span className="resumen-desde"> · desde {resultado.fechaInicio}</span>}
+            </>
           )}
         </div>
-
-        <button
-          className="btn-filtrar"
-          onClick={buscar}
-          disabled={cargando || dias.size === 0}
-        >
-          {cargando
-            ? <><span className="spinner" /> Cargando…</>
-            : '🔍  Filtrar sesiones'}
-        </button>
-
-        {resultado && (
-          <div className="filtro-resumen">
-            <strong>{sesionesVisibles.length}</strong>
-            {sesionesVisibles.length !== resultado.total && (
-              <span className="resumen-filtrado"> / {resultado.total}</span>
-            )}
-            {' '}sesión{sesionesVisibles.length !== 1 ? 'es' : ''} · {resultado.ticker}
-            {resultado.fuente      && <span className="resumen-fuente"> · {resultado.fuente}</span>}
-            {resultado.fechaInicio && <span className="resumen-desde"> · desde {resultado.fechaInicio}</span>}
+        {activos.length > 0 && (
+          <div className="gf-activos">
+            {activos.map(a => (
+              <button key={a.id} className="gf-activo" onClick={a.quitar} title="Quitar este filtro">
+                {a.texto}<span aria-hidden="true">×</span>
+              </button>
+            ))}
           </div>
         )}
-
-        {resultado && sesionesVisibles.length > 0 && (
-          <button
-            className="btn-exportar-ppt"
-            onClick={exportarPPT}
-            disabled={exportando}
-          >
+        {visibles.length > 0 && (
+          <button className="btn-exportar-ppt" onClick={exportarPPT} disabled={exportando}>
             {exportando
               ? <><span className="spinner" /> {exportProgreso
                     ? `Generando gráficos… ${exportProgreso.done}/${exportProgreso.total}`
                     : 'Generando PPT…'}</>
-              : `📊  Exportar ${sesionesVisibles.length} gráficos a PPT`}
+              : `📊  Exportar ${visibles.length} gráficos a PPT`}
           </button>
         )}
       </div>
 
       {/* ── Resultados ── */}
       <div className="filtro-resultados">
-        {error && <p className="error-global">{error}</p>}
+        {errorDatos && <p className="error-global">No se pudieron traer las sesiones de {ticker}: {errorDatos}</p>}
+        {errorPPT && <p className="error-global">{errorPPT}</p>}
 
-        {resultado && sesionesVisibles.length === 0 && (
+        {resultado && todas.length === 0 && (
+          <div className="filtro-vacio">No hay sesiones de {nombre} en ese periodo.</div>
+        )}
+        {todas.length > 0 && visibles.length === 0 && (
           <div className="filtro-vacio">
-            Sin sesiones con esos filtros.
-            {eventosActivos.size > 0 && ' Prueba quitando algún filtro de evento.'}
+            {filtros.dias.size === 0
+              ? 'Marca al menos un día de la semana.'
+              : 'Ninguna sesión cumple todos los filtros a la vez: el número de cada botón dice cuál quitar.'}
+            <button className="pag-btn" onClick={quitarFiltros}>Quitar filtros</button>
           </div>
         )}
 
-        <div className={resultado && sesionesVisibles.length > 0 ? 'filtro-split' : ''}>
+        <div className={visibles.length > 0 ? 'filtro-split' : ''}>
 
-          {/* Lista de sesiones (solo cuando hay resultados del filtro) */}
-          {resultado && sesionesVisibles.length > 0 && (
+          {/* Lista de sesiones que pasan los filtros */}
+          {visibles.length > 0 && (
             <div className="sesiones-lista">
-              {sesionsPagina.map(s => (
+              {sesionesPagina.map(s => (
                 <SesionCard
                   key={s.date}
                   sesion={s}
                   activo={seleccion?.date === s.date}
-                  onClick={() => { setSeleccion(s); setVelasMulti({}); setFechaMulti(null) }}
+                  onClick={() => elegirSesion(s)}
                 />
               ))}
               {totalPaginas > 1 && (
                 <div className="paginacion">
                   <button
                     className="pag-btn"
-                    onClick={() => setPagina(p => Math.max(0, p - 1))}
+                    onClick={() => irAPagina(Math.max(0, pagina - 1))}
                     disabled={pagina === 0}
                   >← Anterior</button>
                   <span className="pag-info">{pagina + 1} / {totalPaginas}</span>
                   <button
                     className="pag-btn"
-                    onClick={() => setPagina(p => Math.min(totalPaginas - 1, p + 1))}
+                    onClick={() => irAPagina(Math.min(totalPaginas - 1, pagina + 1))}
                     disabled={pagina >= totalPaginas - 1}
                   >Siguiente →</button>
                 </div>
@@ -1524,12 +1593,12 @@ export default function FiltroGap() {
             </div>
           )}
 
-          {/* Detalle / gráfico (visible tanto para selecciones de lista como manuales) */}
+          {/* Detalle / gráfico (de la lista o de un día concreto) */}
           {seleccion && (
             <div className="sesion-detalle">
               <div className="sesion-detalle-header">
                 <div className="sesion-detalle-titulo">
-                  <span className="sesion-detalle-instrumento">{nombreInstrumento(resultado?.ticker ?? ticker)}</span>
+                  <span className="sesion-detalle-instrumento">{nombre}</span>
                   <span className="sesion-detalle-fecha">{seleccion.date}</span>
                   {seleccion.dayOfWeek && (
                     <span className="sesion-detalle-dia">{DIA_NOMBRE[seleccion.dayOfWeek]}</span>
@@ -1549,6 +1618,9 @@ export default function FiltroGap() {
                   {seleccion.eventos?.map(e => (
                     <span key={e} className={`ev-badge ev-${e.toLowerCase()}`}>{e}</span>
                   ))}
+                  {fechaSuelta && (
+                    <button className="clear-eventos" onClick={() => setFechaSuelta(null)}>× volver a la lista</button>
+                  )}
                 </div>
                 {seleccion.prevClose != null && (
                   <div className="sesion-detalle-meta">
@@ -1558,11 +1630,7 @@ export default function FiltroGap() {
                     <strong>{fmtPrecio(seleccion.openPrice)}</strong>
                     {velas.length > 0 && (
                       <>&nbsp;·&nbsp;{velas.length} velas
-                        {fuenteVelas && (
-                          <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : fuenteVelas.startsWith('Stooq') ? 'stooq' : 'yahoo'}`}>
-                            {fuenteVelas}
-                          </span>
-                        )}
+                        {fuenteVelas && <span className={claseFuente(fuenteVelas)}>{fuenteVelas}</span>}
                       </>
                     )}
                   </div>
@@ -1570,21 +1638,11 @@ export default function FiltroGap() {
                 {seleccion.prevClose == null && velas.length > 0 && (
                   <div className="sesion-detalle-meta">
                     {velas.length} velas
-                    {fuenteVelas && (
-                      <span className={`fuente-tag ${fuenteVelas.startsWith('Duka') ? 'dukascopy' : fuenteVelas.startsWith('Stooq') ? 'stooq' : 'yahoo'}`}>
-                        {fuenteVelas}
-                      </span>
-                    )}
+                    {fuenteVelas && <span className={claseFuente(fuenteVelas)}>{fuenteVelas}</span>}
                   </div>
                 )}
                 <div className="tf-selector">
-                  {[
-                    { label: '1m',  duka: 'm1'  },
-                    { label: '5m',  duka: 'm5'  },
-                    { label: '15m', duka: 'm15' },
-                    { label: '30m', duka: 'm30' },
-                    { label: '1h',  duka: 'h1'  },
-                  ].map(tf => (
+                  {TIMEFRAMES.map(tf => (
                     <button
                       key={tf.duka}
                       className={`tf-chip ${timeframe === tf.duka ? 'activo' : ''}`}
@@ -1611,27 +1669,23 @@ export default function FiltroGap() {
                   <GraficoVelas
                     velas={velas}
                     patrones={[]}
-                    ticker={resultado?.ticker ?? ticker}
+                    ticker={ticker}
                     prevClose={seleccion.prevClose}
                     openPrice={seleccion.openPrice}
-                    trades={tradesPara(resultado?.ticker ?? ticker, seleccion.date)}
+                    trades={tradesPara(ticker, seleccion.date)}
                     herramientas
                   />
                   <VelasTabla velas={velas} />
                 </>
               )}
 
-              {!cargandoVelas && velas.length === 0 && (() => {
-                const tkr = resultado?.ticker ?? ticker
-                const esAccion = !DUKA_TICKERS.has(tkr)
-                return (
-                  <div className="filtro-vacio">
-                    {esAccion
-                      ? <>Sin datos intraday para <strong>{tkr}</strong> en esta fecha.</>
-                      : 'No hay datos intraday disponibles para esta fecha.'}
-                  </div>
-                )
-              })()}
+              {!cargandoVelas && velas.length === 0 && (
+                <div className="filtro-vacio">
+                  {DUKA_TICKERS.has(ticker)
+                    ? 'No hay datos intraday disponibles para esta fecha.'
+                    : <>Sin datos intraday para <strong>{ticker}</strong> en esta fecha.</>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1642,13 +1696,7 @@ export default function FiltroGap() {
             <div className="multi-charts-header">
               <span className="multi-charts-fecha">{fechaMulti}</span>
               <div className="tf-selector">
-                {[
-                  { label: '1m',  duka: 'm1'  },
-                  { label: '5m',  duka: 'm5'  },
-                  { label: '15m', duka: 'm15' },
-                  { label: '30m', duka: 'm30' },
-                  { label: '1h',  duka: 'h1'  },
-                ].map(tf => (
+                {TIMEFRAMES.map(tf => (
                   <button
                     key={tf.duka}
                     className={`tf-chip ${timeframe === tf.duka ? 'activo' : ''}`}
@@ -1657,17 +1705,14 @@ export default function FiltroGap() {
                 ))}
               </div>
               <button className="btn-ir-fecha" onClick={irAFecha} disabled={!fechaManual}>↺ Recargar</button>
+              <button className="clear-eventos" onClick={cerrarMulti}>× cerrar</button>
             </div>
             <div className="multi-charts-grid">
               {Object.entries(velasMulti).map(([tkr, { velas: v, fuente, loading }]) => (
                 <div key={tkr} className="multi-chart-item">
                   <div className="multi-chart-nombre">
-                    {PRESETS.find(p => p.value === tkr)?.label ?? tkr}
-                    {fuente && (
-                      <span className={`fuente-tag ${fuente.startsWith('Duka') ? 'dukascopy' : 'yahoo'}`}>
-                        {fuente}
-                      </span>
-                    )}
+                    {nombreInstrumento(tkr)}
+                    {fuente && <span className={claseFuente(fuente)}>{fuente}</span>}
                   </div>
                   {loading ? (
                     <div className="velas-cargando"><span className="spinner" /> Cargando…</div>

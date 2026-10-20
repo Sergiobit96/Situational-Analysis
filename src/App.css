@@ -862,65 +862,136 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
 .dia-chip:hover { color: var(--text); border-color: var(--accent-2); }
 .dia-chip.activo { background: rgba(109,93,252,0.2); border-color: var(--accent-2); color: var(--accent-2); }
 
-/* chips dirección */
-.filtro-dir { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-.dir-chip {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+/* ── Gap Filter: mercado arriba, filtros al momento y resumen de lo que queda ── */
+.gf-mercado {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem 2.5rem;
+  align-items: start;
+}
+.gf-cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.gf-titulo { font-size: 0.95rem; font-weight: 600; color: var(--text); }
+.gf-nota { font-size: 0.78rem; color: var(--muted); }
+.gf-rejilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.2rem 2.5rem;
+}
+
+/* Botón de filtro con su número de sesiones */
+.gf-chip { display: inline-flex; align-items: center; gap: 0.35rem; }
+.gf-chip .chip-cuenta { margin-left: 0.1rem; }
+.gf-chip.sin-sesiones { opacity: 0.5; }
+
+/* Punto del color de la noticia, el mismo que su etiqueta en la lista */
+.gf-punto { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+.gf-punto.ev-fomc { background: #a78bfa; }
+.gf-punto.ev-cpi  { background: #60a5fa; }
+.gf-punto.ev-nfp  { background: #34d399; }
+.gf-punto.ev-ecb  { background: #fbbf24; }
+.gf-punto.ev-ppi  { background: #22d3ee; }
+.gf-punto.ev-gdp  { background: #f87171; }
+.gf-punto.ev-pmi  { background: #c084fc; }
+
+/* Gap mínimo: % o puntos, y el número a mano */
+.gf-gap-fila { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.gf-segmento {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.gf-segmento button {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
   color: var(--muted);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  padding: 0.35rem 1rem;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  padding: 0.22rem 0.75rem;
 }
-.dir-chip:hover { color: var(--text); }
-.dir-chip.activo { background: rgba(109,93,252,0.2); border-color: var(--accent-2); color: var(--accent-2); }
-
-/* modo del gap: % vs. puntos */
-.gap-modo-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.gap-modo-select {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+.gf-segmento button:hover { color: var(--text); }
+.gf-segmento button.activo { background: var(--accent-soft); color: #d4cfff; }
+.gf-gap-otro {
+  width: 6.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 600;
-  padding: 0.3rem 0.5rem;
-  cursor: pointer;
+  padding: 0.28rem 0.6rem;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.gap-modo-select:focus { border-color: var(--accent-2); }
-.filtro-input-puntos {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
+.gf-gap-otro:focus { border-color: var(--accent); box-shadow: var(--focus); }
+
+.gf-enlace {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent-2);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0;
+}
+.gf-enlace:hover { text-decoration: underline; }
+
+/* Ver un día concreto: plegado, dentro del panel del mercado */
+.gf-dia { border-top: 1px solid var(--border); padding-top: 0.85rem; }
+.gf-dia summary {
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
   font-size: 0.85rem;
   font-weight: 600;
-  padding: 0.3rem 0.6rem;
-  width: 130px;
-  outline: none;
-  transition: border-color 0.15s;
+  color: var(--text);
+  list-style: none;
 }
-.filtro-input-puntos:focus { border-color: var(--accent-2); }
+.gf-dia summary::-webkit-details-marker { display: none; }
+.gf-dia summary::before { content: '▸'; color: var(--muted); }
+.gf-dia[open] summary::before { content: '▾'; }
+.gf-dia-cuerpo { display: flex; flex-direction: column; gap: 0.55rem; margin-top: 0.75rem; max-width: 680px; }
+.gf-dia-cuerpo .clear-eventos { margin-left: 0.2rem; }
 
-/* chips gap size */
-.filtro-gap-sizes { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.gap-chip {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--muted);
+/* Resumen: cuántas quedan, qué filtros hay puestos (se quitan con un clic) y el PPT */
+.gf-resumen { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem 1rem; }
+.gf-resumen-texto { font-size: 0.85rem; color: var(--muted); }
+.gf-resumen-texto strong { color: var(--accent-2); font-size: 1rem; }
+.gf-resumen-texto .spinner { vertical-align: middle; margin-right: 0.3rem; }
+.gf-activos { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.gf-activo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--accent-soft);
+  border: 1px solid rgba(109,93,252,0.45);
+  border-radius: 999px;
+  color: #d4cfff;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  padding: 0.3rem 0.65rem;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  padding: 0.18rem 0.65rem;
+  transition: border-color 0.15s, color 0.15s;
 }
-.gap-chip:hover { color: var(--text); border-color: var(--accent-2); }
-.gap-chip.activo { background: rgba(109,93,252,0.2); border-color: var(--accent-2); color: var(--accent-2); }
+.gf-activo span { opacity: 0.7; }
+.gf-activo:hover { border-color: var(--red); color: #fca5a5; }
+.gf-resumen .btn-exportar-ppt { margin: 0 0 0 auto; }
+
+@media (max-width: 700px) {
+  .gf-mercado, .gf-rejilla { grid-template-columns: 1fr; }
+  .gf-cabecera { flex-direction: column; }
+  .gf-resumen .btn-exportar-ppt { margin-left: 0; }
+}
 
 /* botón principal */
 .btn-filtrar {
@@ -1047,33 +1118,6 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
 .horror-galeria-card .fotos-img { max-height: 40vh; }
 .horror-galeria-badges { justify-content: center; }
 
-/* ── Filtro de eventos económicos ── */
-.filtro-eventos { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-
-.evento-chip {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.78rem;
-  font-weight: 700;
-  padding: 0.28rem 0.65rem;
-  transition: opacity 0.15s, border-color 0.15s;
-  background: var(--surface-2);
-  color: var(--muted);
-  letter-spacing: 0.04em;
-}
-.evento-chip:hover { opacity: 0.85; }
-.evento-chip.activo { color: #fff; border-color: transparent; }
-
-.ev-fomc.activo { background: #7c3aed; }
-.ev-cpi.activo  { background: #2563eb; }
-.ev-nfp.activo  { background: #059669; }
-.ev-ecb.activo  { background: #b45309; }
-.ev-ppi.activo  { background: #0891b2; }
-.ev-gdp.activo  { background: #dc2626; }
-.ev-pmi.activo  { background: #9333ea; }
-.ev-festivo.activo { background: #6b7280; }
-
 /* badges en la card de sesión */
 .sesion-card-derecha {
   display: flex;
@@ -1137,11 +1181,6 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
 .btn-cancelar-velas:hover { color: var(--red); border-color: var(--red); }
 
 /* ── Multi-chart (fecha concreta · varios instrumentos) ── */
-.instr-manual-hint {
-  font-size: 0.75rem;
-  color: var(--muted);
-  margin: 0.25rem 0 0;
-}
 .multi-charts-section {
   margin-top: 1.5rem;
 }
@@ -1180,12 +1219,6 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
   .multi-charts-grid { grid-template-columns: 1fr; }
 }
 
-.filtro-resumen {
-  font-size: 0.82rem;
-  color: var(--muted);
-  padding-top: 0.25rem;
-}
-.filtro-resumen strong { color: var(--accent-2); }
 .resumen-fuente { color: #60a5fa; }
 .resumen-desde  { color: var(--muted); }
 
@@ -3193,14 +3226,14 @@ tr.seg-revisada td:first-child { border-left: 3px solid var(--green); }
 
 /* Campos de texto y selectores */
 .input-ticker-grande, .input-prefijo, .filtro-input, .acciones-buscador, .acciones-select,
-.gap-modo-select, .filtro-input-puntos, .filtro-input-fecha, .param-input, .filtro-otros {
+.filtro-input-fecha, .param-input, .filtro-otros {
   border-radius: var(--radius-sm);
   border-color: var(--border-strong);
   background-color: var(--bg);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .input-ticker-grande:focus, .filtro-input:focus, .acciones-buscador:focus, .acciones-select:focus,
-.gap-modo-select:focus, .filtro-input-puntos:focus, .filtro-input-fecha:focus, .param-input:focus,
+.filtro-input-fecha:focus, .param-input:focus,
 .filtro-otros:focus, .input-prefijo:focus-within {
   border-color: var(--accent);
   box-shadow: var(--focus);

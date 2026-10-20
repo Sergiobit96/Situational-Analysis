@@ -171,8 +171,12 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const totalEur = operados.reduce((n, d) => n + (d.resultadoEur ?? 0), 0)
   const maxUnidades = datos.maxUnidades ?? 4
 
+  // Las sesiones de hoy: las que siguen en "hoy" y las que ya cerraron hoy, que el servidor
+  // pasa al historial al momento
+  const cerradasHoy = historial.filter(d => sesiones.some(s => s.ticker === d.ticker && s.hoy?.abre === d.abre))
+  const deHoy = [...hoy, ...cerradasHoy]
   // Lo de hoy: lo cerrado (piernas terminadas) y lo que va abierto, con el último precio
-  const cuentasHoy = hoy.map(d => {
+  const cuentasHoy = deHoy.map(d => {
     const cerrado = piernasDe(d).reduce((s, p) => s + (p.salida ? (p.resultadoEur ?? 0) : 0), 0)
     return { d, cerrado, ...abiertoSrs(d) }
   })
@@ -180,7 +184,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const abiertoHoy = cuentasHoy.reduce((s, c) => s + (c.abierto ?? 0), 0)
   const alStopHoy = cuentasHoy.reduce((s, c) => s + (c.alStop ?? 0), 0)
   const hayAbierto = cuentasHoy.some(c => c.abierto != null)
-  const saldo = hoy.find(d => d.plan?.saldo)?.plan.saldo ?? null
+  const saldo = deHoy.find(d => d.plan?.saldo)?.plan.saldo ?? null
   const curva = acumulado([...operados].reverse().map(d => ({ etiqueta: `${d.fecha} · ${nombre(d.ticker)}`, valor: d.resultadoEur ?? 0 })))
   const maxEur = Math.max(0, ...operados.map(d => Math.abs(d.resultadoEur ?? 0)))
   // la próxima sesión de cualquier instrumento encendido (en la Rule of 4, la próxima reunión)
@@ -189,7 +193,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
 
   // Una fila por instrumento en la línea del día: su sesión de hoy y cómo va
   const filasDia = sesiones.map(s => {
-    const d = hoy.find(x => x.ticker === s.ticker)
+    const d = deHoy.find(x => x.ticker === s.ticker)
     const abre = s.hoy?.abre ?? d?.abre ?? null
     const cierra = s.hoy?.cierra ?? d?.cierra ?? null
     const op = d ? piernasDe(d).at(-1) : null
@@ -231,8 +235,8 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
       {error && <p className="bot-error">{error}</p>}
 
       <div className="estr-tiles bot-kpis">
-        <Tile label="Hoy" valor={hoy.length ? eur(cerradoHoy + abiertoHoy) : '—'} tonoValor={tono(cerradoHoy + abiertoHoy)}
-          sub={hoy.length ? `${eur(cerradoHoy)} cerrado${hayAbierto ? ` · ${eur(abiertoHoy)} abierto` : ''}` : 'ninguna sesión empezada'} />
+        <Tile label="Hoy" valor={deHoy.length ? eur(cerradoHoy + abiertoHoy) : '—'} tonoValor={tono(cerradoHoy + abiertoHoy)}
+          sub={deHoy.length ? `${eur(cerradoHoy)} cerrado${hayAbierto ? ` · ${eur(abiertoHoy)} abierto` : ''}` : 'ninguna sesión empezada'} />
         <Tile label="Abierto ahora" valor={hayAbierto ? eur(abiertoHoy) : '—'} tonoValor={tono(abiertoHoy)}
           sub={hayAbierto ? `si saltan los stops: ${eur(alStopHoy)}` : 'nada abierto'} />
         <Tile label="Saldo de la cuenta" valor={saldo ? `${num(saldo, 0)} €` : '—'} sub={`riesgo por operación: ${String(config.riesgoPct ?? 1).replace('.', ',')}%`} />
@@ -251,12 +255,13 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
         <h3>Hoy</h3>
         {hoy.length === 0 ? (
           <p className="bot-nota">
-            {config.activo ? 'Ninguna sesión empezada todavía.' : 'El bot está apagado: enciéndelo para que opere las próximas sesiones.'}
+            {cerradasHoy.length ? 'Las sesiones de hoy ya han cerrado: están en el historial.'
+              : config.activo ? 'Ninguna sesión empezada todavía.' : 'El bot está apagado: enciéndelo para que opere las próximas sesiones.'}
             {proxima && ` La próxima: ${fechaHora(proxima)}.`}
           </p>
         ) : (
           <div className="bot-tarjetas">
-            {[...cuentasHoy].sort((a, b) => (ORDEN_ESTADO[a.d.estado] ?? 1) - (ORDEN_ESTADO[b.d.estado] ?? 1) || a.d.abre - b.d.abre)
+            {cuentasHoy.filter(c => hoy.includes(c.d)).sort((a, b) => (ORDEN_ESTADO[a.d.estado] ?? 1) - (ORDEN_ESTADO[b.d.estado] ?? 1) || a.d.abre - b.d.abre)
               .map(c => <SesionHoy key={c.d.clave} cuentas={c} nombre={nombre(c.d.ticker)} maxUnidades={maxUnidades} ahora={ahora} />)}
           </div>
         )}

@@ -1238,11 +1238,13 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   function estado() {
     const t = ahora()
     const dias = Object.values(datos.dias).sort((a, b) => b.abre - a.abre)
-    // "hoy": la sesión en curso o la última del día de cada instrumento, y lo que siga entre manos
+    // "hoy": la sesión de hoy de cada instrumento hasta que cierra, y lo que siga entre manos.
+    // Una sesión cerrada sin nada abierto pasa al historial al momento, sin esperar a que cambie
+    // el día en su bolsa (el Nikkei cierra a las 8:30 de Madrid y el día de Tokio, a las 17:00)
     const actuales = new Set()
     for (const ticker of Object.keys(SESIONES_BOT)) {
       const ses = E.sesionDe(ticker, t)
-      if (ses && datos.dias[clave(ses)]) actuales.add(clave(ses))
+      if (ses && t < ses.cierra && datos.dias[clave(ses)]) actuales.add(clave(ses))
     }
     for (const d of dias) if (enJuego(d)) actuales.add(d.clave)
     // Para el gráfico de la pestaña: la sesión que aún no ha guardado sus velas lleva las de 15

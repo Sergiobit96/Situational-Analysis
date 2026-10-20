@@ -102,7 +102,11 @@ function botDePrueba(ig, { estrategia = RULE_OF_4, avisar, cambios = {} } = {}) 
   return { bot, dir, enHora: x => { t = x } }
 }
 const vela1m = (ticker, time, high, low, close = (high + low) / 2) => registrarVela('ig', ticker, { time, open: close, high, low, close })
-const apunte = (bot, ticker) => bot.estado().hoy.find(d => d.ticker === ticker)
+// la sesión más reciente de un instrumento, esté aún en "hoy" o ya en el historial
+const apunte = (bot, ticker) => {
+  const { hoy, historial } = bot.estado()
+  return hoy.find(d => d.ticker === ticker) ?? historial.find(d => d.ticker === ticker)
+}
 const soloNasdaq = { instrumentos: { '^NDX': true, '^GSPC': false, '^DJI': false } }
 
 test('una reunión del FOMC entera en el Nasdaq: bracket en la cuarta vela de 10 min, rotura, cierre a las dos horas y velas de 10 min guardadas', async () => {
@@ -135,7 +139,7 @@ test('una reunión del FOMC entera en el Nasdaq: bracket en la cuarta vela de 10
 
     // a las dos horas del comunicado, fuera
     enHora(utc(10, 28, 20, 0, 3)); await bot._paso()
-    hoy = bot.estado().hoy.find(d => d.ticker === '^NDX') ?? bot.estado().historial.find(d => d.ticker === '^NDX')
+    hoy = apunte(bot, '^NDX')
     assert.equal(hoy.salida.motivo, 'cierre')
     enHora(utc(10, 28, 20, 0, 8)); await bot._paso()
     const d = bot._datos().dias['2026-10-28 ^NDX']

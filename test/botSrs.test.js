@@ -225,7 +225,11 @@ function botDePrueba(ig, cambios = {}, { avisar, registro } = {}) {
 const vela1m = (ticker, time, high, low, close = (high + low) / 2) => registrarVela('ig', ticker, { time, open: close, high, low, close })
 const vela15 = (time, open, high, low, close) => ({ time, open, high, low, close })
 const soloDax = { instrumentos: { '^N225': false, '^GDAXI': true, '^NDX': false, '^GSPC': false, '^DJI': false } }
-const apunte = (bot, ticker) => bot.estado().hoy.find(d => d.ticker === ticker)
+// la sesión más reciente de un instrumento, esté aún en "hoy" o ya en el historial
+const apunte = (bot, ticker) => {
+  const { hoy, historial } = bot.estado()
+  return hoy.find(d => d.ticker === ticker) ?? historial.find(d => d.ticker === ticker)
+}
 
 test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y velas guardadas', async () => {
   const sesion = Array.from({ length: 34 }, (_, i) => {
@@ -266,6 +270,9 @@ test('una sesión del DAX entera: bracket, plan, rotura, cierre a las 17:30 y ve
     hoy = apunte(bot, '^GDAXI')
     assert.equal(hoy.estado, 'terminado')
     assert.equal(hoy.salida.motivo, 'cierre')
+    // cerrada y sin nada abierto, pasa al historial al momento, sin esperar a la medianoche
+    assert.equal(bot.estado().hoy.length, 0)
+    assert.equal(bot.estado().historial[0].clave, '2026-10-19 ^GDAXI')
     assert.equal(ig.ordenes.find(o => o.tipo === 'cerrar').limite, null)
     assert.equal(hoy.resultadoPts, 25502 - 25503)
     assert.ok(Math.abs(hoy.resultadoEur - (-1 * 6.2)) < 1e-9)

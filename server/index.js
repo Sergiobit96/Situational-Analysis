@@ -24,6 +24,7 @@ import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, 
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
 import { crearFuturosTortugas } from './futuros-tortugas.js'
+import { crearColaFeed } from './cola-feed.js'
 import { gzipSync } from 'zlib'
 import Anthropic from '@anthropic-ai/sdk'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
@@ -701,15 +702,21 @@ function velasDukascopyGuardadas(instrument, date, tf) {
 }
 
 async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
-  const tf       = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
-  const cacheKey = `duka_${instrument}_${date}_${tf}`
+  const tf = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
 
   const guardadas = velasDukascopyGuardadas(instrument, date, tf)
   if (guardadas) return guardadas
-  const useDisk = sesionCerrada(date)
 
   // 3. Sin caché: si la fuente está marcada como caída, no gastar otro timeout de 10 s
   if (dukaCaido()) return []
+  return descargarVelasDukascopy(instrument, date, tf)
+}
+
+// La descarga en sí, sin mirar la caché de velas ni el circuito de corte, y lo que baja
+// queda guardado. La usa también la cola del feed, que lleva su propio ritmo.
+async function descargarVelasDukascopy(instrument, date, tf) {
+  const cacheKey = `duka_${instrument}_${date}_${tf}`
+  const useDisk  = sesionCerrada(date)
 
   console.log(`[Dukascopy] Descargando ${instrument} ${date} (${tf})…`)
   const from = new Date(date + 'T00:00:00Z')
@@ -1104,11 +1111,33 @@ app.get('/api/velas15m', async (req, res) => {
   }
 })
 
-// Varias sesiones en una sola petición, solo con lo que ya está guardado: con la caché
+// Las sesiones que las estrategias piden y no están guardadas se bajan aquí, de una en una
+// y al ritmo que aguanta el feed (ver server/cola-feed.js). Sin fallbacks: una barra de
+// Yahoo de 60 min o la diaria no le sirven a una estrategia de velas de 15.
+const colaFeed = crearColaFeed({
+  bajar: async ({ instrument, date, tf }) => {
+    if (velasDukascopyGuardadas(instrument, date, tf)) return 'cache'
+    // con el fichero del día ya en disco no sale a la red, solo agrega; aun así se hace
+    // aquí, para que un fichero que no sirve acabe como vacío en vez de volver a la cola
+    const local = tf !== 'h1' && diaEnCacheDukascopy(instrument, Date.parse(`${date}T00:00:00Z`) / 1000)
+    const t0 = Date.now()
+    const hubo429 = () => dukascopyLimitando(Date.now() - t0 + 1_000)
+    let velas
+    try { velas = await descargarVelasDukascopy(instrument, date, tf) } catch { return hubo429() ? 'limitado' : 'fallo' }
+    // un 429 llega como fichero vacío: si lo ha habido durante la descarga, el vacío no vale
+    if (!velas.length) return hubo429() ? 'limitado' : 'vacio'
+    if (local) return 'cache'
+    dukaCaidaTs = 0   // el feed responde: el resto de peticiones puede volver a usarlo
+    return 'ok'
+  },
+})
+
+// Varias sesiones en una sola petición, con lo que ya está guardado: con la caché
 // caliente, 500 sesiones de una estrategia son veinte viajes en vez de 500 en serie. No
-// sale a la red: lo que no esté (o lo que el feed tenga vacío y tire de otra fuente) no
-// viene en la respuesta, y el cliente lo pide con /api/velas15m, que es quien sabe ir al
-// feed a su ritmo y a los fallbacks.
+// sale a la red. Con `encolar=1`, lo que falte se encarga a la cola del feed y viene en
+// `pendientes` hasta que esté; con `soloEncolar=1` solo se encarga, sin devolver velas.
+// Lo que no se encarga (la sesión de hoy, que aún no ha cerrado) no viene en ninguna de
+// las dos listas, y el cliente lo pide con /api/velas15m.
 const MAX_SESIONES_LOTE = 60
 
 app.get('/api/velas15m/lote', async (req, res) => {
@@ -1119,19 +1148,33 @@ app.get('/api/velas15m/lote', async (req, res) => {
     if (!instrument || !fechas.length) return res.status(400).json({ error: 'ticker de Dukascopy y fechas requeridos' })
     if (fechas.length > MAX_SESIONES_LOTE) return res.status(400).json({ error: `máximo ${MAX_SESIONES_LOTE} fechas por lote` })
     const tf = DUKA_TIMEFRAMES.has(timeframe) ? timeframe : 'm15'
+    const soloEncolar = req.query.soloEncolar === '1'
+    const encolar     = soloEncolar || req.query.encolar === '1'
 
-    const sesiones = {}
+    const sesiones = {}, sinDatos = [], aEncolar = []
     for (const date of fechas) {
+      const clave = `${instrument}|${date}`
+      if (colaFeed.sinDatos(clave)) { sinDatos.push(date); continue }
+      // con el fichero de 1 min del día ya en disco (otro timeframe, el backfill) las velas
+      // se agregan en local, sin pedirle nada al feed. La horaria sale de ficheros de mes.
+      const enDisco = tf !== 'h1' && sesionCerrada(date) && diaEnCacheDukascopy(instrument, Date.parse(`${date}T00:00:00Z`) / 1000)
+      if (soloEncolar) {
+        if (!enDisco && !velasDukascopyGuardadas(instrument, date, tf) && sesionCerrada(date)) aEncolar.push({ clave, instrument, date, tf })
+        continue
+      }
       let velas = velasDukascopyGuardadas(instrument, date, tf)
-      // Sin las velas de ese timeframe pero con el fichero de 1 min del día ya en disco
-      // (otro timeframe, el backfill): se agregan en local, sin pedirle nada al feed. La
-      // horaria sale de ficheros de mes, que esto no mira.
-      if (!velas && tf !== 'h1' && sesionCerrada(date) && diaEnCacheDukascopy(instrument, Date.parse(`${date}T00:00:00Z`) / 1000)) {
-        try { velas = await obtenerVelasDukascopy(instrument, date, tf) } catch { velas = null }
+      if (!velas && enDisco) {
+        try { velas = await descargarVelasDukascopy(instrument, date, tf) } catch { velas = null }
       }
       if (velas?.length) sesiones[date] = { velas, fuente: `Dukascopy ${timeframe}` }
+      else if (sesionCerrada(date)) aEncolar.push({ clave, instrument, date, tf })
     }
-    res.json({ ticker, timeframe, sesiones })
+    if (encolar && aEncolar.length) colaFeed.encolar(aEncolar)
+    const pendientes = fechas.filter(date => colaFeed.pendiente(`${instrument}|${date}`))
+    res.json({
+      ticker, timeframe, sesiones, sinDatos, pendientes,
+      cola: { ...colaFeed.estado(), limitando: dukascopyLimitando() },
+    })
   } catch (err) {
     console.error('[velas15m/lote]', err.message)
     res.status(500).json({ error: err.message })

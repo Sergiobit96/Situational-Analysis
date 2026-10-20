@@ -229,6 +229,17 @@ const fmtSgn = v => v == null ? '—'
   : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('es-ES', { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 1 })}`
 const fmtPtsSgn = v => v == null ? '—' : `${fmtSgn(v)} pts`
 
+// Lo que se dice mientras se espera a la cola del feed del servidor: lo que no está en
+// caché se baja al ritmo que aguanta Dukascopy, y a veces el feed corta un buen rato
+function textoCola(cola) {
+  if (!cola) return ''
+  if (cola.descansoHasta) {
+    const hora = new Date(cola.descansoHasta).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
+    return ` · Dukascopy ha cortado las descargas; se reanudan hacia las ${hora}`
+  }
+  return ` · bajando del feed a su ritmo, ${cola.enCola} en cola${cola.limitando ? ' (ahora está limitando)' : ''}`
+}
+
 // Descarga y analiza las sesiones por orden: lo que el servidor ya tiene guardado llega en
 // lotes, y lo que falta va de una en una porque Dukascopy limita por IP en cuanto se le
 // piden muchos ficheros seguidos. Cada resultado se pinta en cuanto llega (con el botón
@@ -483,7 +494,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
       const opciones = opcionesMotor
       const acumuladas = []
-      for await (const { fecha, velas: velas5, fuente: fuenteVelas } of velasDeSesiones(ticker, fechas, 'm5', ctrl.signal)) {
+      const alEsperar = cola => setProgreso(p => p && { ...p, cola })
+      for await (const { fecha, velas: velas5, fuente: fuenteVelas } of velasDeSesiones(ticker, fechas, 'm5', ctrl.signal, alEsperar)) {
         if (ctrl.signal.aborted) return
 
         // El feed devuelve el día entero (00:00-23:59). Se recorta a la ventana con media hora
@@ -501,7 +513,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         }
         acumuladas.push(fila)
         setResultados(prev => [...prev, fila])
-        setProgreso(prev => ({ ...prev, done: prev.done + 1 }))
+        setProgreso(prev => ({ ...prev, done: prev.done + 1, cola: null }))
       }
 
       // las que sigan sin resolverse se recorren con velas de 1 min
@@ -545,7 +557,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
       const acumuladas = []
       const porFecha = new Map(lista.map(s => [s.date, s]))
-      for await (const { fecha, velas, fuente } of velasDeSesiones(ticker, lista.map(s => s.date), descarga, ctrl.signal)) {
+      const alEsperar = cola => setProgreso(p => p && { ...p, cola })
+      for await (const { fecha, velas, fuente } of velasDeSesiones(ticker, lista.map(s => s.date), descarga, ctrl.signal, alEsperar)) {
         if (ctrl.signal.aborted) return
         const s = porFecha.get(fecha)
         const prep = prepararSesion(estr, ticker, velas)
@@ -564,7 +577,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         }
         acumuladas.push(fila)
         setResultados(prev => [...prev, fila])
-        setProgreso(prev => ({ ...prev, done: prev.done + 1 }))
+        setProgreso(prev => ({ ...prev, done: prev.done + 1, cola: null }))
       }
 
       // y las sesiones que quedaron sin resolver se recorren con 5 y, si hace falta, 1 min
@@ -925,7 +938,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             <div className="velas-cargando">
               <span className="spinner" />
               {progreso?.total
-                ? `Descargando velas… ${progreso.done}/${progreso.total}`
+                ? `Descargando velas… ${progreso.done}/${progreso.total}${textoCola(progreso.cola)}`
                 : 'Buscando sesiones…'}
               <button className="btn-cancelar-velas" onClick={cancelar}>✕ Cancelar</button>
             </div>

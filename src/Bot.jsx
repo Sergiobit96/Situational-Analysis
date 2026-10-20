@@ -62,7 +62,7 @@ const ladoTexto = lado => (lado === 'largo' ? 'Compra' : 'Venta')
 const describirPiernas = d => piernasDe(d).map(p => `${ladoTexto(p.lado)}${p.unidades?.length > 1 ? ` ×${p.unidades.length}` : ''}`).join(' → ')
 
 // Lo que habría hecho el backtest esa sesión, con la configuración del día (y el mismo tope
-// de posiciones de la pirámide que el bot). Con la pirámide de las tortugas, la N que el bot
+// de posiciones de la pirámide que el bot, el de la sesión si lo lleva). Con la pirámide de las tortugas, la N que el bot
 // sacó del diario ese día
 const aVelas = filas => filas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
 function backtestDe(d, maxUnidades) {
@@ -72,7 +72,7 @@ function backtestDe(d, maxUnidades) {
   const piramideN = c.piramideN && c.piramide ? { pasoN: c.piramide, stopN: c.stopN ?? 2 } : null
   const a = analizarSesion({
     velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: piramideN ? 0 : c.piramide ?? 0,
-    tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades, tpPct: null, ventana: d.ventana,
+    tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades: c.maxUnidades ?? maxUnidades, tpPct: null, ventana: d.ventana,
     colorBracket: c.colorBracket ?? null, piramideN, n: d.n ?? null,
   })
   if (!a.valido) return { valido: false, motivo: a.motivo }

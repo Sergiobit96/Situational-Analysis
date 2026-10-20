@@ -269,6 +269,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     tpPct: tpValor,
     stopPct,
     tamanoAnadido: TAMANOS.find(t => t.id === tamano)?.tamano ?? 1,
+    // el tope de posiciones de la pirámide, si la estrategia trae el suyo
+    maxUnidades: estr.maxUnidades,
     costePts: Number(coste) > 0 ? Number(coste) : 0,
   }
 

@@ -51,6 +51,8 @@ export const ESTRATEGIAS = [
     colorBracket: 'bajista',
     // pirámide de las tortugas, con su N: el ATR de Wilder de 20 sesiones en velas diarias
     tortuga: { pasoN: 0.5, stopN: 2 },
+    // 4 posiciones en total: la entrada y 3 añadidos
+    maxUnidades: 4,
   },
 ]
 

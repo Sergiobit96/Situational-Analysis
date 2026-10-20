@@ -365,6 +365,14 @@ test('el stop a 2 N nunca se afloja', () => {
   assert.equal(a.salida.precio, 100)
 })
 
+test('First bar negative llega como mucho a 4 posiciones: la entrada y 3 añadidos', () => {
+  assert.equal(FBN.maxUnidades, 4)
+  const cae = [PRIMERA_NEGRA]
+  for (let i = 0; i < 8; i++) cae.push([86 - 3 * i, 87 - 3 * i, 83 - 3 * i, 83.5 - 3 * i])   // 3 puntos más abajo cada vela
+  assert.equal(analizarSesion({ ...OPC_FBN, maxUnidades: FBN.maxUnidades, velas: velas5De(...cae) }).anadidos.length, 3)
+  assert.equal(analizarSesion({ ...OPC_FBN, velas: velas5De(...cae) }).anadidos.length, 5)   // sin tope propio, el del motor
+})
+
 test('prepararSesion deja las velas de 5 min tal cual para First bar negative', () => {
   const cinco = velas5De([100, 101, 99, 100], [100, 101, 99, 100])
   const { velas, finas, ventana } = prepararSesion(FBN, '^GDAXI', cinco)

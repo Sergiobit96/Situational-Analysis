@@ -56,7 +56,7 @@ const ESTRATEGIAS = [
                  'a favor desde el último relleno, y con cada añadido el stop de toda la posición baja a 2 N ' +
                  'por encima de él (solo si así se aprieta). N es la de las tortugas, en velas diarias: el ATR de ' +
                  'Wilder de 20 sesiones hasta la anterior, con el diario de Yahoo del índice. Como mucho un añadido por vela de 5 min ' +
-                 'y hasta 6 unidades; lo que siga abierto se cierra con la sesión. Con flip, si salta el stop en el ' +
+                 'y hasta 4 posiciones con la entrada (3 añadidos); lo que siga abierto se cierra con la sesión. Con flip, si salta el stop en el ' +
                  'máximo de la vela se compra ahí mismo, con el stop en su mínimo y la misma pirámide hacia arriba.',
     Componente:  EstrategiaSegundaVela,
   },

@@ -30,6 +30,7 @@ test('nace apagado, con sus referencias, y solo vende', () => {
   assert.equal(c.colorBracket, 'bajista')
   assert.equal(c.piramide, 0.5)
   assert.equal(c.stopN, 2)
+  assert.equal(c.maxUnidades, 4)                         // la entrada y 3 añadidos
   assert.equal(FIRST_BAR_NEGATIVE.prefijo, 'FBN-')
   assert.notEqual(FIRST_BAR_NEGATIVE.prefijo, SRS.prefijo)
 })
@@ -62,6 +63,19 @@ test('la N del bot es la de la pestaña Estrategias: el ATR de Wilder de 20 sesi
     assert.ok(bot === pestana || Math.abs(bot - pestana) < 1e-9, `${fecha}: ${bot} y ${pestana}`)
   }
   assert.equal(nDiario(diarias, '2026-06-10'), null)   // aún no hay 20 sesiones antes
+})
+
+test('añade hasta tener 4 posiciones, con la entrada', () => {
+  const ses = sesionFirstBar('^GDAXI', utc(5, 12))
+  const cfg = { ...FIRST_BAR_NEGATIVE.configInicial, activo: true }
+  const pierna = entradas => ({
+    estado: 'en-posicion', n: 4, bracket: { high: 100, low: 90, rango: 10 },
+    operacion: { lado: 'corto', entrada: 90, nivelOrden: 90, riesgo: 10, stop: 100, hora: utc(5, 8, 6), unidades: entradas.map(entrada => ({ entrada })) },
+  })
+  const velas = [{ time: utc(5, 9), open: 80, high: 81, low: 79, close: 80 }]
+  const ahora = utc(5, 9, 0, 20)
+  assert.equal(siguientePaso({ dia: pierna([90, 88, 86]), cfg, ahora, velas, ses }).accion, 'anadir')
+  assert.equal(siguientePaso({ dia: pierna([90, 88, 86, 84]), cfg, ahora, velas, ses }).accion, 'vigilar')
 })
 
 // ── El bot entero, con un IG de mentira ──

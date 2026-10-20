@@ -97,7 +97,7 @@ const ESPERA_MARGEN_S = 60       // un añadido que no cabe en el margen lo vuel
 const ESPERA_FONDOS_S = 300      // y si IG lo rechaza por falta de fondos, pasado este
 const BRACKETS_TIPICOS = 10      // los últimos brackets de un instrumento con los que se estima el margen de su entrada
 const PREFIJO = 'SRS-'           // referencia de las órdenes del bot
-export const MAX_UNIDADES = 4    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida: la entrada y
+export const MAX_UNIDADES = 4    // posiciones abiertas como mucho por instrumento y sentido, la entrada incluida (si la estrategia no trae su `maxUnidades`): la entrada y
                                  // 3 añadidos (el usuario lo bajó de 5 el 19-oct-2026, por el margen que se comía la pirámide)
 const MAX_PIERNAS = 2            // flip the switch: la entrada y una única vuelta, como el backtest
 const MIN_EN_VELA = 12           // de las 15 velas de 1 min, las que tiene que haber para dar por buena una de 15 hecha con el directo
@@ -210,9 +210,12 @@ export const FIRST_BAR_NEGATIVE = {
     modo: 'corto', stopPct: 1, beR: null,
     piramide: 0.5, tamanoAnadido: 1,
     colorBracket: 'bajista', piramideN: true, stopN: 2,
+    // 4 posiciones en total, la entrada y 3 añadidos (lo pidió el usuario el 20-oct-2026), aunque el
+    // SRS cambie su MAX_UNIDADES
+    maxUnidades: 4,
   },
   describir: {
-    piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta ${MAX_UNIDADES - 1} añadidos`}`,
+    piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta 3 añadidos`}`,
   },
   sesionDe: sesionFirstBar, proximaApertura,
 }
@@ -285,7 +288,7 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
     if (op.stopPendiente != null && !(op.esperaStop > ahora)) return { accion: 'stop' }
     // pirámide: el precio llegó al nivel de la siguiente posición (una como mucho cada 5 min)
     const n = op.unidades?.length ?? 1
-    if (cfg.activo && cfg.piramide && n < MAX_UNIDADES && !op.sinAnadidos && precio != null
+    if (cfg.activo && cfg.piramide && n < (cfg.maxUnidades ?? MAX_UNIDADES) && !op.sinAnadidos && precio != null
         && Math.floor(ahora / 300) !== op.ultimoCubo5 && !(op.esperaAnadir > ahora)) {
       const nivel = cfg.piramideN ? nivelAnadidoN(op, cfg, dia.n) : nivelAnadido(op, cfg, n)
       if (nivel != null && (largo ? precio >= nivel : precio <= nivel)) return { accion: 'anadir' }
@@ -898,7 +901,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const referencia = referenciaNueva(dia)
     // tras un rechazo de IG por falta de fondos, los reintentos no se apuntan hasta que entre
     const reintento = op.sinFondos != null
-    if (!reintento) apuntar(dia, `Pirámide: ${largo ? 'compra' : 'venta'} de ${tamano} más, la posición ${op.unidades.length + 1} de ${MAX_UNIDADES} como mucho`)
+    if (!reintento) apuntar(dia, `Pirámide: ${largo ? 'compra' : 'venta'} de ${tamano} más, la posición ${op.unidades.length + 1} de ${cfg.maxUnidades ?? MAX_UNIDADES} como mucho`)
     dia.estado = 'entrando'
     dia.intento = { tipo: 'anadido', lado: op.lado, tamano, stop, hora: ahora(), referencia, nivel }
     guardar()
@@ -1373,7 +1376,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     return {
       estrategia: { id: E.id, nombre: E.nombre, minutosVela: E.minutosVela, nBracket: E.nBracket },
       config: datos.config,
-      maxUnidades: MAX_UNIDADES,
+      maxUnidades: datos.config.maxUnidades ?? MAX_UNIDADES,
       sesiones: Object.entries(SESIONES_BOT).map(([ticker, s]) => {
         const ses = E.sesionDe(ticker, t)
         return {

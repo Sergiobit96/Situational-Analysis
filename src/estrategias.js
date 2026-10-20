@@ -49,9 +49,8 @@ export const ESTRATEGIAS = [
     // reglas fijas, que mandan sobre los chips de operativa
     lado: 'corto',
     colorBracket: 'bajista',
-    // pirámide de las tortugas con N medido en 20 velas de 5 min, o en las que haya si son
-    // al menos 10: hasta 2018 el DAX de Dukascopy no abre hasta las 08:00
-    tortuga: { pasoN: 0.5, stopN: 2, velasN: 20, minVelasN: 10 },
+    // pirámide de las tortugas, con su N: el ATR de Wilder de 20 sesiones en velas diarias
+    tortuga: { pasoN: 0.5, stopN: 2 },
   },
 ]
 

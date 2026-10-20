@@ -7,9 +7,9 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { crearBot, siguientePaso, sesionFirstBar, rangoVerdaderoMedio, FIRST_BAR_NEGATIVE, SRS } from '../server/bot-srs.js'
+import { crearBot, siguientePaso, sesionFirstBar, nDiario, FIRST_BAR_NEGATIVE, SRS } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
-import { analizarSesion } from '../src/segundaVelaCore.js'
+import { analizarSesion, nDiarioPorFecha } from '../src/segundaVelaCore.js'
 
 // noviembre de 2026: Fráncfort y Madrid en invierno (UTC+1), así que el DAX abre a las 08:00 UTC
 const utc = (dia, h, m = 0, s = 0) => Date.UTC(2026, 10, dia, h, m, s) / 1000
@@ -44,13 +44,24 @@ test('entra solo al perder el mínimo de la vela, nunca al superar el máximo', 
   assert.deepEqual(siguientePaso({ dia, cfg, ahora, velas: vela(96, 89.5), ses }), { accion: 'entrar', lado: 'corto' })
 })
 
-test('el N del bot es el de la pestaña Estrategias', () => {
-  const velas = [[10, 12, 9, 11], [11, 15, 10, 14], [14, 14, 6, 7]].map(([open, high, low, close], i) => ({ time: i * 300, open, high, low, close }))
-  // la primera no tiene cierre anterior: su rango; las otras, desde el cierre de la anterior
-  assert.equal(rangoVerdaderoMedio(velas, 3), (3 + 5 + 8) / 3)
-  assert.equal(rangoVerdaderoMedio(velas, 2), (5 + 8) / 2)
-  assert.equal(rangoVerdaderoMedio(velas, 20, 3), (3 + 5 + 8) / 3)   // menos de 20, pero llegan al mínimo
-  assert.equal(rangoVerdaderoMedio(velas, 20, 4), null)
+test('la N del bot es la de la pestaña Estrategias: el ATR de Wilder de 20 sesiones diarias hasta la anterior', () => {
+  // un diario cualquiera, con huecos, días sin rango y fechas desordenadas
+  let precio = 20000
+  const diarias = Array.from({ length: 80 }, (_, i) => {
+    const date = new Date(Date.UTC(2026, 5, 1 + i)).toISOString().slice(0, 10)
+    const open = precio + ((i * 37) % 23) - 11
+    const high = open + 40 + ((i * 13) % 50)
+    const low = i % 17 === 5 ? high : open - 30 - ((i * 7) % 40)
+    precio = (high + low) / 2 + ((i * 11) % 9) - 4
+    return { date, open, high, low, close: precio }
+  }).reverse()
+  const nDe = nDiarioPorFecha(diarias)
+  for (const fecha of ['2026-06-10', '2026-06-25', '2026-07-15', '2026-08-19', '2026-12-01']) {
+    const bot = nDiario(diarias, fecha)
+    const pestana = nDe(fecha)
+    assert.ok(bot === pestana || Math.abs(bot - pestana) < 1e-9, `${fecha}: ${bot} y ${pestana}`)
+  }
+  assert.equal(nDiario(diarias, '2026-06-10'), null)   // aún no hay 20 sesiones antes
 })
 
 // ── El bot entero, con un IG de mentira ──
@@ -95,11 +106,18 @@ function igFalso({ precios = {}, velas = {} } = {}) {
   return ig
 }
 
-function botDePrueba(ig, { avisar } = {}) {
+// El diario del DAX: 30 sesiones de septiembre y octubre de 4 puntos de rango verdadero, así que
+// N = 4 (se añade cada 2 puntos y el stop va a 8 de la última). La de hoy, a medio hacer, no cuenta
+const DIARIO_DAX = [
+  ...Array.from({ length: 30 }, (_, i) => ({ date: new Date(Date.UTC(2026, 8, 20 + i)).toISOString().slice(0, 10), open: 25500, high: 25502, low: 25498, close: 25500 })),
+  { date: '2026-11-05', open: 25500, high: 26000, low: 25000, close: 25500 },
+]
+
+function botDePrueba(ig, { avisar, velasDiarias = async () => DIARIO_DAX } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-fbn-'))
   let t = 0
   ig.reloj = () => t
-  const bot = crearBot({ ig, archivo: join(dir, 'bot.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar, estrategia: FIRST_BAR_NEGATIVE })
+  const bot = crearBot({ ig, archivo: join(dir, 'bot.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar, estrategia: FIRST_BAR_NEGATIVE, velasDiarias })
   bot.cambiarConfig({ activo: true, instrumentos: { '^N225': false, '^GDAXI': true, '^NDX': false, '^GSPC': false, '^DJI': false } })
   return { bot, dir, enHora: x => { t = x } }
 }
@@ -109,11 +127,8 @@ const apunte = bot => {
   return hoy.find(d => d.ticker === '^GDAXI') ?? historial.find(d => d.ticker === '^GDAXI')
 }
 
-// Las 100 velas de 1 min de antes de la apertura, quietas (2 puntos de rango cada vela de 5
-// min), y la primera de la sesión, de 25521 a 25479 (42 puntos) y cerrando en negativo:
-// N = (19 × 2 + 42) / 20 = 4, así que se añade cada 2 puntos y el stop va a 8 de la última
+// La primera vela de la sesión, de 25521 a 25479 (42 puntos) y cerrando en negativo
 function mananaNegra(dia) {
-  for (let m = 0; m < 100; m++) vela1m(utc(dia, 6, 20 + m), 25500, 25501, 25499, 25500)
   const primera = [[25515, 25521, 25510, 25512], [25512, 25513, 25500, 25505], [25505, 25506, 25490, 25495], [25495, 25498, 25485, 25490], [25490, 25492, 25479, 25485]]
   primera.forEach(([o, h, l, c], m) => vela1m(utc(dia, 8, m), o, h, l, c))
 }
@@ -135,8 +150,8 @@ test('una sesión del DAX: vende al perder el mínimo, añade cada ½ N y sale e
     let d = apunte(bot)
     assert.deepEqual(d.bracket, { high: 25521, low: 25479, rango: 42, vela: utc(5, 8) })
     assert.equal(d.n, 4)
-    assert.equal(d.previasN.length, 20)
     assert.equal(d.estado, 'esperando-rotura')
+    assert.match(d.eventos.at(-1).texto, /N = 4\.0: añade cada 2\.0 puntos y lleva el stop a 8\.0 de la última/)
     assert.equal(d.plan.tamano, 4.7)                       // 200 € entre 42 puntos a 1 €/punto
 
     d = await bajar(6, 25478)                              // pierde el mínimo: venta a 25478
@@ -166,16 +181,17 @@ test('una sesión del DAX: vende al perder el mínimo, añade cada ½ N y sale e
     assert.equal(d.resultadoPts, -2 - 5 - 8)
     assert.ok(avisos.every(a => a.startsWith('First bar negative · ')))
 
-    // la pestaña Bot mide el mismo N con las velas que guarda el bot, y ve la misma venta
+    // la pestaña Bot pasa por el backtest las velas que guarda el bot con la N del día, y ve la
+    // misma venta y los mismos añadidos
     const aVelas = filas => filas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
     const c = d.config
     const a = analizarSesion({
-      velas: aVelas(d.velas), velasPrevias: aVelas(d.previasN), ticker: d.ticker, ventana: d.ventana,
-      modo: c.modo, colorBracket: c.colorBracket, piramideN: { pasoN: c.piramide, stopN: c.stopN, velasN: c.velasN, minVelasN: c.minVelasN },
+      velas: aVelas(d.velas), n: d.n, ticker: d.ticker, ventana: d.ventana,
+      modo: c.modo, colorBracket: c.colorBracket, piramideN: { pasoN: c.piramide, stopN: c.stopN },
     })
-    assert.equal(a.n, 4)
     assert.equal(a.lado, 'corto')
     assert.equal(a.entrada.precio, 25479)
+    assert.equal(a.anadidos.length, 2)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -195,17 +211,17 @@ test('si la primera vela cierra en positivo, ese día no opera', async () => {
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('sin velas para medir N, opera la entrada pero no añade', async () => {
+test('sin el diario no hay N: opera la entrada pero no añade', async () => {
   const precios = { '^GDAXI': [25500, 25501] }
-  const ig = igFalso({ precios })                          // y el histórico de IG no tiene nada
-  const { bot, dir, enHora } = botDePrueba(ig)
+  const ig = igFalso({ precios })
+  const { bot, dir, enHora } = botDePrueba(ig, { velasDiarias: async () => { throw new Error('Yahoo no contesta') } })
   try {
     const primera = [[25515, 25521, 25510, 25512], [25512, 25513, 25500, 25505], [25505, 25506, 25490, 25495], [25495, 25498, 25485, 25490], [25490, 25492, 25479, 25485]]
     primera.forEach(([o, h, l, c], m) => vela1m(utc(9, 8, m), o, h, l, c))
     enHora(utc(9, 8, 5, 4)); await bot._paso()
     let d = apunte(bot)
     assert.equal(d.n, null)
-    assert.ok(d.eventos.some(e => /Sin N/.test(e.texto)))
+    assert.ok(d.eventos.some(e => e.texto === 'Sin N (Yahoo no contesta): hoy la pierna no añade'))
 
     precios['^GDAXI'] = [25478, 25479]
     vela1m(utc(9, 8, 6), 25480, 25481, 25478, 25478)

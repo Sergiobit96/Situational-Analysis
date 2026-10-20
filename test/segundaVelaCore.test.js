@@ -8,7 +8,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { analizarSesion, resumir, SESIONES } from '../src/segundaVelaCore.js'
+import { analizarSesion, resumir, SESIONES, nDiarioPorFecha } from '../src/segundaVelaCore.js'
 import { agruparVelas, ventanaRuleOf4, prepararSesion, estrategiaDe } from '../src/estrategias.js'
 import { madridOffsetAt, nuevaYorkOffsetAt } from '../src/timezone.js'
 
@@ -246,9 +246,9 @@ test('los desfases horarios son los de cada zona en esa fecha', () => {
 })
 
 // ── First bar negative ─────────────────────────────────────────────────────────
-// Velas de 5 min. Antes de la apertura, 19 velas de 3 puntos de rango; la primera de la
-// sesión va de 110 a 87 (23 puntos, cierra en negativo). N = (19 × 3 + 23) / 20 = 4, así que
-// se añade cada 2 puntos y el stop va a 8 del último añadido.
+// Velas de 5 min. La primera de la sesión va de 110 a 87 (23 puntos, cierra en negativo). N,
+// que es la del diario, vale 4 en las pruebas: se añade cada 2 puntos y el stop va a 8 del
+// último añadido.
 const FBN = estrategiaDe('first-bar-negative')
 const OPC_FBN = {
   ticker: '^GDAXI',
@@ -256,36 +256,34 @@ const OPC_FBN = {
   modo: FBN.lado,
   colorBracket: FBN.colorBracket,
   piramideN: FBN.tortuga,
+  n: 4,
 }
-const PREVIAS_5M = Array.from({ length: 19 }, (_, i) => ({
-  time: T0 - (19 - i) * 300, open: 100, high: 101.5, low: 98.5, close: 100,
-}))
 const velas5De = (...defs) => defs.map(([open, high, low, close], i) => ({
   time: T0 + i * 300, open, high, low, close,
 }))
 const PRIMERA_NEGRA = [108, 110, 87, 88]
 
 test('First bar negative solo vende, y solo si la primera vela cierra en negativo', () => {
-  const blanca = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M, ...velas5De([88, 110, 87, 108], [108, 109, 80, 81])] })
+  const blanca = analizarSesion({ ...OPC_FBN, velas: velas5De([88, 110, 87, 108], [108, 109, 80, 81]) })
   assert.equal(blanca.valido, true)
   assert.equal(blanca.resultado, 'sin-entrada')
   assert.equal(blanca.sinEntrada, 'color')
 
   // rompe por arriba y no hace nada; luego pierde el mínimo y vende ahí
-  const negra = analizarSesion({ ...OPC_FBN, piramideN: null, velas: [...PREVIAS_5M, ...velas5De(PRIMERA_NEGRA, [88, 109, 88, 108], [108, 108, 86, 86.5])] })
+  const negra = analizarSesion({ ...OPC_FBN, piramideN: null, velas: velas5De(PRIMERA_NEGRA, [88, 109, 88, 108], [108, 108, 86, 86.5]) })
   assert.equal(negra.lado, 'corto')
   assert.equal(negra.entrada.precio, 87)
   assert.equal(negra.entrada.time, T0 + 600)
 })
 
 test('First bar negative con flip compra en el máximo de la vela cuando salta el stop', () => {
-  const sesion = sigue => [...PREVIAS_5M, ...velas5De(
+  const sesion = sigue => velas5De(
     PRIMERA_NEGRA,
     [88, 112, 88, 100],       // rompe por arriba: tampoco con flip se entra en largo de primeras
     [100, 101, 86, 86.5],     // vende en 87
     [86.5, 111, 86, 110.5],   // salta el stop en 110 → compra ahí, con el stop en 87
     sigue,
-  )]
+  )
   const opc = { ...OPC_FBN, piramideN: null }
 
   const a = analizarSesion({ ...opc, flip: true, velas: sesion([110.5, 120, 110, 119]) })
@@ -311,32 +309,40 @@ test('First bar negative con flip compra en el máximo de la vela cuando salta e
   assert.equal(c.resultadoTotalPts, 87 - 110)
 })
 
-test('N es el rango verdadero medio de 20 velas de 5 min, la primera incluida', () => {
+// 26 sesiones diarias: una sin rango, que no cuenta; la 22.ª, de 12 puntos de rango verdadero;
+// y el resto, de 2. La media de Wilder arranca en 2 con las 20 primeras con rango y la de 12
+// la lleva a (2 × 19 + 12) / 20
+const DIARIAS = Array.from({ length: 26 }, (_, i) => {
+  const date = new Date(Date.UTC(2026, 0, 5 + i)).toISOString().slice(0, 10)
+  if (i === 3) return { date, open: 100, high: 100, low: 100, close: 100 }
+  return { date, open: 100, high: i === 21 ? 111 : 101, low: 99, close: 100 }
+})
+
+test('N es la de las tortugas: el ATR de Wilder de 20 sesiones diarias hasta la anterior', () => {
+  const nDe = nDiarioPorFecha([...DIARIAS].reverse())   // en cualquier orden
+  assert.equal(nDe(DIARIAS[20].date), null)             // antes solo hay 19 con rango
+  assert.equal(nDe(DIARIAS[21].date), 2)                // la de ese día aún no cuenta
+  assert.equal(nDe(DIARIAS[22].date), (2 * 19 + 12) / 20)
+  // y después de la última, cada sesión de 2 puntos la va bajando
+  let esperado = (2 * 19 + 12) / 20
+  for (let i = 22; i < 26; i++) esperado = (esperado * 19 + 2) / 20
+  assert.ok(Math.abs(nDe('2026-12-31') - esperado) < 1e-12)
+
+  // sin N, la pirámide de las tortugas no puede leer la sesión; con una sola unidad, sí
   const sesion = velas5De(PRIMERA_NEGRA, [88, 89, 86, 86.5])
-  const conFeed = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M, ...sesion] })
-  assert.equal(conFeed.n, 4)
-
-  // el CSV no tiene nada antes de la apertura: la cola de la sesión anterior da lo mismo
-  const conCsv = analizarSesion({ ...OPC_FBN, velas: sesion, velasPrevias: PREVIAS_5M })
-  assert.equal(conCsv.n, 4)
-
-  const sinPrevias = analizarSesion({ ...OPC_FBN, velas: sesion })
-  assert.equal(sinPrevias.valido, false)
-
-  // con 12 previas (el DAX de Dukascopy hasta 2018 empieza a las 08:00) se mide con 13 velas
-  const pocas = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M.slice(-12), ...sesion] })
-  assert.equal(pocas.n, (12 * 3 + 23) / 13)
+  assert.equal(analizarSesion({ ...OPC_FBN, n: null, velas: sesion }).valido, false)
+  assert.equal(analizarSesion({ ...OPC_FBN, n: null, piramideN: null, velas: sesion }).lado, 'corto')
 })
 
 test('First bar negative añade cada ½ N desde el último relleno y sube el stop a 2 N de él', () => {
-  const a = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M, ...velas5De(
+  const a = analizarSesion({ ...OPC_FBN, velas: velas5De(
     PRIMERA_NEGRA,
     [88, 89, 86, 86.5],       // vende en 87; el añadido estaría en 85
     [86.5, 87, 84, 84.5],     // añade en 85 → stop a 93
     [84.5, 85, 80, 80.5],     // añade en 83 → stop a 91
     [80.5, 81, 79, 79.5],     // abre ya pasado el 81: entra a la apertura, 80,5 → stop a 88,5
     [79.5, 89, 79, 88],       // salta el stop en 88,5
-  )] })
+  ) })
 
   assert.equal(a.entrada.precio, 87)
   assert.deepEqual(a.anadidos.map(x => x.precio), [85, 83, 80.5])
@@ -347,13 +353,13 @@ test('First bar negative añade cada ½ N desde el último relleno y sube el sto
 })
 
 test('el stop a 2 N nunca se afloja', () => {
-  // primera vela de solo 4 puntos (N = 3,05): 2 N del primer añadido quedaría por encima del
-  // máximo de la vela, así que el stop se queda donde estaba
-  const a = analizarSesion({ ...OPC_FBN, velas: [...PREVIAS_5M, ...velas5De(
+  // primera vela de solo 4 puntos con N = 3,05: 2 N del primer añadido quedaría por encima
+  // del máximo de la vela, así que el stop se queda donde estaba
+  const a = analizarSesion({ ...OPC_FBN, n: 3.05, velas: velas5De(
     [100, 100, 96, 97],
     [97, 97.5, 94, 94.5],     // vende en 96 y añade en 94,475 (½ N = 1,525)
     [94.5, 101, 94, 100],     // vuelve: salta el stop original en 100
-  )] })
+  ) })
   assert.equal(a.anadidos.length, 1)
   assert.equal(a.salida.motivo, 'bracket')
   assert.equal(a.salida.precio, 100)

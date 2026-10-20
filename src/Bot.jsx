@@ -62,18 +62,18 @@ const ladoTexto = lado => (lado === 'largo' ? 'Compra' : 'Venta')
 const describirPiernas = d => piernasDe(d).map(p => `${ladoTexto(p.lado)}${p.unidades?.length > 1 ? ` ×${p.unidades.length}` : ''}`).join(' → ')
 
 // Lo que habría hecho el backtest esa sesión, con la configuración del día (y el mismo tope
-// de posiciones de la pirámide que el bot). Con la pirámide de las tortugas, N sale de las
-// velas de antes de la apertura que el bot guardó al medirlo (`previasN`)
+// de posiciones de la pirámide que el bot). Con la pirámide de las tortugas, la N que el bot
+// sacó del diario ese día
 const aVelas = filas => filas.map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
 function backtestDe(d, maxUnidades) {
   if (!d.velas?.length) return null
   const velas = aVelas(d.velas)
   const c = d.config
-  const piramideN = c.piramideN && c.piramide ? { pasoN: c.piramide, stopN: c.stopN ?? 2, velasN: c.velasN ?? 20, minVelasN: c.minVelasN } : null
+  const piramideN = c.piramideN && c.piramide ? { pasoN: c.piramide, stopN: c.stopN ?? 2 } : null
   const a = analizarSesion({
     velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: piramideN ? 0 : c.piramide ?? 0,
     tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades, tpPct: null, ventana: d.ventana,
-    colorBracket: c.colorBracket ?? null, piramideN, velasPrevias: d.previasN ? aVelas(d.previasN) : null,
+    colorBracket: c.colorBracket ?? null, piramideN, n: d.n ?? null,
   })
   if (!a.valido) return { valido: false, motivo: a.motivo }
   if (!a.entrada) return { valido: true, resultadoPts: null }
@@ -381,7 +381,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             El tamaño sale del riesgo, que es lo que se pierde si salta ese stop: ese % del saldo de la cuenta entre el rango de la vela (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
             La entrada va a mercado, pero solo si el precio no se ha ido del mínimo más de lo que digas.
             La pirámide añade otra posición cada ½ N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
-            N es el rango verdadero medio de las 20 velas de 5 min hasta la primera, ella incluida.
+            N es la de las tortugas: el ATR de Wilder de 20 sesiones del diario del índice, hasta la anterior.
             Un cambio vale para las sesiones que aún no han fijado su bracket.
           </p>
         ) : (

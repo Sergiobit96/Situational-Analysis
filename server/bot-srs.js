@@ -46,8 +46,8 @@
 // bracket es la primera vela de 5 min y solo se opera si cierra en negativo, vendiendo al
 // perder su mínimo con el stop en su máximo. La pirámide es la de las tortugas: una posición
 // más cada ½ N desde el precio de la última, y el stop de todas a 2 N de ella (solo
-// apretando). N es el rango verdadero medio de 20 velas de 5 min al cerrar la del bracket,
-// ella incluida, como en la pestaña Estrategias; sin N, la pierna no añade.
+// apretando). N es la de las tortugas, el ATR de Wilder de 20 sesiones del diario del índice
+// hasta la anterior, como en la pestaña Estrategias; sin N, la pierna no añade.
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
 import { offsetMadrid } from './velas-grafico.js'
@@ -209,7 +209,7 @@ export const FIRST_BAR_NEGATIVE = {
     ...CONFIG_INICIAL,
     modo: 'corto', stopPct: 1, beR: null,
     piramide: 0.5, tamanoAnadido: 1,
-    colorBracket: 'bajista', piramideN: true, stopN: 2, velasN: 20, minVelasN: 10,
+    colorBracket: 'bajista', piramideN: true, stopN: 2,
   },
   describir: {
     piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta ${MAX_UNIDADES - 1} añadidos`}`,
@@ -239,19 +239,22 @@ const nivelAnadido = (op, cfg, n) => op.nivelOrden + (op.lado === 'largo' ? 1 : 
 const nivelAnadidoN = (op, cfg, n) => (n > 0 ? op.unidades.at(-1).entrada + (op.lado === 'largo' ? 1 : -1) * cfg.piramide * n : null)
 const redondear = x => Math.round(x * 10) / 10
 
-// Rango verdadero medio de las `k` últimas velas (cada una desde el cierre de la anterior), o de
-// las que haya si son al menos `minimo`. Es el N de rangoVerdaderoMedio en
-// src/segundaVelaCore.js, que el servidor no puede importar.
-export function rangoVerdaderoMedio(velas, k, minimo = k) {
-  if (velas.length < minimo) return null
-  k = Math.min(k, velas.length)
-  let suma = 0
-  for (let i = velas.length - k; i < velas.length; i++) {
-    const v = velas[i]
-    const c = velas[i - 1]?.close
-    suma += c == null ? v.high - v.low : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+// La N de las tortugas para la sesión de `fecha`: el ATR de Wilder de 20 sesiones en velas
+// diarias ({ date, open, high, low, close }) hasta la anterior, que es lo que se sabe al abrir.
+// null si antes no hay 20 sesiones. Es la cuenta de nDiarioPorFecha en src/segundaVelaCore.js
+// (y la de src/tortugas.js), que el servidor no puede importar.
+export function nDiario(diarias, fecha) {
+  const vs = (diarias ?? []).filter(v => v.high > v.low && v.date < fecha).sort((a, b) => a.date.localeCompare(b.date))
+  if (vs.length < 20) return null
+  let suma = 0, n = null
+  for (let i = 0; i < vs.length; i++) {
+    const v = vs[i]
+    const c = vs[i - 1]?.close
+    const tr = c == null ? v.high - v.low : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+    if (i < 20) { suma += tr; if (i === 19) n = suma / 20 }
+    else n = (n * 19 + tr) / 20
   }
-  return suma / k
+  return n
 }
 
 // ── La decisión (pura) ──
@@ -383,8 +386,10 @@ const DESCRIBIR = {
 
 // ── El bot ──
 // `avisar(texto)` recibe lo que pasa (para Telegram); si falla, el bot sigue a lo suyo.
-// `estrategia`: SRS (por defecto), RULE_OF_4 o FIRST_BAR_NEGATIVE.
-export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS }) {
+// `estrategia`: SRS (por defecto), RULE_OF_4 o FIRST_BAR_NEGATIVE. `velasDiarias(ticker)`, las
+// diarias del índice ([{ date, open, high, low, close }], fechadas en su bolsa), para la N de
+// la pirámide de las tortugas.
+export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS, velasDiarias = null }) {
   const E = estrategia
   const inicial = E.configInicial
   // de las velas de 1 min de la del bracket, las que tiene que haber para hacerla con el directo
@@ -509,36 +514,22 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     }
   }
 
-  // El N de la pirámide de las tortugas, al cerrar la vela del bracket: el rango verdadero medio
-  // de las `velasN` últimas velas de 5 min, ella incluida. Del directo si las tiene todas (el
-  // servidor estaba en marcha antes de la apertura); si no, del histórico de IG, y si este
-  // falla, del directo si llega al mínimo. Se guardan las de antes de la del bracket para que el
-  // backtest de la pestaña Bot mida el mismo N. Sin N, la pierna no añade.
+  // La N de la pirámide de las tortugas: la del diario del índice hasta la sesión anterior (la
+  // de las tortugas, nDiario). Se guarda en la sesión, y el backtest de la pestaña Bot usa esa
+  // misma. Si el diario no llega, la pierna no añade.
   async function medirN(dia, ses) {
-    const cfg = dia.config
-    const k = cfg.velasN ?? 20
-    const minimo = cfg.minVelasN ?? k
-    // una más de las que se miden: la más vieja solo pone el cierre del que parte la siguiente
-    const desde = ses.velaBracket - k * 300
-    const hasta = ses.velaBracket + 300
-    let velas = agruparDirecto(directo(dia.ticker), desde, hasta, 5)
-    let de = 'del directo'
-    if (velas.length < k + 1) {
-      try {
-        const hist = await historico(dia.ticker, desde, hasta)
-        if (hist.length > velas.length) { velas = hist; de = 'del histórico de IG' }
-      } catch (err) { de = `del directo; el histórico de IG falla: ${err.message}` }
-    }
-    velas = velas.filter(v => v.time <= ses.velaBracket)
-    const n = rangoVerdaderoMedio(velas, k, minimo)
+    let n = null, motivo = null
+    try {
+      if (!velasDiarias) throw new Error('este servidor no le da al bot el diario')
+      n = nDiario(await velasDiarias(dia.ticker), ses.fecha)
+      if (!(n > 0)) motivo = 'el diario no tiene 20 sesiones antes de hoy'
+    } catch (err) { motivo = err.message }
     if (!(n > 0)) {
       dia.n = null
-      apuntar(dia, `Sin N: hay ${velas.length} velas de 5 min hasta la del bracket (${de}) y hacen falta ${minimo}. Hoy la pierna no añade`)
+      apuntar(dia, `Sin N (${motivo}): hoy la pierna no añade`)
       return
     }
     dia.n = n
-    dia.previasN = velas.filter(v => v.time < ses.velaBracket).map(v => [v.time, v.open, v.high, v.low, v.close])
-    apuntar(dia, `N = ${n.toFixed(1)} puntos, con ${Math.min(k, velas.length)} velas de 5 min ${de}`, { aviso: false })
   }
 
   // El bracket y el plan del día: qué contrato, cuántos y si cabe en el margen

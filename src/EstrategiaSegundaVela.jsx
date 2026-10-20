@@ -4,11 +4,31 @@ import CurvaEquity from './CurvaEquity.jsx'
 import { INSTRUMENTOS, intradayUrl } from './intradayApi'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
-import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts } from './segundaVelaCore'
+import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
+import { madridOffsetAt } from './timezone'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+
+// El diario de Yahoo de un índice, para la N de las tortugas: de diez en diez años hacia atrás
+// (lo que trae cada página del Gráfico) hasta pasar `desde` con un año de margen, que es lo que
+// necesita la media de Wilder para asentarse. Fechado en Madrid, como las sesiones de aquí.
+const fechaMadrid = ts => new Date((ts + madridOffsetAt(ts)) * 1000).toISOString().slice(0, 10)
+async function bajarDiario(ticker, desde, signal) {
+  const porFecha = new Map()
+  let hasta = Math.floor(Date.now() / 1000)
+  for (let k = 0; k < 6 && hasta > desde - 365 * 86400; k++) {
+    const r = await fetch(`${API}/api/grafico/velas?ticker=${encodeURIComponent(ticker)}&tf=d1&fuente=yahoo&hasta=${hasta}`, { signal })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(`Sin el diario de Yahoo no hay N: ${j.error ?? `HTTP ${r.status}`}`)
+    if (!j.velas?.length) break
+    for (const v of j.velas) porFecha.set(fechaMadrid(v.time), { date: fechaMadrid(v.time), open: v.open, high: v.high, low: v.low, close: v.close })
+    if (!j.hayMas) break
+    hasta = j.velas[0].time
+  }
+  return [...porFecha.values()]
+}
 
 const DIAS = [
   { n: 1, label: 'L', nombre: 'Lunes' },
@@ -145,8 +165,8 @@ const VOLUMENES = [
   { id: 'piramide2', label: '+1 cada 2R', piramide: 2, nota: 'añade una unidad cada 2R: menos unidades, pero cada una con más recorrido detrás' },
 ]
 
-// Las estrategias con pirámide de tortugas comparan su regla con una sola unidad. N es el
-// rango verdadero medio de 20 velas de 5 min al cerrar la primera.
+// Las estrategias con pirámide de tortugas comparan su regla con una sola unidad. N es la de
+// las tortugas: el ATR de Wilder de 20 sesiones diarias hasta la anterior.
 const VOLUMENES_TORTUGA = [
   { id: 'fijo',    label: '1 unidad',     piramide: 0, nota: 'una sola unidad, con el stop fijo al otro lado de la vela' },
   { id: 'tortuga', label: '+1 cada ½ N',  piramide: 0, nota: 'añade una unidad cada ½ N desde la última y lleva el stop de todas a 2 N de ella' },
@@ -290,7 +310,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         const v = finas.get(r.sesion.date)
         if (!v?.length) return r
         const analisis = analizarSesion({
-          ...opciones, ventana: r.ventana ?? null, velas: r.velas, velasPrevias: r.velasPrevias ?? null,
+          ...opciones, ventana: r.ventana ?? null, velas: r.velas, n: r.nDiario ?? null,
           velasFinas: v, finasEtiqueta: etiqueta,
         })
         return { ...r, finas: v, finasEtiqueta: etiqueta, analisis }
@@ -341,40 +361,30 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     setProgreso({ done: 0, total: 0 })
 
     try {
-      // Con N hace falta la cola de la sesión anterior a la primera: se pide una semana antes
-      // y esos días solo sirven de contexto
-      const desde = `${anioDesde}-01-01`
-      const p = new URLSearchParams({
-        desde: estr.tortuga ? new Date(Date.parse(desde) - 7 * 86400_000).toISOString().slice(0, 10) : desde,
-        hasta: `${anioHasta}-12-31`,
-      })
+      const p = new URLSearchParams({ desde: `${anioDesde}-01-01`, hasta: `${anioHasta}-12-31` })
       if (descarga === 'm5') p.set('velas', '5m')
       const r = await fetch(`${API}/api/dax-historico?${p}`, { signal: ctrl.signal })
       const d = await r.json()
       if (d.error) throw new Error(d.error)
+      // la N de las tortugas sale del diario del DAX
+      const nDe = estr.tortuga ? nDiarioPorFecha(await bajarDiario('^GDAXI', Date.parse(`${anioDesde}-01-01`) / 1000, ctrl.signal)) : null
 
       // El rango del día anterior se saca de la lista entera, ANTES de filtrar por día de la
-      // semana: si no, "el anterior" de un lunes sería el lunes pasado. Lo mismo la cola de
-      // velas con la que se mide N, que en el CSV no tiene nada antes de las 09:00.
+      // semana: si no, "el anterior" de un lunes sería el lunes pasado.
       const previos = new Map()
-      const colas   = new Map()
       let anterior = null
-      let cola     = null
       for (const ses of (d.sesiones ?? [])) {
         if (anterior) previos.set(ses.date, anterior)
-        if (cola) colas.set(ses.date, cola)
         if (ses.velas?.length) {
           anterior = {
             high: Math.max(...ses.velas.map(v => v.high)),
             low:  Math.min(...ses.velas.map(v => v.low)),
           }
-          if (estr.tortuga) cola = ses.velas.slice(-estr.tortuga.velasN)
         }
       }
 
       const semana = new Set(dias)
       const lista = (d.sesiones ?? [])
-        .filter(s => s.date >= desde)
         .filter(s => semana.has(new Date(`${s.date}T12:00:00Z`).getUTCDay()))
         .reverse()
       if (lista.length === 0) throw new Error('Ninguna sesión del CSV cumple el filtro')
@@ -383,15 +393,15 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       const opciones = { ...opcionesMotor, ticker: '^GDAXI' }
       const base = lista.map(s => {
         const prep = prepararSesion(estr, '^GDAXI', s.velas)
-        const velasPrevias = colas.get(s.date) ?? null
+        const nDiario = nDe?.(s.date) ?? null
         return {
           sesion: { date: s.date, prevClose: null },
           velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
-          ventana: prep.ventana, velasPrevias,
+          ventana: prep.ventana, nDiario,
           previo: previos.get(s.date) ?? null,
           fuente: 'CSV DAX 5 min',
           analisis: analizarSesion({
-            ...opciones, velas: prep.velas, velasPrevias, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
+            ...opciones, velas: prep.velas, n: nDiario, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
           }),
         }
       })
@@ -493,6 +503,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
       const lista = (d.sesiones ?? []).slice(-cantidad).reverse()
       if (lista.length === 0) throw new Error('Ningún día cumple el filtro en ese periodo')
+      // la N de las tortugas sale del diario del índice, desde la sesión más antigua
+      const nDe = estr.tortuga ? nDiarioPorFecha(await bajarDiario(ticker, Date.parse(lista.at(-1).date) / 1000, ctrl.signal)) : null
       setProgreso({ done: 0, total: lista.length })
 
       const acumuladas = []
@@ -500,8 +512,6 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         if (ctrl.signal.aborted) return
         let velas = [], fuente = null
         try {
-          // el feed trae el día entero, así que con 5 min van también las velas de antes de
-          // la apertura con las que se mide N
           const rv = await fetch(intradayUrl(ticker, s.date, descarga), { signal: ctrl.signal })
           const dv = await rv.json()
           velas  = dv.velas ?? []
@@ -511,8 +521,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         }
         if (ctrl.signal.aborted) return
         const prep = prepararSesion(estr, ticker, velas)
+        const nDiario = nDe?.(s.date) ?? null
         const fila = {
-          sesion: s, fuente,
+          sesion: s, fuente, nDiario,
           // el calendario del Gap Filter ya trae el máximo y el mínimo del día anterior
           previo: Number.isFinite(s.prevHigh) && Number.isFinite(s.prevLow)
             ? { high: s.prevHigh, low: s.prevLow }
@@ -520,7 +531,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
           ventana: prep.ventana,
           analisis: analizarSesion({
-            ...opcionesMotor, velas: prep.velas, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
+            ...opcionesMotor, velas: prep.velas, n: nDiario, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
           }),
         }
         acumuladas.push(fila)
@@ -546,7 +557,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     ...r,
     analisis: analizarSesion({
       ...opcionesMotor,
-      velas: r.velas, ventana: r.ventana ?? null, velasPrevias: r.velasPrevias ?? null,
+      velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null,
       velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
     }),
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el

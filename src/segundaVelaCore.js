@@ -86,13 +86,11 @@ export const fmtPts = v =>
 // modo 'flip' es lo mismo entrando por los dos lados.
 // `colorBracket` ('alcista' o 'bajista') solo deja operar los días en que la vela del bracket
 // cierra de ese color; los demás cuentan como sesiones sin entrada.
-// `piramideN` ({ pasoN, stopN, velasN }) cambia la pirámide por la de las tortugas: una unidad
-// más cada `pasoN` N desde el precio del último relleno y el stop de todas a `stopN` N de él.
-// N es el rango verdadero medio de las `velasN` últimas velas al cerrar la del bracket, ella
-// incluida; si las velas de la sesión no llegan, se completan con `velasPrevias` (la cola de
-// la sesión anterior, para el CSV, que no tiene nada antes de la apertura). Con menos se mide
-// con las que haya, siempre que sean al menos `minVelasN`.
-export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, velasPrevias = null }) {
+// `piramideN` ({ pasoN, stopN }) cambia la pirámide por la de las tortugas: una unidad más
+// cada `pasoN` N desde el precio del último relleno y el stop de todas a `stopN` N de él.
+// `n` es la N de esa sesión, la de las tortugas en velas diarias (nDiarioPorFecha); sin ella,
+// la sesión no se puede leer.
+export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, n: nDiario = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -118,18 +116,8 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
   const rango = high - low
   if (!(rango > 0)) return { valido: false, motivo: 'Rango del bracket nulo' }
 
-  // N se mide con lo que enseñaría el gráfico al cerrar la vela del bracket: con el feed, las
-  // velas de antes de la apertura del mismo día (el CFD cotiza casi 24 h); con el CSV, la cola
-  // de la sesión anterior.
-  const n = piramideN
-    ? rangoVerdaderoMedio(
-        [...(velasPrevias ?? []), ...velas.filter(v => v.time <= c2.time)],
-        piramideN.velasN ?? 20, piramideN.minVelasN ?? piramideN.velasN ?? 20,
-      )
-    : null
-  if (piramideN && !(n > 0)) {
-    return { valido: false, motivo: `Faltan velas previas para medir N (mínimo ${piramideN.minVelasN ?? piramideN.velasN ?? 20})` }
-  }
+  const n = piramideN ? nDiario : null
+  if (piramideN && !(n > 0)) return { valido: false, motivo: 'Sin N: faltan 20 sesiones diarias antes de esta' }
 
   // A partir del bracket se camina sobre las velas finas si las hay
   const finas = velasFinas?.length
@@ -405,21 +393,32 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
   }
 }
 
-// Rango verdadero medio de las `k` últimas velas, el ATR de las tortugas sin suavizar: cada
-// vela cuenta desde el cierre de la anterior, así que un hueco también es recorrido. Si no
-// hay `k`, se mide con las que haya; null si ni siquiera llegan a `minimo`.
-function rangoVerdaderoMedio(velas, k, minimo = k) {
-  if (velas.length < minimo) return null
-  k = Math.min(k, velas.length)
+// La N de las tortugas para cada sesión: el ATR de Wilder de 20 sesiones en velas diarias
+// ({ date, open, high, low, close }), hasta la anterior a esa fecha, que es lo que se sabe al
+// abrir. Igual que src/tortugas.js: fuera las velas sin rango, el rango verdadero cuenta
+// desde el cierre anterior y la media arranca con la simple de las 20 primeras. Devuelve
+// fecha → N, o null si antes de esa fecha no hay 20 sesiones. server/bot-srs.js lleva la
+// misma cuenta (nDiario).
+export function nDiarioPorFecha(diarias) {
+  const vs = (diarias ?? []).filter(v => v.high > v.low).sort((a, b) => a.date.localeCompare(b.date))
+  const n = new Array(vs.length).fill(null)   // la N al cierre de cada sesión
   let suma = 0
-  for (let i = velas.length - k; i < velas.length; i++) {
-    const v = velas[i]
-    const c = velas[i - 1]?.close
-    suma += c == null
-      ? v.high - v.low
-      : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+  for (let i = 0; i < vs.length; i++) {
+    const v = vs[i]
+    const c = vs[i - 1]?.close
+    const tr = c == null ? v.high - v.low : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+    if (i < 20) { suma += tr; if (i === 19) n[i] = suma / 20 }
+    else n[i] = (n[i - 1] * 19 + tr) / 20
   }
-  return suma / k
+  return fecha => {
+    // la última sesión anterior a `fecha`
+    let lo = 0, hi = vs.length - 1, k = -1
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1
+      if (vs[m].date < fecha) { k = m; lo = m + 1 } else hi = m - 1
+    }
+    return k >= 0 ? n[k] : null
+  }
 }
 
 const mediana = arr => {

@@ -3020,7 +3020,8 @@ app.post('/api/bot/rule-of-4/parar', async (req, res) => {
 // cierra en negativo, con la pirámide de las tortugas. Como la Rule of 4: su registro, sus
 // referencias (FBN-…), opera donde BOT_OPERA=1, el mismo Telegram y la misma clave. Nace apagado.
 const BOT_FBN_PATH = process.env.BOT_FBN || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-first-bar-negative.json' : 'Bot First bar negative.json')
-const botFbn = bot ? crearBot({ ig, archivo: BOT_FBN_PATH, estrategia: FIRST_BAR_NEGATIVE, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+// su N es la de las tortugas: la saca del mismo diario de Yahoo que el bot de las tortugas
+const botFbn = bot ? crearBot({ ig, archivo: BOT_FBN_PATH, estrategia: FIRST_BAR_NEGATIVE, velasDiarias: velasDiariasTortugas, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botFbn && BOT_OPERA) botFbn.arrancar()
 if (botFbn) console.log(`[first bar negative] registro en ${BOT_FBN_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 

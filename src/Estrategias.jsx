@@ -47,6 +47,20 @@ const ESTRATEGIAS = [
     Componente:  EstrategiaSegundaVela,
   },
   {
+    id:          'first-bar-negative',
+    nombre:      'First bar negative',
+    titular:     'First bar negative · vender bajo la primera vela de 5 min si cierra en negativo',
+    descripcion: 'Si la primera vela de 5 min de la sesión cierra por debajo de su apertura, se vende cuando ' +
+                 'el precio pierde su mínimo, con el stop al otro lado de la vela, en su máximo. Si cierra en ' +
+                 'positivo, ese día no se opera. Luego se piramida como las tortugas: una unidad más cada ½ N ' +
+                 'a favor desde el último relleno, y con cada añadido el stop de toda la posición baja a 2 N ' +
+                 'por encima de él (solo si así se aprieta). N es el rango verdadero medio de las últimas 20 ' +
+                 'velas de 5 min al cerrar la primera, ella incluida: con el feed, las de antes de la apertura ' +
+                 '(o las que haya, si son al menos 10); con el CSV del DAX, las últimas de la sesión anterior. Como mucho un añadido por vela de 5 min ' +
+                 'y hasta 6 unidades; lo que siga abierto se cierra con la sesión.',
+    Componente:  EstrategiaSegundaVela,
+  },
+  {
     id:          'tortugas-1',
     nombre:      'Tortugas S1',
     titular:     'Tortugas · sistema 1: ruptura de 20 sesiones, salida en la de 10',

@@ -2335,13 +2335,16 @@ app.get('/api/dax-historico', (req, res) => {
     const desde = String(req.query.desde ?? '')
     const hasta = String(req.query.hasta ?? '')
     const conFinas = req.query.finas === '1'
+    // las estrategias de velas de 5 min (First bar negative) las quieren como velas, y sin
+    // cargar además con las de 15
+    const en5m = req.query.velas === '5m'
     const soloEstas = String(req.query.dias ?? '').split(',').filter(Boolean)
     const filtro = new Set(soloEstas)
     const sesiones = todas
       .filter(s => (!desde || s.date >= desde) && (!hasta || s.date <= hasta))
       .filter(s => filtro.size === 0 || filtro.has(s.date))
       // las de 5 min pesan el triple: solo van si se piden, y normalmente para unos días
-      .map(s => (conFinas ? s : { date: s.date, velas: s.velas }))
+      .map(s => (conFinas ? s : en5m ? { date: s.date, velas: s.finas } : { date: s.date, velas: s.velas }))
     res.json({
       archivo: DAX_CSV,
       primera: todas[0]?.date ?? null,

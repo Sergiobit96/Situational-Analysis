@@ -80,7 +80,16 @@ export const fmtPts = v =>
 // instrumento, pero recibiendo { open, close, minutosVela, nBracket } se puede braquetear
 // otra vela de otro tamaño en otro tramo del día — es lo que usa la Rule of 4, que coge la
 // cuarta vela de 10 min desde que sale la noticia del FOMC.
-export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null }) {
+// `modo` 'corto' es el espejo de 'largo': solo vende por debajo de la vela del bracket.
+// `colorBracket` ('alcista' o 'bajista') solo deja operar los días en que la vela del bracket
+// cierra de ese color; los demás cuentan como sesiones sin entrada.
+// `piramideN` ({ pasoN, stopN, velasN }) cambia la pirámide por la de las tortugas: una unidad
+// más cada `pasoN` N desde el precio del último relleno y el stop de todas a `stopN` N de él.
+// N es el rango verdadero medio de las `velasN` últimas velas al cerrar la del bracket, ella
+// incluida; si las velas de la sesión no llegan, se completan con `velasPrevias` (la cola de
+// la sesión anterior, para el CSV, que no tiene nada antes de la apertura). Con menos se mide
+// con las que haya, siempre que sean al menos `minVelasN`.
+export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, velasPrevias = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -105,6 +114,19 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
   const low   = c2.low
   const rango = high - low
   if (!(rango > 0)) return { valido: false, motivo: 'Rango del bracket nulo' }
+
+  // N se mide con lo que enseñaría el gráfico al cerrar la vela del bracket: con el feed, las
+  // velas de antes de la apertura del mismo día (el CFD cotiza casi 24 h); con el CSV, la cola
+  // de la sesión anterior.
+  const n = piramideN
+    ? rangoVerdaderoMedio(
+        [...(velasPrevias ?? []), ...velas.filter(v => v.time <= c2.time)],
+        piramideN.velasN ?? 20, piramideN.minVelasN ?? piramideN.velasN ?? 20,
+      )
+    : null
+  if (piramideN && !(n > 0)) {
+    return { valido: false, motivo: `Faltan velas previas para medir N (mínimo ${piramideN.minVelasN ?? piramideN.velasN ?? 20})` }
+  }
 
   // A partir del bracket se camina sobre las velas finas si las hay
   const finas = velasFinas?.length
@@ -132,25 +154,31 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
     velasSesion: enSesion.length, parcial, resolucion,
     ventana: ses, minutosVela, nBracket, tamanoAnadido,
     cierreSesion: cierre15.close,
+    modo, n, piramideN,
   }
+
+  // `sinEntrada` dice por qué: 'color' si la vela no era del color que pide la estrategia,
+  // 'rotura' si el precio no llegó a romperla
+  const sinOperacion = sinEntrada => ({
+    ...comun,
+    lado: null, entrada: null, salida: null, flip: null, piernas: [], ambigua: false,
+    resultadoPts: null, resultadoTotalPts: null, mfePts: null, maePts: null,
+    resultadoR: null, resultadoTotalR: null, mfeR: null, maeR: null,
+    tocaAbajoAntes: resto.some(v => v.low <= low),
+    sinEntrada,
+    resultado: 'sin-entrada',
+  })
+  if (colorBracket && comun.dir2 !== colorBracket) return sinOperacion('color')
 
   // Rotura que abre la operación: por arriba se compra y por abajo se vende, mandando el
-  // extremo que se rompa antes. En "largo" solo cuenta el máximo.
+  // extremo que se rompa antes. En "largo" solo cuenta el máximo y en "corto" el mínimo.
+  const buscaLargo = modo !== 'corto'
   const buscaCorto = modo !== 'largo'
-  const iEntrada = resto.findIndex(v => v.high > high || (buscaCorto && v.low < low))
-  if (iEntrada === -1) {
-    return {
-      ...comun,
-      lado: null, entrada: null, salida: null, flip: null, piernas: [], ambigua: false,
-      resultadoPts: null, resultadoTotalPts: null, mfePts: null, maePts: null,
-      resultadoR: null, resultadoTotalR: null, mfeR: null, maeR: null,
-      tocaAbajoAntes: resto.some(v => v.low <= low),
-      resultado: 'sin-entrada',
-    }
-  }
+  const iEntrada = resto.findIndex(v => (buscaLargo && v.high > high) || (buscaCorto && v.low < low))
+  if (iEntrada === -1) return sinOperacion('rotura')
 
   const velaEntrada = resto[iEntrada]
-  const lado = velaEntrada.high > high ? 'largo' : 'corto'
+  const lado = buscaLargo && velaEntrada.high > high ? 'largo' : 'corto'
   // Una vela que entra y toca el stop no dice en qué orden pasó: se lee como la operación
   // que salta en esa misma vela (lo que no infla el resultado) y se marca como ambigua para
   // resolverla con velas más finas. Con el stop al 50% pasa más a menudo, porque el nivel
@@ -167,7 +195,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
   let ladoActual = lado
   while (true) {
     const p = simularPierna({
-      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts,
+      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts, piramideN, n,
       // una pierna abierta al saltar el stop de la anterior no puede morir en esa misma
       // vela: dentro de 15 min no se sabe el orden y encadenaría vueltas irreales
       stopDesde: piernas.length ? desde + 1 : desde,
@@ -222,7 +250,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', beR = null, pira
 // Una pierna de la operación: entra al romper su extremo y sale al tocar el contrario
 // (−1R) o, si no lo toca, al cierre de la sesión. 1R es el rango del bracket en los dos
 // sentidos, porque entrada y stop están en los extremos opuestos.
-function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0 }) {
+function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, piramideN = null, n = null }) {
   const paso    = pasoPiramide(piramide)
   const largo   = lado === 'largo'
   const entradaPrecio = largo ? high : low
@@ -255,13 +283,15 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
   const pesos    = [1]       // la entrada va entera; cada añadido, lo que diga tamanoAnadido
   const anadidos = []        // dónde y a qué precio entró cada unidad de más
   let ultimoCubo5 = null     // tramo de 5 min en el que se añadió la última unidad
+  const tortuga = piramideN != null && n > 0
+  let stopMovido = false     // el stop ya está a 2 N de un añadido, no en el bracket
 
   for (let i = stopDesde; i < resto.length; i++) {
     const v = resto[i]
     if (largo ? v.low <= stop : v.high >= stop) {
       salida  = {
         time: v.time, min: v.min, precio: stop,
-        motivo: beDesde != null ? 'breakeven' : 'bracket',
+        motivo: stopMovido ? 'stopN' : beDesde != null ? 'breakeven' : 'bracket',
       }
       iSalida = i
       mae     = Math.max(mae, Math.abs(entradaPrecio - stop))
@@ -298,7 +328,27 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
     // distinto en cada una, así que sale una por vela; con velas de 1 min, una de cada
     // cinco. El precio del añadido sigue siendo su nivel (entrada + n tramos), que es donde
     // estaría puesta la orden.
-    if (paso > 0 && unidades.length < maxUnidades) {
+    // La de las tortugas cuenta cada tramo desde el precio del último relleno, no desde la
+    // entrada, y si la vela ya abre pasado el nivel la orden entra a la apertura. Con cada
+    // añadido el stop de toda la posición pasa a stopN N de él, también aquí solo apretando.
+    // Como el stop se mira al principio de cada vela, el nuevo vale desde la siguiente.
+    if (tortuga) {
+      const cubo5  = Math.floor(v.time / 300)
+      const ultimo = unidades[unidades.length - 1]
+      const nivel  = largo ? ultimo + piramideN.pasoN * n : ultimo - piramideN.pasoN * n
+      if (unidades.length < maxUnidades && cubo5 !== ultimoCubo5 && (largo ? v.high >= nivel : v.low <= nivel)) {
+        const precio = largo ? Math.max(nivel, v.open) : Math.min(nivel, v.open)
+        unidades.push(precio)
+        pesos.push(tamanoAnadido)
+        anadidos.push({ time: v.time, min: v.min, precio, unidad: unidades.length, tamano: tamanoAnadido })
+        ultimoCubo5 = cubo5
+        const nuevo = largo ? precio - piramideN.stopN * n : precio + piramideN.stopN * n
+        if (largo ? nuevo > stop : nuevo < stop) {
+          stop       = nuevo
+          stopMovido = true
+        }
+      }
+    } else if (paso > 0 && unidades.length < maxUnidades) {
       const cubo5 = Math.floor(v.time / 300)
       const salto = unidades.length * paso * riesgo
       if (cubo5 !== ultimoCubo5 && favor >= salto) {
@@ -352,6 +402,23 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
   }
 }
 
+// Rango verdadero medio de las `k` últimas velas, el ATR de las tortugas sin suavizar: cada
+// vela cuenta desde el cierre de la anterior, así que un hueco también es recorrido. Si no
+// hay `k`, se mide con las que haya; null si ni siquiera llegan a `minimo`.
+function rangoVerdaderoMedio(velas, k, minimo = k) {
+  if (velas.length < minimo) return null
+  k = Math.min(k, velas.length)
+  let suma = 0
+  for (let i = velas.length - k; i < velas.length; i++) {
+    const v = velas[i]
+    const c = velas[i - 1]?.close
+    suma += c == null
+      ? v.high - v.low
+      : Math.max(v.high - v.low, Math.abs(v.high - c), Math.abs(v.low - c))
+  }
+  return suma / k
+}
+
 const mediana = arr => {
   if (arr.length === 0) return null
   const o = [...arr].sort((a, b) => a - b)
@@ -384,6 +451,7 @@ export function resumir(analisis) {
     pctGanadas:   pct(ops.filter(a => a.resultado === 'ganada').length, ops.length),
     pctVenta:     pct(ops.filter(a => a.salida.motivo === 'bracket').length, ops.length),
     pctBE:        pct(ops.filter(a => a.salida.motivo === 'breakeven').length, ops.length),
+    pctStopN:     pct(ops.filter(a => a.salida.motivo === 'stopN').length, ops.length),
     pctObjetivo:  pct(ops.filter(a => a.salida.motivo === 'objetivo').length, ops.length),
     costePts:     ops.reduce((n, a) => n + (a.costeTotal ?? 0), 0),
     resultadoMed: media(erres),

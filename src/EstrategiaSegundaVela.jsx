@@ -54,6 +54,7 @@ const FILTROS = [
   { id: 'sin',         label: 'Sin entrada',          test: a => a.resultado === 'sin-entrada',   nota: 'El precio no llegó a romper el bracket' },
   { id: 'stop',        label: 'Salta el stop',        test: a => salidasDe(a).includes('bracket'),   nota: 'Alguna pierna cierra en el extremo contrario del bracket' },
   { id: 'be',          label: 'Sale en BE',           test: a => salidasDe(a).includes('breakeven'), nota: 'Alguna pierna cierra en break even (stop ya movido a la entrada o al precio medio)' },
+  { id: 'stopN',       label: 'Stop a 2 N',           test: a => salidasDe(a).includes('stopN'),     nota: 'Cierra en el stop ya movido a 2 N del último añadido', soloTortuga: true },
   { id: 'objetivo',    label: 'Objetivo alcanzado',   test: a => salidasDe(a).includes('objetivo'),  nota: 'Alguna pierna cierra en la toma de beneficios' },
   { id: 'cierre',      label: 'Cierra con la sesión', test: a => salidasDe(a).includes('cierre'),    nota: 'Aguanta hasta el cierre sin tocar stop ni objetivo' },
   { id: 'flip',        label: 'Con vuelta',           test: a => a.piernas?.length > 0,           nota: 'El stop saltó y se dio la vuelta a la posición' },
@@ -132,6 +133,13 @@ const VOLUMENES = [
   { id: 'piramide2', label: '+1 cada 2R', piramide: 2, nota: 'añade una unidad cada 2R: menos unidades, pero cada una con más recorrido detrás' },
 ]
 
+// Las estrategias con pirámide de tortugas comparan su regla con una sola unidad. N es el
+// rango verdadero medio de 20 velas de 5 min al cerrar la primera.
+const VOLUMENES_TORTUGA = [
+  { id: 'fijo',    label: '1 unidad',     piramide: 0, nota: 'una sola unidad, con el stop fijo al otro lado de la vela' },
+  { id: 'tortuga', label: '+1 cada ½ N',  piramide: 0, nota: 'añade una unidad cada ½ N desde la última y lleva el stop de todas a 2 N de ella' },
+]
+
 // Toma de beneficios opcional: se cierra cuando el resultado acumulado de la posición —la
 // suma de todas las unidades de la pirámide— llega a ese porcentaje del índice. Con el DAX
 // en 20.000, un 3,5% son 700 puntos: con una sola unidad se los tiene que recorrer el
@@ -188,7 +196,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [tamano,     setTamano]     = useState('uno')
   const [coste,      setCoste]      = useState(0)
   const [stopModo,   setStopModo]   = useState('fijo')
-  const [volumen,    setVolumen]    = useState('fijo')
+  const [volumen,    setVolumen]    = useState(estr.tortuga ? 'tortuga' : 'fijo')
   const [tpModo,     setTpModo]     = useState('no')
   const [tpPct,      setTpPct]      = useState(TP_POR_DEFECTO)
   const [aPantalla,  setAPantalla]  = useState(null)   // fecha de la sesión abierta a pantalla completa
@@ -204,20 +212,26 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [trades] = useTrades()
 
   const sesion = SESIONES[ticker]
+  const descarga = estr.descarga ?? 'm15'   // en qué velas se piden las sesiones
   const stopPct = NIVELES.find(n => n.id === nivelStop)?.stopPct ?? 1
   // Con el stop a media vela no hay vuelta posible: el nivel donde salta ya no es la entrada
   // del lado contrario, así que el modo cae a su equivalente sin flip.
   const modoEfectivo = stopPct !== 1 ? (SIN_FLIP[modo] ?? modo) : modo
   // el objetivo solo cuenta cuando está activado y el porcentaje es un número utilizable
   const tpValor = tpModo === 'pct' && Number(tpPct) > 0 ? Number(tpPct) : null
+  const volumenes = estr.tortuga ? VOLUMENES_TORTUGA : VOLUMENES
 
   // Todo lo que define la operativa, en un solo sitio: lo usan las tres descargas, el
-  // afinado de las dudosas y el recálculo al tocar un filtro.
+  // afinado de las dudosas y el recálculo al tocar un filtro. Lo que la estrategia trae fijo
+  // (el lado, el color de la vela, la pirámide de tortugas) manda sobre los chips, que ni
+  // se enseñan.
   const opcionesMotor = {
     ticker,
-    modo: modoEfectivo,
+    modo: estr.lado ?? modoEfectivo,
+    colorBracket: estr.colorBracket ?? null,
     beR: STOPS.find(x => x.id === stopModo)?.beR ?? null,
-    piramide: VOLUMENES.find(v => v.id === volumen)?.piramide ?? 0,
+    piramide: volumenes.find(v => v.id === volumen)?.piramide ?? 0,
+    piramideN: estr.tortuga && volumen === 'tortuga' ? estr.tortuga : null,
     tpPct: tpValor,
     stopPct,
     tamanoAnadido: TAMANOS.find(t => t.id === tamano)?.tamano ?? 1,
@@ -250,6 +264,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     // la lista viaja por parámetro: leer el estado con un actualizador no es síncrono y
     // dejaba el afinado sin nada que hacer
     let lista = inicial
+    // la estrategia se lee del id, que es lo que el compilador de React sabe que no cambia
+    const enCinco = estrategiaDe(estrategiaId).descarga === 'm5'
 
     const paso = async (etiqueta, traerVelas) => {
       const dudosas = lista.filter(r => r.analisis.ambigua).map(r => r.sesion.date)
@@ -259,13 +275,17 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       lista = lista.map(r => {
         const v = finas.get(r.sesion.date)
         if (!v?.length) return r
-        const analisis = analizarSesion({ ...opciones, ventana: r.ventana ?? null, velas: r.velas, velasFinas: v, finasEtiqueta: etiqueta })
+        const analisis = analizarSesion({
+          ...opciones, ventana: r.ventana ?? null, velas: r.velas, velasPrevias: r.velasPrevias ?? null,
+          velasFinas: v, finasEtiqueta: etiqueta,
+        })
         return { ...r, finas: v, finasEtiqueta: etiqueta, analisis }
       })
       setResultados(lista)
     }
 
-    await paso('5m', async dudosas => {
+    // si la vela de la estrategia ya es de 5 min, bajar a 5 no resuelve nada: se pasa a 1
+    if (!enCinco) await paso('5m', async dudosas => {
       const mapa = new Map()
       if (fuente === 'csv') {
         const q = new URLSearchParams({ finas: '1', dias: dudosas.join(',') })
@@ -294,7 +314,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       }
       return mapa
     })
-  }, [fuente, ticker])
+  }, [fuente, ticker, estrategiaId])
 
   const analizarHistorico = async () => {
     cancelar()
@@ -307,27 +327,40 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     setProgreso({ done: 0, total: 0 })
 
     try {
-      const p = new URLSearchParams({ desde: `${anioDesde}-01-01`, hasta: `${anioHasta}-12-31` })
+      // Con N hace falta la cola de la sesión anterior a la primera: se pide una semana antes
+      // y esos días solo sirven de contexto
+      const desde = `${anioDesde}-01-01`
+      const p = new URLSearchParams({
+        desde: estr.tortuga ? new Date(Date.parse(desde) - 7 * 86400_000).toISOString().slice(0, 10) : desde,
+        hasta: `${anioHasta}-12-31`,
+      })
+      if (descarga === 'm5') p.set('velas', '5m')
       const r = await fetch(`${API}/api/dax-historico?${p}`, { signal: ctrl.signal })
       const d = await r.json()
       if (d.error) throw new Error(d.error)
 
       // El rango del día anterior se saca de la lista entera, ANTES de filtrar por día de la
-      // semana: si no, "el anterior" de un lunes sería el lunes pasado.
+      // semana: si no, "el anterior" de un lunes sería el lunes pasado. Lo mismo la cola de
+      // velas con la que se mide N, que en el CSV no tiene nada antes de las 09:00.
       const previos = new Map()
+      const colas   = new Map()
       let anterior = null
+      let cola     = null
       for (const ses of (d.sesiones ?? [])) {
         if (anterior) previos.set(ses.date, anterior)
+        if (cola) colas.set(ses.date, cola)
         if (ses.velas?.length) {
           anterior = {
             high: Math.max(...ses.velas.map(v => v.high)),
             low:  Math.min(...ses.velas.map(v => v.low)),
           }
+          if (estr.tortuga) cola = ses.velas.slice(-estr.tortuga.velasN)
         }
       }
 
       const semana = new Set(dias)
       const lista = (d.sesiones ?? [])
+        .filter(s => s.date >= desde)
         .filter(s => semana.has(new Date(`${s.date}T12:00:00Z`).getUTCDay()))
         .reverse()
       if (lista.length === 0) throw new Error('Ninguna sesión del CSV cumple el filtro')
@@ -336,14 +369,15 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       const opciones = { ...opcionesMotor, ticker: '^GDAXI' }
       const base = lista.map(s => {
         const prep = prepararSesion(estr, '^GDAXI', s.velas)
+        const velasPrevias = colas.get(s.date) ?? null
         return {
           sesion: { date: s.date, prevClose: null },
           velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
-          ventana: prep.ventana,
+          ventana: prep.ventana, velasPrevias,
           previo: previos.get(s.date) ?? null,
           fuente: 'CSV DAX 5 min',
           analisis: analizarSesion({
-            ...opciones, velas: prep.velas, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
+            ...opciones, velas: prep.velas, velasPrevias, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
           }),
         }
       })
@@ -452,7 +486,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         if (ctrl.signal.aborted) return
         let velas = [], fuente = null
         try {
-          const rv = await fetch(intradayUrl(ticker, s.date, 'm15'), { signal: ctrl.signal })
+          // el feed trae el día entero, así que con 5 min van también las velas de antes de
+          // la apertura con las que se mide N
+          const rv = await fetch(intradayUrl(ticker, s.date, descarga), { signal: ctrl.signal })
           const dv = await rv.json()
           velas  = dv.velas ?? []
           fuente = dv.fuente ?? null
@@ -496,7 +532,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     ...r,
     analisis: analizarSesion({
       ...opcionesMotor,
-      velas: r.velas, ventana: r.ventana ?? null,
+      velas: r.velas, ventana: r.ventana ?? null, velasPrevias: r.velasPrevias ?? null,
       velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
     }),
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
@@ -577,8 +613,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
   const enVista = visibles.slice(0, mostradas)
   const quedan  = visibles.length - enVista.length
-  // dependencia estable para el efecto que pide las velas de 5 min
-  const fechasVista = enVista
+  // dependencia estable para el efecto que pide las velas de 5 min (que no hace falta pedir
+  // cuando la sesión ya se descargó en 5 min)
+  const fechasVista = descarga === 'm5' ? '' : enVista
     .filter(r => !(r.finasEtiqueta === '5m' && r.finas?.length))
     .map(r => r.sesion.date)
     .join(',')
@@ -743,7 +780,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           </div>
         </div>
 
-        <div className="filtro-group">
+        {!estr.lado && <div className="filtro-group">
           <label className="filtro-label">
             Operativa
             <span className="filtro-valor">{MODOS.find(m => m.id === modoEfectivo)?.nota}</span>
@@ -762,15 +799,15 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               )
             })}
           </div>
-        </div>
+        </div>}
 
         <div className="filtro-group">
           <label className="filtro-label">
             Volumen
-            <span className="filtro-valor">{VOLUMENES.find(v => v.id === volumen)?.nota}</span>
+            <span className="filtro-valor">{volumenes.find(v => v.id === volumen)?.nota}</span>
           </label>
           <div className="filtro-presets">
-            {VOLUMENES.map(v => (
+            {volumenes.map(v => (
               <button
                 key={v.id}
                 className={`chip ${volumen === v.id ? 'activo' : ''}`}
@@ -798,7 +835,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           </div>
         </div>
 
-        <div className="filtro-group">
+        {!estr.tortuga && <div className="filtro-group">
           <label className="filtro-label">
             Nivel del stop
             <span className="filtro-valor">{NIVELES.find(n => n.id === nivelStop)?.nota}</span>
@@ -813,9 +850,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               >{n.label}</button>
             ))}
           </div>
-        </div>
+        </div>}
 
-        <div className="filtro-group">
+        {!estr.tortuga && <div className="filtro-group">
           <label className="filtro-label">
             Break even
             <span className="filtro-valor">{STOPS.find(s => s.id === stopModo)?.nota}</span>
@@ -830,7 +867,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               >{s.label}</button>
             ))}
           </div>
-        </div>
+        </div>}
 
         <div className="filtro-group">
           <label className="filtro-label">
@@ -992,7 +1029,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               </span>
             </label>
             <div className="filtro-presets">
-              {FILTROS.map(f => (
+              {FILTROS.filter(f => !f.soloTortuga || estr.tortuga).map(f => (
                 <button
                   key={f.id}
                   className={`chip ${(f.id === 'todas' ? filtros.size === 0 : filtros.has(f.id)) ? 'activo' : ''}`}
@@ -1018,8 +1055,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                     key={s.date}
                     sesion={s} analisis={a} velas={velas} fuente={fuente}
                     // las de 1 min del afinado no sirven aquí: el mosaico va en velas de 5
-                    velasGrafico={finas5m[s.date] ?? (finasEtiqueta === '5m' ? finas : null)}
+                    velasGrafico={finas5m[s.date] ?? (finasEtiqueta === '5m' ? finas : descarga === 'm5' ? velas : null)}
                     etiquetaVela={estr.etiquetaVela}
+                    sinTf={descarga === 'm5'}
                     ticker={ticker} trades={tradesPara(s.date)}
                     pantallaCompleta={aPantalla === s.date}
                     onPantallaCompleta={() => setAPantalla(prev => (prev === s.date ? null : s.date))}
@@ -1048,9 +1086,11 @@ function Resumen({ r }) {
   if (r.n === 0) return null
   const sobreOps = `sobre ${r.nOps} operaci${r.nOps === 1 ? 'ón' : 'ones'}`
   // El lado ya no es siempre comprador: los textos hablan de operaciones y de roturas
-  const lados = r.nCortos > 0 ? `${r.nOps - r.nCortos} largas · ${r.nCortos} cortas` : `${r.nOps} de ${r.n} rompen el bracket`
+  const lados = r.nCortos === 0 ? `${r.nOps} de ${r.n} rompen el bracket`
+    : r.nCortos === r.nOps ? `${r.nOps} de ${r.n} sesiones, todas en corto`
+    : `${r.nOps - r.nCortos} largas · ${r.nCortos} cortas`
   const tiles = [
-    { label: 'Sesiones analizadas',   valor: r.n,                  sub: r.descartadas > 0 ? `${r.descartadas} sin datos de 15 min` : 'todas con datos' },
+    { label: 'Sesiones analizadas',   valor: r.n,                  sub: r.descartadas > 0 ? `${r.descartadas} sin datos suficientes` : 'todas con datos' },
     { label: 'Días con operación',    valor: fmtPct(r.pctEntrada), sub: lados },
     { label: 'Operaciones ganadoras', valor: fmtPct(r.pctGanadas), sub: sobreOps, marca: '▲', tono: 'verde' },
     { label: 'Resultado medio',       valor: fmtPtsSgn(r.resultadoMedPts), sub: 'por sesión operada' },
@@ -1067,7 +1107,7 @@ function Resumen({ r }) {
       marca: r.profitFactor != null && r.profitFactor < 1 ? '▼' : '▲',
       tono:  r.profitFactor != null && r.profitFactor < 1 ? 'rojo' : 'verde',
     },
-    { label: 'Salta el stop',         valor: fmtPct(r.pctVenta),   sub: r.pctBE ? `${fmtPct(r.pctBE)} sale en break even` : 'el resto cierra con la sesión', marca: '▼', tono: 'rojo' },
+    { label: 'Salta el stop',         valor: fmtPct(r.pctVenta),   sub: r.pctStopN ? `y ${fmtPct(r.pctStopN)} en el stop a 2 N` : r.pctBE ? `${fmtPct(r.pctBE)} sale en break even` : 'el resto cierra con la sesión', marca: '▼', tono: 'rojo' },
     { label: 'Recorrido máximo',      valor: fmtPtsSgn(r.mfeMedPts), sub: 'mediana a favor antes de cerrar' },
     { label: 'Doblan el bracket',     valor: fmtPct(r.pct2R),      sub: 'recorren 2 veces su rango' },
   ]
@@ -1095,8 +1135,8 @@ function Resumen({ r }) {
         {r.minutosMed != null && <> · la entrada salta a los <strong>{r.minutosMed} min</strong> de la apertura</>}
         {r.nFlips > 0 && <> · <strong>{r.nFlips}</strong> sesion{r.nFlips === 1 ? '' : 'es'} con vuelta de posición</>}
         . Los resultados van en puntos del instrumento: cerrar en el extremo contrario del
-        bracket cuesta exactamente su rango. Si una vela rompe los dos extremos a la vez,
-        se lee como entrada larga con el stop saltando en esa misma vela.
+        bracket cuesta exactamente su rango. Si una vela entra y toca el stop a la vez, se
+        lee como la entrada con el stop saltando en esa misma vela.
       </p>
     </div>
   )
@@ -1160,7 +1200,7 @@ function Mitades({ mitades }) {
   )
 }
 
-function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquetaVela, fuente, ticker, trades, pantallaCompleta, onPantallaCompleta }) {
+function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquetaVela, sinTf = false, fuente, ticker, trades, pantallaCompleta, onPantallaCompleta }) {
   // el tamaño de vela es de cada gráfico: unas sesiones se leen mejor finas y otras enteras
   const [tf, setTf] = useState('5m')
   // Esc cierra la pantalla completa, igual que en el gráfico de Operaciones
@@ -1207,6 +1247,7 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
               )}
               <span className="estr-badge neutro">
                 {a.salida.motivo === 'bracket'   ? 'Salta el stop en el bracket'
+                  : a.salida.motivo === 'stopN'     ? 'Salta el stop a 2 N'
                   : a.salida.motivo === 'breakeven' ? 'Sale en break even'
                   : a.salida.motivo === 'objetivo'  ? 'Cierra en el objetivo'
                   : 'Cierra con la sesión'}
@@ -1223,7 +1264,7 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
           )}
           {a.parcial && <span className="estr-badge neutro">Sesión en curso</span>}
         </div>
-        <div className="estr-tf">
+        {!sinTf && <div className="estr-tf">
           {TIMEFRAMES.map(t => (
             <button
               key={t.id}
@@ -1232,7 +1273,7 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
               title={`Dibujar esta sesión con velas de ${t.label ?? etiquetaVela}. El análisis no cambia: el bracket sale siempre de las de ${etiquetaVela}`}
             >{t.label ?? etiquetaVela}</button>
           ))}
-        </div>
+        </div>}
       </div>
 
       {a.valido && (
@@ -1241,6 +1282,9 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
 
           <span>1ª vela <strong>{a.dir1 === 'alcista' ? 'blanca' : 'negra'}</strong></span>
           {(a.nBracket ?? 2) > 1 && <span>{a.nBracket}ª vela <strong>{a.dir2}</strong></span>}
+          {a.n != null && (
+            <span>N <strong>{fmtPts(a.n)}</strong> · añade cada {fmtPts(a.n * a.piramideN.pasoN)} y el stop va a {fmtPts(a.n * a.piramideN.stopN)} del último</span>
+          )}
           {a.entrada ? (
             <>
               <span>{a.lado === 'largo' ? 'Compra' : 'Venta'} <strong>{fmtPts(a.entrada.precio)}</strong> a las {hora(a.entrada.time)} (+{a.entrada.minutos} min)</span>
@@ -1256,7 +1300,7 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
                 <span>
                   Posición <strong>{fmtPts(a.volumen ?? a.unidades)} unidades</strong>
                   {(a.tamanoAnadido ?? 1) !== 1 && ` (1 + ${a.unidades - 1} de ${fmtPts(a.tamanoAnadido)})`}
-                  : añade en {a.anadidos.map(x => fmtPts(x.precio)).join(' · ')} (stop al precio medio)
+                  : añade en {a.anadidos.map(x => fmtPts(x.precio)).join(' · ')} ({a.piramideN ? `stop a ${a.piramideN.stopN} N del último` : 'stop al precio medio'})
                 </span>
               )}
               {a.piernas?.map((p, i) => (
@@ -1266,7 +1310,13 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
               ))}
             </>
           ) : (
-            <span>El precio no supera el máximo del bracket{a.tocaAbajoAntes && ', y sí pierde el mínimo'}</span>
+            <span>
+              {a.sinEntrada === 'color'
+                ? `La vela cierra ${a.dir2 === 'alcista' ? 'en positivo' : 'en negativo'}: ese día no se opera`
+                : a.modo === 'corto'
+                  ? 'El precio no pierde el mínimo de la vela'
+                  : <>El precio no supera el máximo del bracket{a.tocaAbajoAntes && ', y sí pierde el mínimo'}</>}
+            </span>
           )}
         </div>
       )}

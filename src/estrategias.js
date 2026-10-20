@@ -4,7 +4,8 @@ import { HORA_FOMC_NY } from './fomc.js'
 
 // Las estrategias que se pueden probar en la pestaña. Todas usan el mismo motor
 // (analizarSesion): lo único que cambia es qué vela se braquetea, de qué tamaño y desde qué
-// momento del día se empieza a contar.
+// momento del día se empieza a contar. Las que traen `lado`, `colorBracket` o `tortuga` fijan
+// además esas reglas, y el panel esconde los chips que las cambiarían.
 export const ESTRATEGIAS = [
   {
     id: 'segunda-vela',
@@ -34,6 +35,23 @@ export const ESTRATEGIAS = [
     nBracket: 1,
     etiquetaVela: '1 h',
     admiteCsv: true,
+  },
+  {
+    id: 'first-bar-negative',
+    label: 'First bar negative',
+    nota: 'vende por debajo de la primera vela de 5 min cuando cierra en negativo, con el stop al otro lado; añade cada ½ N y lleva el stop a 2 N del último añadido',
+    minutosVela: 5,
+    nBracket: 1,
+    etiquetaVela: '5 min',
+    admiteCsv: true,
+    // la vela del setup ya es de 5 min: se descarga así y no hay nada que agrupar
+    descarga: 'm5',
+    // reglas fijas, que mandan sobre los chips de operativa
+    lado: 'corto',
+    colorBracket: 'bajista',
+    // pirámide de las tortugas con N medido en 20 velas de 5 min, o en las que haya si son
+    // al menos 10: hasta 2018 el DAX de Dukascopy no abre hasta las 08:00
+    tortuga: { pasoN: 0.5, stopN: 2, velasN: 20, minVelasN: 10 },
   },
 ]
 
@@ -77,8 +95,13 @@ export function agruparVelas(velas, minutos, desdeTs) {
 // sesión y no en las horas en punto: Nueva York abre a y media, así que las velas horarias
 // del feed partirían la primera hora por la mitad. Las de 15 min se quedan como finas, que
 // es sobre lo que se camina el recorrido.
+// Las que se descargan ya en el tamaño de su vela (First bar negative, en 5 min) no agrupan
+// nada, pero el motor necesita la ventana para saber de qué tamaño es y cuál braquetear.
 export function prepararSesion(estr, ticker, velas15) {
   const ses = SESIONES[ticker]
+  if (ses && estr.descarga === 'm5') {
+    return { velas: velas15, finas: null, ventana: { ...ses, minutosVela: estr.minutosVela, nBracket: estr.nBracket } }
+  }
   if (!ses || !velas15?.length || estr.minutosVela === 15) {
     return { velas: velas15, finas: null, ventana: null }
   }

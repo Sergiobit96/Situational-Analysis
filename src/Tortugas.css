@@ -26,6 +26,20 @@
 }
 .tortugas-cabecera > strong { font-size: 0.9rem; color: var(--text); }
 .tortugas-cabecera .chip { margin-left: auto; }
+.tortugas-botones { margin-left: auto; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.tortugas-cabecera .tortugas-botones .chip { margin-left: 0; }
+
+/* la revisión de Claude: texto corrido, con líneas que se puedan leer en pantallas anchas */
+.tortugas-revision {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem;
+}
+.tortugas-revision > * { max-width: 90ch; }
 
 /* las tablas anchas se desplazan dentro de su caja, no la página */
 .tortugas-tabla-wrap {

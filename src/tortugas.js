@@ -654,3 +654,198 @@ export function ordenesManana(res, capital) {
     return fila
   }))
 }
+
+// ── Expediente para la revisión con Claude ──────────────────────────────────
+// Lo que hace falta para juzgar si el resultado es sólido: las cifras del resumen, de dónde
+// sale el beneficio (años, mercados, pirámide, lados, las mejores operaciones), las peores
+// caídas y las dos mitades del periodo. Sin la lista de operaciones, que en acciones son
+// miles: solo los extremos. Los números van redondeados para que el texto sea corto.
+
+const r2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null)
+const r0 = v => (Number.isFinite(v) ? Math.round(v) : null)
+
+// Las caídas desde un máximo hasta recuperarlo, de la más honda a la menos
+export function peoresCaidas(curva, cuantas = 5) {
+  const caidas = []
+  let pico = null, caida = null
+  for (const p of curva) {
+    if (!pico || p.valor >= pico.valor) {
+      if (caida) caidas.push({ ...caida, recuperada: p.date })
+      pico = p
+      caida = null
+    } else {
+      const dd = p.valor / pico.valor - 1
+      if (!caida || dd < caida.dd) caida = { desde: pico.date, fondo: p.date, dd, recuperada: null }
+    }
+  }
+  if (caida) caidas.push(caida)
+  const fin = curva.at(-1)?.date
+  return caidas.sort((a, b) => a.dd - b.dd).slice(0, cuantas).map(c => ({
+    desde: c.desde, fondo: c.fondo, recuperada: c.recuperada ?? 'aún no', caidaPct: r2(100 * c.dd),
+    mesesBajoElMaximo: r0(noches(c.desde, c.recuperada ?? fin) / 30.44),
+  }))
+}
+
+// Operaciones, acierto, neto y profit factor de un grupo de operaciones
+function agregado(ops) {
+  const ganado = suma(ops.filter(o => o.neto > 0).map(o => o.neto))
+  const perdido = -suma(ops.filter(o => o.neto <= 0).map(o => o.neto))
+  return {
+    operaciones: ops.length,
+    aciertoPct: ops.length ? r2(100 * ops.filter(o => o.neto > 0).length / ops.length) : null,
+    netoEur: r0(ganado - perdido),
+    profitFactor: perdido > 0 ? r2(ganado / perdido) : null,
+  }
+}
+
+const agrupar = (ops, clave) => Object.fromEntries([...new Set(ops.map(clave))].map(k => [k, agregado(ops.filter(o => clave(o) === k))]))
+
+// Rentabilidad, peor caída y operaciones cerradas de un tramo de la curva (de la sesión a a la b)
+function tramo(res, a, b) {
+  const curva = res.curva.slice(a, b + 1)
+  const desde = curva[0].date, hasta = curva.at(-1).date
+  const ini = curva[0].valor, fin = curva.at(-1).valor
+  let pico = -Infinity, dd = 0
+  for (const p of curva) { pico = Math.max(pico, p.valor); dd = Math.min(dd, p.valor / pico - 1) }
+  const ops = res.operaciones.filter(o => (a === 0 || o.salida > desde) && o.salida <= hasta)
+  return {
+    desde, hasta,
+    cagrPct: ini > 0 && fin > 0 && hasta > desde ? r2(100 * ((fin / ini) ** (365.25 / noches(desde, hasta)) - 1)) : null,
+    maxDrawdownPct: r2(100 * dd),
+    ...agregado(ops),
+  }
+}
+
+const LIMITACIONES = {
+  comun: 'Dentro de cada vela diaria se supone el camino apertura → mínimo → máximo → cierre si cierra por encima de la apertura, y al revés si no: cuando la entrada y el stop caen en la misma vela, el orden real pudo ser otro.',
+  indices: [
+    'Velas diarias del contado (Yahoo). El CFD cotiza casi 24 h, así que un stop puede saltar de noche en un nivel que el contado no marca.',
+    'Yahoo trae el FTSE siempre con la apertura igual al cierre anterior, y el S&P y el Russell así en muchas sesiones antes de 2007: ahí no se ven los huecos de la noche.',
+    'La financiación usa el tipo de EE. UU. a 3 meses para todos los índices. Comprar y mantener es el índice de precio, sin dividendos (salvo el DAX).',
+  ],
+  acciones: [
+    'La lista es la de hoy del S&P 500: faltan las que salieron del índice o dejaron de cotizar (sesgo de supervivencia), así que el resultado sale mejor de lo que habría sido.',
+    'Los resultados trimestrales abren huecos que pasan los stops. Las escisiones no vienen ajustadas y parecen caídas. Las cuentas en euros son dólares contados como euros.',
+  ],
+  futuros: [
+    'Futuros de Yahoo empalmados hacia atrás en cada vencimiento: los precios antiguos no son los que cotizaban, pero sí lo que se movían. Las divisas, al contado, sin el diferencial de tipos.',
+    'Las letras salen de 100 − tipo a 3 meses: su N es diminuta y su unidad lleva un nominal enorme, por eso aquí no hay tope de nominal. No se cobran intereses del dinero que no está en margen, como hacían las tortugas.',
+  ],
+}
+
+// `universo`: indices | acciones | futuros. `variantes`: las filas de «Comparar variantes» si
+// están hechas con estos mismos ajustes
+export function expedienteBacktest(res, { universo, variantes = null } = {}) {
+  const { cfg } = res
+  const m = metricasTortugas(res)
+  const acciones = universo === 'acciones'
+  const juntos = cfg.sistema === '1+2'
+  const ops = res.operaciones
+
+  // en % del capital al entrar: en € una operación de 2020 pesa más que una de 1995 solo por
+  // el interés compuesto
+  const porPct = [...ops].sort((a, b) => b.pctCapital - a.pctCapital)
+  const mejores = porPct.slice(0, 10)
+  const totalPct = suma(ops.map(o => o.pctCapital))
+  const delMejor = f => suma(porPct.slice(0, Math.max(1, Math.round(ops.length * f))).map(o => o.pctCapital))
+  const apunte = o => ({
+    mercado: o.indice, ...(juntos ? { sistema: o.sistema } : {}), lado: o.lado, entrada: o.entrada, salida: o.salida,
+    dias: o.dias, unidades: o.unidades, motivo: o.motivo, pctCapital: r2(o.pctCapital), netoEur: r0(o.neto),
+  })
+
+  const filas = resumenPorIndice(res)
+  const fila = f => ({
+    mercado: acciones ? f.indice : f.nombre, grupo: f.grupo, desde: f.desde, operaciones: f.operaciones,
+    aciertoPct: r2(f.acierto), netoEur: r0(f.neto),
+    ...(cfg.lados === 'ambos' ? { largosEur: r0(f.largos), cortosEur: r0(f.cortos) } : {}),
+    ...(juntos ? { s1Eur: r0(f.s1), s2Eur: r0(f.s2) } : {}),
+    financiacionEur: r0(f.financiacion), ...(acciones ? { comisionEur: r0(f.comision) } : {}),
+    comprarYMantenerCagrPct: r2(f.compraCagr), comprarYMantenerPeorCaidaPct: r2(f.compraDD),
+  })
+  const conOperaciones = filas.filter(f => f.operaciones).sort((a, b) => b.neto - a.neto)
+  const mitad = Math.floor((res.curva.length - 1) / 2)
+
+  return {
+    universo: { indices: 'índices de contado (CFD)', acciones: 'acciones del S&P 500 (CFD)', futuros: 'los futuros de las tortugas de 1983' }[universo],
+    mercados: acciones
+      ? { acciones: filas.length, conAlgunaOperacion: conOperaciones.length, sectores: new Set(filas.map(f => f.grupo)).size }
+      : filas.map(f => f.nombre),
+    moneda: 'EUR. Los € por mercado, lado, sistema o pirámide llevan el interés compuesto: pesan más los años recientes',
+    configuracion: {
+      sistema: juntos ? 'S1 + S2' : `S${cfg.sistema}`,
+      lados: cfg.lados,
+      riesgoPorUnidadPctDelCapital: Math.round(100_000 * cfg.riesgo) / 1000,
+      maxUnidadesPorMercado: cfg.maxUnidades,
+      maxUnidadesPorGrupoYSentido: cfg.maxGrupo,
+      maxUnidadesPorSentido: cfg.maxSentido,
+      anadeCadaN: cfg.paso,
+      stopEnN: cfg.stopN,
+      deslizamientoEnN: cfg.deslizN,
+      financiacion: cfg.financiacion ? `tipo a 3 meses + ${r2(100 * cfg.recargo)} % anual` : 'sin coste overnight',
+      soloAFavorDeLaMedia: cfg.media || 'no',
+      reduceEnDrawdown: cfg.reduccionDD,
+      topeDeApalancamiento: cfg.apalancamiento || 'sin tope',
+      ...(acciones ? { comisiones: cfg.comisiones, soloDesdeQueEntroEnElIndice: cfg.soloEnIndice } : {}),
+    },
+    periodo: { desde: res.curva[0].date, hasta: res.curva.at(-1).date, anios: r2(noches(res.curva[0].date, res.curva.at(-1).date) / 365.25) },
+    resultado: {
+      capitalInicialEur: cfg.capital,
+      capitalFinalEur: r0(m.capitalFinal),
+      cagrPct: r2(m.cagr),
+      maxDrawdownPct: r2(m.maxDD),
+      mar: r2(m.mar),
+      sharpe: r2(m.sharpe),
+      drawdownMasLargoAnios: r2(m.ddMasLargo),
+      operaciones: m.operaciones,
+      aciertoPct: r2(m.acierto),
+      profitFactor: r2(m.profitFactor),
+      ganadoraMediaEntrePerdedoraMedia: r2(m.ganadoraPerdedora),
+      diasMediosPorOperacion: r0(m.diasMedios),
+      diasMediosGanadoras: r0(media(ops.filter(o => o.neto > 0).map(o => o.dias))),
+      diasMediosPerdedoras: r0(media(ops.filter(o => o.neto <= 0).map(o => o.dias))),
+      financiacionEur: r0(m.financiacion),
+      financiacionPctDelBrutoGanado: r2(m.financiacionPct),
+      ...(m.comisiones > 0 ? { comisionesEur: r0(m.comisiones), comisionesPctDelBrutoGanado: r2(m.comisionesPct) } : {}),
+      apalancamientoMedio: r2(m.apalancamientoMedio),
+      apalancamientoMax: r2(m.apalancamientoMax),
+      ...(m.quiebra ? { cuentaACeroEl: m.quiebra } : {}),
+      posicionesAbiertas: res.abiertas.length,
+    },
+    rentabilidadPorAnioPct: Object.fromEntries(rentabilidadAnual(res).map(a => [a.anio, r2(a.pct)])),
+    peoresCaidas: peoresCaidas(res.curva),
+    mitadesDelPeriodo: [tramo(res, 0, mitad), tramo(res, mitad, res.curva.length - 1)],
+    concentracion: {
+      medida: 'suma del resultado de cada operación en % del capital al entrar (sin el efecto del interés compuesto)',
+      todas: r2(totalPct),
+      soloEl1PorCientoMejor: r2(delMejor(0.01)),
+      soloEl5PorCientoMejor: r2(delMejor(0.05)),
+      soloEl10PorCientoMejor: r2(delMejor(0.1)),
+      todasMenosLas10Mejores: r2(totalPct - suma(mejores.map(o => o.pctCapital))),
+    },
+    mejoresOperaciones: mejores.map(apunte),
+    peoresOperaciones: porPct.slice(-10).reverse().filter(o => !mejores.includes(o)).map(apunte),
+    porMotivoDeSalida: agrupar(ops, o => o.motivo),
+    ...(cfg.lados === 'ambos' ? { porLado: agrupar(ops, o => o.lado) } : {}),
+    ...(juntos ? { porSistema: agrupar(ops, o => `S${o.sistema}`) } : {}),
+    porUnidadesAlCerrar: porUnidades(res).map(f => ({ unidades: f.unidades, operaciones: f.n, aciertoPct: r2(100 * f.ganan / f.n), netoEur: r0(f.neto) })),
+    ...(acciones
+      ? {
+        porSector: resumenPorGrupo(res, filas).map(g => ({
+          sector: g.grupo, acciones: g.mercados, conOperaciones: g.conOperaciones, operaciones: g.operaciones,
+          aciertoPct: r2(g.acierto), netoEur: r0(g.neto), financiacionEur: r0(g.financiacion), comisionEur: r0(g.comision),
+        })),
+        accionesQueMasDejan: conOperaciones.slice(0, 10).map(fila),
+        accionesQueMasQuitan: conOperaciones.slice(10).slice(-10).reverse().map(fila),
+      }
+      : { porMercado: filas.map(fila) }),
+    ...(variantes?.length ? {
+      variantes: variantes.map(v => ({
+        sistema: v.sistema === '1+2' ? 'S1 + S2' : `S${v.sistema}`, lados: v.lados, maxUnidades: v.unidades,
+        ...(v.actual ? { esLaDeArriba: true } : {}),
+        cagrPct: r2(v.m?.cagr), maxDrawdownPct: r2(v.m?.maxDD), mar: r2(v.m?.mar), sharpe: r2(v.m?.sharpe),
+        operaciones: v.m?.operaciones ?? null, profitFactor: r2(v.m?.profitFactor), financiacionPctDelBruto: r2(v.m?.financiacionPct),
+      })),
+    } : {}),
+    limitacionesDeLosDatos: [LIMITACIONES.comun, ...(LIMITACIONES[universo] ?? [])],
+  }
+}

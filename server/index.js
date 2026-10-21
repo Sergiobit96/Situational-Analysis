@@ -26,6 +26,7 @@ import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './
 import { crearFuturosTortugas } from './futuros-tortugas.js'
 import { crearColaFeed } from './cola-feed.js'
 import { gzipSync } from 'zlib'
+import { createHash } from 'crypto'
 import Anthropic from '@anthropic-ai/sdk'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, copyFileSync } from 'fs'
 import { join, dirname, relative, resolve, sep, basename, extname } from 'path'
@@ -2013,20 +2014,72 @@ let clienteClaude = null
 // Se crea al primer uso: sin clave, el constructor lanza, y el resto del servidor no la necesita
 const claude = () => (clienteClaude ??= new Anthropic())
 
-function leerRevisiones() {
+// Lo que escribe Claude con un prompt y un expediente, con el modelo que contestó y lo que
+// costó. Si la rechaza o llega cortada, lanza un ErrorRevision con el mensaje para la pantalla.
+class ErrorRevision extends Error {}
+
+async function escribirRevision(system, contenido) {
+  const respuesta = await claude().beta.messages.create({
+    model: MODELO_REVISION,
+    max_tokens: 16000,
+    // el pensamiento adaptativo va siempre activo en este modelo; el esfuerzo por defecto es
+    // medium, y para juzgar operaciones compensa uno más
+    output_config: { effort: 'high' },
+    // si Claude Opus 5.5 rechaza la petición, la repite Claude Opus 4.8 en la misma llamada
+    betas: ['server-side-fallback-2026-06-01'],
+    fallbacks: [{ model: 'claude-opus-4-8' }],
+    system,
+    messages: [{ role: 'user', content: contenido }],
+  })
+
+  if (respuesta.stop_reason === 'refusal') throw new ErrorRevision('Claude no ha querido hacer esta revisión')
+  const texto = respuesta.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+  if (!texto || respuesta.stop_reason === 'max_tokens') throw new ErrorRevision('La revisión llegó vacía o cortada; prueba otra vez')
+
+  const { input_tokens: entrada = 0, output_tokens: salida = 0 } = respuesta.usage ?? {}
+  const [pe, ps] = PRECIO_POR_MTOK[respuesta.model] ?? PRECIO_POR_MTOK[MODELO_REVISION]
+  return {
+    texto,
+    modelo: respuesta.model,
+    generada: new Date().toISOString(),
+    tokens: { entrada, salida },
+    usd: Math.round((entrada * pe + salida * ps) / 1e6 * 10000) / 10000,
+  }
+}
+
+function responderErrorRevision(res, err, etiqueta) {
+  console.error(`[${etiqueta}]`, err.message)
+  if (err instanceof ErrorRevision) return res.status(502).json({ error: err.message })
+  if (err instanceof Anthropic.AuthenticationError) {
+    return res.status(401).json({ error: 'La clave de Anthropic de server/.env no es válida' })
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return res.status(429).json({ error: 'Anthropic está limitando las peticiones; prueba en un minuto' })
+  }
+  if (err instanceof Anthropic.APIConnectionError) {
+    return res.status(502).json({ error: 'No se pudo conectar con Anthropic' })
+  }
+  if (err instanceof Anthropic.APIError) {
+    return res.status(502).json({ error: `Anthropic respondió ${err.status}: ${err.message}` })
+  }
+  // sin ANTHROPIC_API_KEY el SDK lanza al crear el cliente
+  res.status(500).json({ error: process.env.ANTHROPIC_API_KEY ? err.message : 'Falta ANTHROPIC_API_KEY en server/.env' })
+}
+
+function leerRevisiones(ruta) {
   try {
-    const d = JSON.parse(readFileSync(REVISIONES_PATH, 'utf8'))
+    const d = JSON.parse(readFileSync(ruta, 'utf8'))
     return d?.revisiones && typeof d.revisiones === 'object' ? d.revisiones : {}
   } catch {
     return {}
   }
 }
 
-function guardarRevision(fecha, revision) {
-  const revisiones = { ...leerRevisiones(), [fecha]: revision }
-  const tmp = `${REVISIONES_PATH}.tmp`
+function guardarRevision(ruta, clave, revision) {
+  const revisiones = { ...leerRevisiones(ruta), [clave]: revision }
+  const tmp = `${ruta}.tmp`
   writeFileSync(tmp, JSON.stringify({ revisiones }, null, 2))
-  renameSync(tmp, REVISIONES_PATH)
+  renameSync(tmp, ruta)
 }
 
 const FECHA_VALIDA = /^\d{4}-\d{2}-\d{2}$/
@@ -2035,7 +2088,7 @@ app.get('/api/revision-dia', (req, res) => {
   if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
   const fecha = String(req.query.fecha ?? '')
   if (!FECHA_VALIDA.test(fecha)) return res.status(400).json({ error: 'fecha con formato AAAA-MM-DD' })
-  res.json({ revision: leerRevisiones()[fecha] ?? null })
+  res.json({ revision: leerRevisiones(REVISIONES_PATH)[fecha] ?? null })
 })
 
 app.post('/api/revision-dia', async (req, res) => {
@@ -2047,54 +2100,66 @@ app.post('/api/revision-dia', async (req, res) => {
   }
 
   try {
-    const respuesta = await claude().beta.messages.create({
-      model: MODELO_REVISION,
-      max_tokens: 16000,
-      // el pensamiento adaptativo va siempre activo en este modelo; el esfuerzo por defecto es
-      // medium, y para juzgar un día de operaciones compensa uno más
-      output_config: { effort: 'high' },
-      // si Claude Opus 5.5 rechaza la petición, la repite Claude Opus 4.8 en la misma llamada
-      betas: ['server-side-fallback-2026-06-01'],
-      fallbacks: [{ model: 'claude-opus-4-8' }],
-      system: PROMPT_REVISION,
-      messages: [{ role: 'user', content: `Expediente del día:\n\n${JSON.stringify(expediente, null, 2)}` }],
-    })
-
-    if (respuesta.stop_reason === 'refusal') {
-      return res.status(502).json({ error: 'Claude no ha querido hacer esta revisión' })
-    }
-    const texto = respuesta.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-    if (!texto || respuesta.stop_reason === 'max_tokens') {
-      return res.status(502).json({ error: 'La revisión llegó vacía o cortada; prueba otra vez' })
-    }
-
-    const { input_tokens: entrada = 0, output_tokens: salida = 0 } = respuesta.usage ?? {}
-    const [pe, ps] = PRECIO_POR_MTOK[respuesta.model] ?? PRECIO_POR_MTOK[MODELO_REVISION]
-    const revision = {
-      texto,
-      modelo: respuesta.model,
-      generada: new Date().toISOString(),
-      tokens: { entrada, salida },
-      usd: Math.round((entrada * pe + salida * ps) / 1e6 * 10000) / 10000,
-    }
-    guardarRevision(fecha, revision)
+    const revision = await escribirRevision(PROMPT_REVISION, `Expediente del día:\n\n${JSON.stringify(expediente, null, 2)}`)
+    guardarRevision(REVISIONES_PATH, fecha, revision)
     res.json({ revision })
   } catch (err) {
-    console.error('[revision-dia]', err.message)
-    if (err instanceof Anthropic.AuthenticationError) {
-      return res.status(401).json({ error: 'La clave de Anthropic de server/.env no es válida' })
+    responderErrorRevision(res, err, 'revision-dia')
+  }
+})
+
+// ── Revisión de un backtest de las tortugas con Claude (solo local) ──
+// Como la del día: el navegador arma el expediente (expedienteBacktest en src/tortugas.js) y
+// aquí se le pasa a Claude y se guarda. Cada revisión va con los ajustes del backtest (la
+// `clave` de la pestaña, que aquí se resume en un hash), así que al volver a esos ajustes sale
+// la que ya se pagó, aunque desde entonces haya más sesiones (la pestaña lo avisa).
+const REVISIONES_BACKTEST_PATH = process.env.REVISIONES_BACKTEST || join(PHOTOS_ROOT, 'Revisiones backtest.json')
+
+const PROMPT_REVISION_BACKTEST = `Eres quien revisa los backtests de un trader que opera CFD desde Madrid con IG y quiere llevar a un bot el sistema de las tortugas de Richard Dennis, adaptado: velas diarias, rupturas de 20 o 55 sesiones (sistema 1, sistema 2 o los dos juntos), unidades del tamaño con el que 1 N (el ATR de Wilder de 20 sesiones) cuesta un % fijo del capital, una unidad más cada ½ N a favor hasta un máximo, stop común a 2 N de la última, salida en el canal contrario de 10 o 20 sesiones, límites de unidades por grupo y por sentido, y con financiación overnight, spread y deslizamiento. Te paso el expediente de un backtest: los ajustes, el resultado, la rentabilidad de cada año, las peores caídas, las dos mitades del periodo, cuánto del resultado sale de las mejores operaciones, el desglose por mercado (o por sector y acción), por pirámide, por lado y por motivo de salida, a veces las variantes cercanas de ajustes y las limitaciones de los datos.
+
+Tu trabajo es decir si el resultado es sólido o frágil, no optimizarlo. Escribe en español y de tú:
+- Busca de qué depende el resultado: pocas operaciones, unos pocos años, un mercado o grupo, un lado, las pirámides completas. Da las cifras.
+- Compara las dos mitades del periodo. Si hay variantes, mira si la de arriba gana por poco a las cercanas (señal de ajuste a la historia) o si el resultado aguanta en todas.
+- Juzga el riesgo: la peor caída, cuánto tiempo bajo el máximo, el apalancamiento, y si un particular aguantaría operarlo así. Compara con comprar y mantener de cada mercado cuando ayude.
+- Mira cuánto se comen la financiación, las comisiones y el deslizamiento.
+- Ten en cuenta las limitaciones de los datos que vienen en el expediente; menciona solo las que cambien la conclusión.
+- No inventes nada que no esté en el expediente. Los € por mercado, lado o pirámide llevan el interés compuesto, así que pesan más los años recientes; para comparar, usa los % del capital cuando los haya.
+
+Texto plano, sin títulos ni negritas, en cinco bloques cortos separados por una línea en blanco: el veredicto en dos frases con las cifras clave; de dónde sale el resultado; lo que lo hace frágil; el riesgo de operarlo; y una o dos pruebas concretas para hacer en la pestaña (cambiar un ajuste, quitar un mercado, mover el año de inicio...) que confirmarían o desmontarían la conclusión. Como mucho 350 palabras.`
+
+const MAX_CLAVE_BACKTEST = 20_000
+const idBacktest = clave => createHash('sha256').update(clave).digest('hex').slice(0, 16)
+
+app.get('/api/revision-backtest', (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const clave = String(req.query.clave ?? '')
+  if (!clave || clave.length > MAX_CLAVE_BACKTEST) return res.status(400).json({ error: 'falta la clave del backtest' })
+  res.json({ revision: leerRevisiones(REVISIONES_BACKTEST_PATH)[idBacktest(clave)] ?? null })
+})
+
+app.post('/api/revision-backtest', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+  const { clave, expediente } = req.body ?? {}
+  if (typeof clave !== 'string' || !clave || clave.length > MAX_CLAVE_BACKTEST) {
+    return res.status(400).json({ error: 'falta la clave del backtest' })
+  }
+  if (!expediente?.resultado || !expediente.periodo?.hasta) {
+    return res.status(400).json({ error: 'El backtest no tiene resultado que revisar' })
+  }
+
+  try {
+    const revision = {
+      ...await escribirRevision(PROMPT_REVISION_BACKTEST, `Expediente del backtest:\n\n${JSON.stringify(expediente, null, 2)}`),
+      // para que el JSON se pueda leer a mano, y para avisar cuando el backtest tenga más sesiones
+      universo: expediente.universo,
+      configuracion: expediente.configuracion,
+      datosHasta: expediente.periodo.hasta,
+      conVariantes: Array.isArray(expediente.variantes),
     }
-    if (err instanceof Anthropic.RateLimitError) {
-      return res.status(429).json({ error: 'Anthropic está limitando las peticiones; prueba en un minuto' })
-    }
-    if (err instanceof Anthropic.APIConnectionError) {
-      return res.status(502).json({ error: 'No se pudo conectar con Anthropic' })
-    }
-    if (err instanceof Anthropic.APIError) {
-      return res.status(502).json({ error: `Anthropic respondió ${err.status}: ${err.message}` })
-    }
-    // sin ANTHROPIC_API_KEY el SDK lanza al crear el cliente
-    res.status(500).json({ error: process.env.ANTHROPIC_API_KEY ? err.message : 'Falta ANTHROPIC_API_KEY en server/.env' })
+    guardarRevision(REVISIONES_BACKTEST_PATH, idBacktest(clave), revision)
+    res.json({ revision })
+  } catch (err) {
+    responderErrorRevision(res, err, 'revision-backtest')
   }
 })
 

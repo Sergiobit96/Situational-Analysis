@@ -7,6 +7,7 @@ import {
 } from './tortugas'
 import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
+import RevisionBacktest from './RevisionBacktest'
 import './Tortugas.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -810,6 +811,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           {acciones ? <PorSector res={res} /> : <PorIndice res={res} futuros={futuros} />}
           <Piramide res={res} />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
+          <RevisionBacktest clave={claveCfg} res={res} universo={universo} variantes={variantes?.clave === claveCfg ? variantes.filas : null} />
           <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} futuros={futuros} />
           <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} futuros={futuros} />
           {futuros ? (

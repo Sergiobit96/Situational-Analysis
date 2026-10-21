@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops } from '../src/tortugas.js'
+import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops, peoresCaidas, expedienteBacktest } from '../src/tortugas.js'
 
 test('lo que pierde una pirámide si salta su stop, que sube 2 N por debajo de la última unidad', () => {
   assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStop(k)), [2, 3.5, 4.5, 5, 5, 4.5])
@@ -253,4 +253,41 @@ test('prepararMercado: el dividendo de una vela sin rango pasa a la siguiente', 
   assert.equal(m.fechas.length, 71)
   assert.equal(m.div[70], 1)
   assert.equal(prepararMercado(INFO, conFechas(base())).div, null)
+})
+
+// ── Expediente para la revisión con Claude ──
+
+test('peores caídas: de máximo a máximo, la más honda primero y la de ahora sin recuperar', () => {
+  const curva = [['01', 100], ['02', 90], ['03', 80], ['04', 100], ['05', 110], ['06', 99]]
+    .map(([d, valor]) => ({ date: `2000-01-${d}`, valor }))
+  assert.deepEqual(peoresCaidas(curva), [
+    { desde: '2000-01-01', fondo: '2000-01-03', recuperada: '2000-01-04', caidaPct: -20, mesesBajoElMaximo: 0 },
+    { desde: '2000-01-05', fondo: '2000-01-06', recuperada: 'aún no', caidaPct: -10, mesesBajoElMaximo: 0 },
+  ])
+  assert.equal(peoresCaidas(curva, 1).length, 1)
+})
+
+test('expediente: la operación de la pirámide, sin repetirla entre las mejores y las peores', () => {
+  const velas = conFechas([...base(), RUPTURA, vela(103, 103.5, 99, 99.5)])
+  const res = backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, LIMPIO)
+  const e = expedienteBacktest(res, { universo: 'indices' })
+  assert.deepEqual(e.mercados, ['X'])
+  assert.equal(e.configuracion.riesgoPorUnidadPctDelCapital, 0.2)
+  assert.equal(e.resultado.operaciones, 1)
+  assert.equal(e.concentracion.todas, -1)                  // −1.000 € de 100.000
+  assert.equal(e.concentracion.todasMenosLas10Mejores, 0)
+  assert.equal(e.mejoresOperaciones.length, 1)
+  assert.equal(e.peoresOperaciones.length, 0)
+  assert.deepEqual(e.porMotivoDeSalida, { stop: { operaciones: 1, aciertoPct: 0, netoEur: -1000, profitFactor: 0 } })
+  assert.deepEqual(e.porUnidadesAlCerrar, [{ unidades: 4, operaciones: 1, aciertoPct: 0, netoEur: -1000 }])
+  assert.equal(e.porMercado[0].netoEur, -1000)
+  assert.equal(e.porLado, undefined)                        // solo largos
+  assert.equal(e.variantes, undefined)
+  assert.equal(e.periodo.hasta, velas.at(-1).date)
+  // con variantes, la de arriba va marcada
+  const conVariantes = expedienteBacktest(res, { universo: 'indices', variantes: [{ sistema: '1+2', lados: 'ambos', unidades: 4, actual: true, m: { cagr: 1.234 } }] })
+  assert.deepEqual(conVariantes.variantes[0], {
+    sistema: 'S1 + S2', lados: 'ambos', maxUnidades: 4, esLaDeArriba: true,
+    cagrPct: 1.23, maxDrawdownPct: null, mar: null, sharpe: null, operaciones: null, profitFactor: null, financiacionPctDelBruto: null,
+  })
 })

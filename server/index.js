@@ -115,6 +115,27 @@ const app  = express()
 const PORT = process.env.PORT || 3001
 const PRODUCCION = process.env.NODE_ENV === 'production'
 
+app.disable('x-powered-by')
+if (PRODUCCION) {
+  // Railway llega a través de su proxy, que pone la dirección de quien llama al final de
+  // X-Forwarded-For: req.ip es esa, y no la del proxy (la usa la clave del bot para bloquear
+  // a quien pruebe claves). Solo ese último salto: lo de antes lo puede escribir cualquiera.
+  app.set('trust proxy', 1)
+  // Cabeceras de seguridad: que el navegador no adivine tipos, no meta las respuestas en un
+  // marco de otra web ni mande la URL de la página a nadie, y que vaya siempre por HTTPS.
+  // Lo del bot, IG y el directo, además, sin guardarse en ninguna caché por el camino.
+  app.use((req, res, next) => {
+    res.set({
+      'X-Content-Type-Options':    'nosniff',
+      'X-Frame-Options':           'DENY',
+      'Referrer-Policy':           'no-referrer',
+      'Strict-Transport-Security': 'max-age=31536000',
+    })
+    if (/^\/api\/(bot|ig|tiempo-real)(\/|$)/.test(req.path)) res.set('Cache-Control', 'no-store')
+    next()
+  })
+}
+
 // Quién puede llamar al servidor desde otra web: solo las páginas de este PC (en local, las
 // pestañas hablan con localhost:3001 directamente desde :5173). En producción no hace falta
 // nadie más: el navegador llega por el dominio de Vercel, que reenvía /api aquí. CORS_ORIGENES
@@ -132,9 +153,12 @@ app.use((req, res, next) => {
 })
 
 // Todo lo del bot y de IG pide la clave del bot en producción (ver server/clave-bot.js), y
-// antes de leer el cuerpo: sin clave no se llega a leer nada
-const claveBot = crearClaveBot({ token: process.env.BOT_TOKEN || '', produccion: PRODUCCION })
-const claveBotValida = claveBot.valida
+// antes de leer el cuerpo: sin clave no se llega a leer nada. Quien pruebe claves a ciegas
+// queda bloqueado, y se avisa por Telegram (avisarServidor se define más abajo, con el bot)
+const claveBot = crearClaveBot({ token: process.env.BOT_TOKEN || '', produccion: PRODUCCION, avisar: texto => avisarServidor(texto) })
+if (PRODUCCION && (process.env.BOT_TOKEN || '').length < 32) {
+  console.warn('[clave-bot] BOT_TOKEN tiene menos de 32 caracteres: mejor una larga y al azar (node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64url\'))")')
+}
 app.use(['/api/bot', '/api/ig', '/api/tiempo-real'], claveBot.middleware)
 
 // En producción, cuerpos de 1 MB como mucho: uno de 50 MB que cualquiera mande ocupa cientos
@@ -285,16 +309,38 @@ async function getYFAuth() {
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────
-const cache     = new Map()
-const CACHE_TTL = 15 * 60_000
+// Con tope: las claves salen de lo que pida cada uno (cualquier ticker, cualquier fecha), y sin
+// él bastaba con pedir muchos distintos para llenar la memoria y tumbar el servidor con los bots
+// dentro. Se mide en velas (lo que ocupa); pasado el tope se van las más antiguas, que de todas
+// formas suelen estar también en disco. Las caducadas se barren cada diez minutos.
+const cache           = new Map()
+const CACHE_TTL       = 15 * 60_000
+const CACHE_MAX_VELAS = 1_000_000
+let velasEnCache = 0
 
 function fromCache(key) {
   const c = cache.get(key)
   return c && Date.now() - c.ts < (c.ttl ?? CACHE_TTL) ? c.data : null
 }
-function toCache(key, data, ttl = CACHE_TTL) {
-  cache.set(key, { ts: Date.now(), data, ttl })
+function sacarDeCache(key) {
+  const c = cache.get(key)
+  if (!c) return
+  velasEnCache -= c.peso
+  cache.delete(key)
 }
+function toCache(key, data, ttl = CACHE_TTL) {
+  sacarDeCache(key)   // y vuelve a entrar al final: el orden del Map es de más antigua a más nueva
+  const peso = Array.isArray(data) ? data.length : 1
+  cache.set(key, { ts: Date.now(), data, ttl, peso })
+  velasEnCache += peso
+  for (const k of cache.keys()) {
+    if (velasEnCache <= CACHE_MAX_VELAS) break
+    sacarDeCache(k)
+  }
+}
+setInterval(() => {
+  for (const [k, c] of cache) if (Date.now() - c.ts >= (c.ttl ?? CACHE_TTL)) sacarDeCache(k)
+}, 10 * 60_000).unref()
 
 // fetch() de Node solo da "fetch failed"; la causa real (ECONNRESET, ETIMEDOUT…) va en err.cause
 const errDetalle = err => err.cause?.code ?? err.cause?.message ?? err.message
@@ -2678,7 +2724,7 @@ app.get('/api/grafico/velas', async (req, res) => {
 
     if (fuente === 'ig') {
       // el histórico de IG gasta su cupo semanal: en producción, solo con la clave del bot
-      if (!claveBotValida(req)) return res.status(401).json({ error: 'Clave del bot incorrecta', necesitaClave: true })
+      if (!claveBot.exigir(req, res)) return
       if (!ig) return res.status(404).json({ error: `IG no está configurado: faltan ${IG_FALTAN.join(', ')} en server/.env` })
       const { diasPagina, res: resolucion } = IG_RESOLUCION[tf]
       let fin = hasta

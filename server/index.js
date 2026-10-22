@@ -3160,10 +3160,18 @@ app.post('/api/bot/parar', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-// Las posiciones abiertas de la cuenta demo (las del bot y cualquier otra)
+// Las posiciones abiertas de la cuenta demo (las de los bots y cualquier otra), cada una con
+// el bot que la abrió, que se sabe por el prefijo de su referencia, y la cuenta
+const BOT_DE_REFERENCIA = [['SRS-', 'SRS'], ['R4-', 'Rule of 4'], ['FBN-', 'First bar negative'], ['TOR', 'Tortugas']]
 app.get('/api/bot/posiciones', async (req, res) => {
   if (!bot) return sinBot(res)
-  try { res.json(await ig.operar.posiciones()) }
+  try {
+    const [posiciones, cuenta] = await Promise.all([ig.operar.posiciones(), ig.operar.cuenta().catch(() => null)])
+    res.json({
+      opera: BOT_OPERA, cuenta,
+      posiciones: posiciones.map(p => ({ ...p, bot: BOT_DE_REFERENCIA.find(([prefijo]) => p.referencia?.startsWith(prefijo))?.[1] ?? null })),
+    })
+  }
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 

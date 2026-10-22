@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import Bot from './Bot'
 import BotTortugas from './BotTortugas'
+import Posiciones from './Posiciones'
 
 // Los bots de la demo de IG bajo una sola pestaña, cada uno en su vista, como el Diario. Todos
 // operan desde el servidor que tenga BOT_OPERA=1 (en la nube) y comparten la cuenta, el
@@ -10,6 +11,7 @@ const NOTA_RULE4 = 'Horas de Madrid; la raya vertical es ahora. Solo opera los d
 const NOTA_FBN = 'Horas de Madrid; la raya vertical es ahora. Cada sesión abre a la hora de su bolsa (Tokio 09:00, Fráncfort 09:00, Londres 08:00 y Nueva York 09:30) y el bracket es su primera vela de 5 min: si cierra en negativo, vende al perder su mínimo; si no, ese día no opera. La casilla enciende o apaga cada instrumento.'
 
 const VISTAS_BOTS = [
+  { id: 'posiciones', nombre: 'Posiciones activas', render: () => <Posiciones /> },
   { id: 'srs',       nombre: 'SRS',             render: () => <Bot /> },
   { id: 'rule-of-4', nombre: 'Rule of 4 (FOMC)', render: () => <Bot api="/api/bot/rule-of-4" nombre="Rule of 4" notaDia={NOTA_RULE4} extras={false} /> },
   { id: 'first-bar-negative', nombre: 'First bar negative', render: () => <Bot api="/api/bot/first-bar-negative" nombre="First bar negative" notaDia={NOTA_FBN} extras={false} /> },

@@ -825,10 +825,18 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
     return (json.positions ?? []).map(({ position: p, market: m }) => {
       const ticker = tickerDeEpic.get(m.epic) ?? null
       const f = ticker ? escalaDe(ticker) : 1
+      // el precio al que se cerraría ahora (una compra se cierra al bid; una venta, a la oferta)
+      // y lo que va ganando: puntos de IG × tamaño × tamaño del contrato, en la moneda de la posición
+      const salida = p.direction === 'BUY' ? m.bid : m.offer
+      const sentido = p.direction === 'BUY' ? 1 : -1
       return {
         dealId: p.dealId, epic: m.epic, ticker, lado: p.direction === 'BUY' ? 'largo' : 'corto', tamano: p.size,
         nivel: p.level * f, stop: p.stopLevel == null ? null : p.stopLevel * f, abierta: p.createdDateUTC,
         referencia: p.dealReference ?? null,
+        nombre: m.instrumentName ?? null, moneda: p.currency ?? null, mercado: m.marketStatus ?? null,
+        precio: salida == null ? null : salida * f,
+        puntos: salida == null ? null : sentido * (salida - p.level) * f,
+        resultado: salida == null ? null : sentido * (salida - p.level) * p.size * (p.contractSize ?? 1),
       }
     })
   }

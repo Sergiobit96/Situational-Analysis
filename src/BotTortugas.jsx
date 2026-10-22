@@ -121,13 +121,13 @@ export default function BotTortugas() {
   const sistemasCartera = reglas.sistemas.filter(s => config.sistemas.includes(s) || abiertas.some(p => p.sistema === s))
   // Lo que se perdería ahora si saltaran todos los stops, y lo peor que permiten los límites: en
   // cada sistema, el peor reparto de las unidades que caben (el stop de una pirámide sube con
-  // cada añadido); con los sistemas llenos, cada uno con su parte del riesgo
+  // cada añadido); con los sistemas llenos, cada uno con todo el riesgo
   const alStop = abiertas.reduce((s, p) => s + (cuentasDe(p, null).alStop ?? 0), 0)
   const peor = peorHastaStops({
     grupos: Object.values(mercados.filter(m => m.encendido).reduce((n, m) => ({ ...n, [m.grupo]: (n[m.grupo] ?? 0) + 1 }), {})),
     maxUnidades: config.maxUnidades, maxGrupo: config.maxGrupo, maxSentido: config.maxSentido, stopN: reglas.stopN, paso: reglas.pasoN,
   })
-  const peorPct = peor.n * config.riesgoPct
+  const peorPct = peor.n * config.riesgoPct * config.sistemas.length
   const alStopPct = saldo && abiertas.length ? (100 * -alStop) / saldo : 0
 
   // La tabla, por grupos (con su cabecera) o de la ruptura más cercana a la más lejana
@@ -144,7 +144,7 @@ export default function BotTortugas() {
         <div>
           <div className={`bot-interruptor ${config.activo ? 'encendido' : ''}`}>{config.activo ? '● Encendido' : '○ Apagado'}</div>
           <p className="bot-nota">
-            Tortugas · {sistemasTexto} · {ladosTexto} · 1 N por unidad = {num(config.riesgoPct, 2)}% del saldo{dosSistemas ? ` (${num(config.riesgoPct / 2, 2)}% en cada sistema)` : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
+            Tortugas · {sistemasTexto} · {ladosTexto} · 1 N por unidad = {num(config.riesgoPct, 2)}% del saldo{dosSistemas ? ' en cada entrada, de cualquier sistema' : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
           </p>
           {!opera && <p className="bot-aviso">Este servidor no opera (BOT_OPERA no es 1): el registro es el suyo, pero las órdenes las manda el servidor que tenga BOT_OPERA=1.</p>}
         </div>
@@ -272,7 +272,7 @@ export default function BotTortugas() {
         <div className="bot-form">
           <label>Sistemas
             <select value={editando.sistemas.join(',')} onChange={e => cambiar('sistemas', e.target.value.split(',').map(Number))}>
-              <option value="1,2">Los dos a la vez, con la mitad del capital cada uno</option>
+              <option value="1,2">Los dos a la vez, como uno y con todo el capital en cada entrada</option>
               <option value="1">Solo el 1: entra en 20, sale en 10</option>
               <option value="2">Solo el 2: entra en 55, sale en 20</option>
             </select>
@@ -311,10 +311,10 @@ export default function BotTortugas() {
         </div>
         <p className="bot-nota">
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
-          Cada uno tiene la mitad del capital y sus propias posiciones y límites, así que con los dos llenos se arriesga lo mismo que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
+          Cada entrada va con todo el capital, y cada sistema lleva sus propias posiciones y límites, así que con los dos llenos se arriesga el doble que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
           Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene en ese mercado una unidad del mismo sentido a menos de {num(reglas.pasoN, 1)} N), solo se ejecuta una vez.
-          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta su parte del % del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
-          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * config.riesgoPct, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peor.n * config.riesgoPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
+          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta ese % del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
+          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * config.riesgoPct * config.sistemas.length, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peorPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
           (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
@@ -384,7 +384,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
               <td className="bot-celda-texto" rowSpan={n}>
                 {!plan ? '—'
                   : plan.error ? <><span className="bot-neg">sin plan</span><small className="tor-sub tor-motivo">{plan.error}</small></>
-                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano, 2)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{(plan.reparto ?? 1) > 1 ? ' en cada sistema' : ''}{plan.provisional ? ' · provisional' : ''}</small><small className="tor-sub tor-epic">{plan.unidad.epic}</small></>
+                  : plan.unidad?.ok ? <>{num(plan.unidad.tamano, 2)} contratos<small className="tor-sub">{Math.round(plan.unidad.eurPorN)} € por N{plan.provisional ? ' · provisional' : ''}</small><small className="tor-sub tor-epic">{plan.unidad.epic}</small></>
                   : <><span className="bot-neg">no cabe</span><small className="tor-sub tor-motivo">{plan.unidad?.motivo}</small></>}
               </td>
             </>}

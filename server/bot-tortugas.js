@@ -8,10 +8,9 @@
 //     máximo de 20 sesiones y sale al romper el mínimo de 10; el Sistema 2 entra en la de 55 y
 //     sale en la de 20. El filtro del Sistema 1 de las tortugas (saltarse la ruptura si la
 //     anterior habría ganado y esperar a la de 55) está, pero apagado: el usuario lo quiso así. Cada uno lleva sus
-//     posiciones (un índice puede tener una de cada), con la mitad del capital: así, con los
-//     dos llenos, se arriesga lo mismo que con uno solo y todo el capital. Pero van como uno:
-//     si los dos dan la señal a precios parecidos (el otro ya tiene una unidad a menos de ½ N),
-//     solo se ejecuta una. Por defecto, solo largos, como el backtest;
+//     posiciones (un índice puede tener una de cada), y cada entrada va con todo el capital.
+//     Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene una
+//     unidad a menos de ½ N), solo se ejecuta una. Por defecto, solo largos, como el backtest;
 //   · una unidad es el tamaño con el que 1 N cuesta un `riesgoPct` % del capital del sistema
 //     (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest); el stop de
 //     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
@@ -140,7 +139,7 @@ export const CONFIG_TORTUGAS_BOT = {
   sistemas:     [1, 2],     // los que juega, a la vez y con el capital a partes iguales
   filtroS1:     false,      // true: el Sistema 1 se salta la ruptura de 20 si la anterior habría ganado y entra en la de 55
   lados:        'largos',   // largos | ambos | cortos
-  riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo, repartido entre los sistemas
+  riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo (en cada sistema: todo el capital)
                             // (el backtest usa 0,2 con 8 índices; las tortugas, 1)
   maxUnidades:  6,          // por índice y sistema, con la entrada
   maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
@@ -269,14 +268,14 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
 }
 
 const describirSistemas = v => (v.length === 2
-  ? 'Sistemas 1 y 2 a la vez, con la mitad del capital cada uno'
+  ? 'Sistemas 1 y 2 a la vez, como uno y con todo el capital en cada entrada'
   : `Solo el Sistema ${v[0]}: ${v[0] === 1 ? 'entra en 20 sesiones y sale en 10' : 'entra en 55 sesiones y sale en 20'}`)
 const DESCRIBIR = {
   activo:      v => (v ? 'Bot de las tortugas encendido' : 'Bot de las tortugas apagado'),
   sistemas:    describirSistemas,
   filtroS1:    v => (v ? 'Filtro del Sistema 1: si la ruptura anterior habría ganado, espera a la de 55' : 'Sistema 1 sin filtro: entra en toda ruptura de 20'),
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
-  riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo, repartido entre los sistemas`,
+  riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo`,
   maxUnidades: v => `Hasta ${v} unidades por índice y sistema`,
   maxGrupo:    v => `Hasta ${v} unidades por grupo, sentido y sistema`,
   maxSentido:  v => `Hasta ${v} unidades por sentido y sistema`,
@@ -360,11 +359,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
 
   // El plan es del índice: la N, los niveles de cada sistema (de los dos siempre, para que un
   // sistema que se deja de jugar pueda seguir sacando sus posiciones por su canal) y la unidad,
-  // que es la misma en los dos porque cada uno tiene la misma parte del capital
+  // que es la misma en los dos porque cada entrada va con todo el capital
   async function hacerPlan(ticker, ses) {
     const cfg = datos.config
-    const reparto = cfg.sistemas.length || 1
-    const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct, reparto }
+    const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, riesgoPct: cfg.riesgoPct }
     const falla = (texto, { espera = REINTENTO_PLAN_S, aviso = !plan.provisional } = {}) => {
       Object.assign(plan, { error: texto, reintentar: ahora() + espera })
       datos.planes[ticker] = plan
@@ -394,13 +392,13 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s, cfg.filtroS1)])),
     })
 
-    // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N,
-    // repartido entre los sistemas que se juegan
+    // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N, en
+    // cada entrada (los sistemas no se reparten el capital)
     const cuenta = await cuentaReciente()
     if (!(cuenta?.saldo > 0)) return falla('IG no da el saldo de la cuenta: sin él no se sabe el tamaño')
     datos.picoSaldo = Math.max(datos.picoSaldo ?? cuenta.saldo, cuenta.saldo)
     const nominal = capitalNominal(cuenta.saldo, datos.picoSaldo, cfg.reduccionDD)
-    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, riesgoEurN: nominal * cfg.riesgoPct / 100 / reparto })
+    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, riesgoEurN: nominal * cfg.riesgoPct / 100 })
     const descartes = []
     for (const epic of EPICS_OPERAR[ticker] ?? [null]) {
       const m = await ig.operar.datosMercado(ticker, epic)
@@ -429,7 +427,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       }
     }
     partes.push(plan.unidad.ok
-      ? `unidad de ${num(plan.unidad.tamano, 2)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N${reparto > 1 ? ' en cada sistema' : ''})`
+      ? `unidad de ${num(plan.unidad.tamano, 2)} contratos de ${plan.unidad.epic} (${Math.round(plan.unidad.eurPorN)} € por N)`
       : `no se puede operar: ${plan.unidad.motivo}`)
     // el plan se queda en los eventos de la pestaña, sin Telegram: la tabla de la pestaña ya
     // enseña la N, los niveles de cada sistema y la unidad (petición del usuario, 19-oct-2026)

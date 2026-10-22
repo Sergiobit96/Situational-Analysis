@@ -498,14 +498,14 @@ test('la configuración se valida y un cambio de riesgo rehace los planes', asyn
     bot.cambiarConfig({ riesgoPct: 2 })
     assert.equal(mercado(bot, '^GDAXI').plan, null)
     await bot._paso()
-    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 0.6)   // 400 € a medias entre los dos sistemas: 200 / 300
+    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 1.3)   // con los dos sistemas, cada entrada con todo el capital: 400 / 300
     bot.cambiarConfig({ sistemas: [2] })
     await bot._paso()
-    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 1.3)   // todo para el Sistema 2: 400 / 300
+    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 1.3)   // y con el Sistema 2 solo, lo mismo
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('juega los dos sistemas a la vez: cada uno entra en su canal, con la mitad del capital y su referencia', async () => {
+test('juega los dos sistemas a la vez: cada uno entra en su canal, con todo el capital y su referencia', async () => {
   // un máximo de hace 40 sesiones separa los canales: el de 20 queda en 25.150 y el de 55, en 25.400
   const diario = diarioPlano(25_000, 150, '2026-11-20')
   diario[diario.length - 40] = { ...diario[diario.length - 40], high: 25_400 }
@@ -518,9 +518,9 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con la mitad 
     assert.equal(plan.sistemas[1].entrada.largo.nivel, 25_150)
     assert.equal(plan.sistemas[2].entrada.largo.nivel, 25_400)
     assert.equal(plan.sistemas[2].salida.largo, 24_850)
-    // 1% de 20.000 € a medias: 100 € por N en cada sistema; con N ≈ 302, 0,33 → el mínimo de 0,5 (menos del doble)
-    assert.equal(plan.riesgoEurN, 100)
-    assert.equal(plan.unidad.tamano, 0.5)
+    // 1% de 20.000 € en cada entrada, de cualquier sistema: 200 € por N; con N ≈ 302, 0,66 → 0,6
+    assert.equal(plan.riesgoEurN, 200)
+    assert.equal(plan.unidad.tamano, 0.6)
 
     // rompe 20: entra solo el Sistema 1
     ig.precios['^GDAXI'] = [25_160, 25_161]
@@ -540,7 +540,7 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con la mitad 
     assert.equal(s2.ruptura, 55)
     assert.match(s2.unidades[0].referencia, /^TOR2-GDAXI-/)
     assert.match(posicion(bot, '^GDAXI', 1).unidades[0].referencia, /^TOR1-GDAXI-/)
-    assert.ok(avisos.some(a => /^Tortugas S2 · DAX · Compra de 0,5 a 25\.406/.test(a)))
+    assert.ok(avisos.some(a => /^Tortugas S2 · DAX · Compra de 0,6 a 25\.406/.test(a)))
 
     // dos órdenes (la entrada de cada uno), cada una su posición en IG
     assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 2)

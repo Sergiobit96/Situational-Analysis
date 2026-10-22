@@ -94,7 +94,9 @@ const ESTRATEGIAS = [
                  'sistema 2 cuando rompe el máximo de 55 y la lleva con sus reglas: sale en el mínimo de 20, que ' +
                  'le da más cuerda. Si la anterior perdió, entra el 1 y el 2 se queda fuera. Cada sistema lleva su ' +
                  'propia posición, con su pirámide hasta 6 y su stop a 2 N, así que si el 2 sigue dentro cuando le ' +
-                 'toca entrar al 1, están los dos a la vez. Las unidades son del mismo tamaño en los dos y los ' +
+                 'toca entrar al 1, están los dos a la vez, salvo que su ruptura caiga a menos de ½ N de una unidad ' +
+                 'del 2: van como uno y esa señal doble se ejecuta una sola vez. Cada entrada va con todo el ' +
+                 'capital, así que las unidades son del mismo tamaño en los dos, y los ' +
                  'límites por grupo y por sentido cuentan las de ambos. Huecos a la apertura y financiación de ' +
                  'cada noche, como en los otros.',
     Componente:  EstrategiaTortugas,

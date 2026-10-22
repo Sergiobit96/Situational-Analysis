@@ -529,7 +529,9 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con la mitad 
     assert.ok(posicion(bot, '^GDAXI', 1))
     assert.equal(posicion(bot, '^GDAXI', 2), null)
 
-    // rompe 55: entra también el Sistema 2, en una posición aparte
+    // rompe 55 lejos de la unidad del 1 (con una sola unidad, el 1 no añade): entra también el
+    // Sistema 2, en una posición aparte
+    bot.cambiarConfig({ maxUnidades: 1 })
     ig.precios['^GDAXI'] = [25_405, 25_406]
     vela1m('^GDAXI', fra(11, 23, 11), 25_406, 25_390)
     enHora(fra(11, 23, 11, 0, 20)); await bot._paso()
@@ -539,12 +541,51 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con la mitad 
     assert.match(s2.unidades[0].referencia, /^TOR2-GDAXI-/)
     assert.match(posicion(bot, '^GDAXI', 1).unidades[0].referencia, /^TOR1-GDAXI-/)
     assert.ok(avisos.some(a => /^Tortugas S2 · DAX · Compra de 0,5 a 25\.406/.test(a)))
-    // a 25.406 el Sistema 1 ya ha subido ½ N: añade su segunda unidad, y el 2 aún no
-    assert.equal(posicion(bot, '^GDAXI', 1).unidades.length, 2)
 
-    // tres órdenes (entrada y añadido del 1, entrada del 2), cada una su posición en IG
-    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 3)
-    assert.equal(new Set([...posicion(bot, '^GDAXI', 1).unidades, ...s2.unidades].map(u => u.dealId)).size, 3)
+    // dos órdenes (la entrada de cada uno), cada una su posición en IG
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 2)
+    assert.equal(new Set([...posicion(bot, '^GDAXI', 1).unidades, ...s2.unidades].map(u => u.dealId)).size, 2)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('los dos sistemas van como uno: una señal doble a precios parecidos se ejecuta una sola vez', async () => {
+  // el mismo canal de 20 y de 55 (25.150): la misma ruptura es la señal de los dos
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora, avisos } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-11-20') }, soloDax)
+  try {
+    enHora(fra(11, 23, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_160, 25_161]
+    vela1m('^GDAXI', fra(11, 23, 10), 25_161, 25_140)
+    enHora(fra(11, 23, 10, 0, 20)); await bot._paso()
+    assert.ok(posicion(bot, '^GDAXI', 1))
+    assert.equal(posicion(bot, '^GDAXI', 2), null)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 1)
+    assert.ok(avisos.some(a => /^Tortugas S2 · DAX · .*señal doble/.test(a)))
+    // y no lo vuelve a intentar ese día, aunque el precio se aleje
+    ig.precios['^GDAXI'] = [25_200, 25_201]
+    vela1m('^GDAXI', fra(11, 23, 10, 5), 25_201, 25_180)
+    enHora(fra(11, 23, 10, 5, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI', 2), null)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('una unidad del Sistema 1 a menos de ½ N de la ruptura de 55 hace que el 2 no entre', async () => {
+  const diario = diarioPlano(25_000, 150, '2026-11-20')
+  diario[diario.length - 40] = { ...diario[diario.length - 40], high: 25_400 }
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diario }, soloDax)
+  try {
+    enHora(fra(11, 23, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_160, 25_161]
+    vela1m('^GDAXI', fra(11, 23, 10), 25_161, 25_140)
+    enHora(fra(11, 23, 10, 0, 20)); await bot._paso()
+    // a 25.406 el 1 añade su segunda unidad, y esa es también la ruptura de 55 del 2
+    ig.precios['^GDAXI'] = [25_405, 25_406]
+    vela1m('^GDAXI', fra(11, 23, 11), 25_406, 25_390)
+    enHora(fra(11, 23, 11, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI', 1).unidades.length, 2)
+    assert.equal(posicion(bot, '^GDAXI', 2), null)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 2)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

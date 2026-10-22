@@ -9,8 +9,9 @@
 //     sale en la de 20. El filtro del Sistema 1 de las tortugas (saltarse la ruptura si la
 //     anterior habría ganado y esperar a la de 55) está, pero apagado: el usuario lo quiso así. Cada uno lleva sus
 //     posiciones (un índice puede tener una de cada), con la mitad del capital: así, con los
-//     dos llenos, se arriesga lo mismo que con uno solo y todo el capital. Por defecto, solo
-//     largos, como el backtest;
+//     dos llenos, se arriesga lo mismo que con uno solo y todo el capital. Pero van como uno:
+//     si los dos dan la señal a precios parecidos (el otro ya tiene una unidad a menos de ½ N),
+//     solo se ejecuta una. Por defecto, solo largos, como el backtest;
 //   · una unidad es el tamaño con el que 1 N cuesta un `riesgoPct` % del capital del sistema
 //     (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest); el stop de
 //     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
@@ -459,6 +460,23 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     return { saldo: c?.saldo ?? plan.saldo, disponible: c?.disponible ?? plan.disponible }
   }
 
+  // Los dos sistemas van como uno: si el otro ya tiene en el índice una unidad en el mismo
+  // sentido a menos de ½ N de este precio (o una orden suya sin confirmar), es la misma señal
+  // y no se ejecuta otra vez. Da el sistema que ya está dentro, o null.
+  function otroYaDentro(ticker, sistema, lado, precio, n) {
+    for (const s of SISTEMAS) {
+      if (s === sistema) continue
+      const pos = datos.posiciones[claveDe(ticker, s)]
+      const intento = datos.intentos[claveDe(ticker, s)]
+      const precios = [
+        ...(pos?.lado === lado ? pos.unidades.filter(u => !u.salida).map(u => u.entrada) : []),
+        ...(intento?.lado === lado ? [intento.nivel] : []),
+      ]
+      if (precios.some(p => p != null && Math.abs(p - precio) < PASO_N * n)) return s
+    }
+    return null
+  }
+
   // ── Entradas y añadidos ──
   async function entrar(ticker, sistema, lado, ses) {
     const plan = datos.planes[ticker]
@@ -470,6 +488,12 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const nivel = sp.entrada[lado].nivel
     // el precio ha vuelto atrás desde la vela que lo rompió: se espera a que lo rompa otra vez
     if ((lado === 'largo' ? precio < nivel : precio > nivel) && Math.abs(precio - nivel) > 0.25 * plan.n) { sp.esperaEntrar = ahora() + 5; return }
+    const otro = otroYaDentro(ticker, sistema, lado, precio, plan.n)
+    if (otro) {
+      sp.bloqueado = `señal doble con el Sistema ${otro}`
+      apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: el Sistema ${otro} ya ${lado === 'largo' ? 'compró' : 'vendió'} a menos de ½ N de ${px(precio)} (señal doble, se ejecuta una sola vez)`, { sistema })
+      return
+    }
     const motivo = noCabe(ticker, sistema, lado, u.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
       sp.esperaEntrar = ahora() + 60

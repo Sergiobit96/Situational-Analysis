@@ -341,8 +341,11 @@ function salidaDe(pos, sp) {
 // que el otro sistema ya está en ese sentido (los dos van como uno)
 function siguienteAnadido(pos, pasoN, ocupados) {
   const d = pasoN * pos.n0
-  let nivel = pos.unidades.at(-1).entrada + dir(pos.lado) * d
-  for (let o; (o = ocupados.find(x => Math.abs(x - nivel) < d)) != null;) nivel = o + dir(pos.lado) * d
+  const s = dir(pos.lado)
+  let nivel = pos.unidades.at(-1).entrada + s * d
+  // una sola pasada en orden a favor: el nivel solo avanza (buscar otra vez cada vez podía no
+  // terminar por el redondeo)
+  for (const o of [...ocupados].sort((a, b) => s * (a - b))) if (Math.abs(o - nivel) < d) nivel = o + s * d
   return nivel
 }
 

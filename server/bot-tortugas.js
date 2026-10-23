@@ -198,8 +198,12 @@ export function capitalNominal(saldo, pico, reduccion = true) {
 // comprado (los dos van como uno) y pasa a ½ N más allá de él
 export function siguienteAnadido(pos, ocupados = []) {
   const d = PASO_N * pos.n0
-  let nivel = pos.unidades.at(-1).entrada + dir(pos.lado) * d
-  for (let o; (o = ocupados.find(x => Math.abs(x - nivel) < d)) != null;) nivel = o + dir(pos.lado) * d
+  const s = dir(pos.lado)
+  let nivel = pos.unidades.at(-1).entrada + s * d
+  // una sola pasada, de los ocupados en orden a favor: el nivel solo avanza, así que termina
+  // (buscar otra vez cada vez colgaba el proceso: con el redondeo, (o + d) − o sale a veces
+  // un pelo menor que d y volvía a encontrar el mismo o)
+  for (const o of [...ocupados].sort((a, b) => s * (a - b))) if (Math.abs(o - nivel) < d) nivel = o + s * d
   return nivel
 }
 

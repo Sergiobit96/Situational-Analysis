@@ -110,7 +110,11 @@ export function anadidoDe(cfg, e, s) {
   let nivel = p.unidades.at(-1).ref + p.lado * d
   const otra = cfg.sistema === '1+2' ? e.pos[s === 1 ? 2 : 1] : null
   if (otra?.lado !== p.lado) return nivel
-  for (let u; (u = otra.unidades.find(x => Math.abs(x.ref - nivel) < d));) nivel = u.ref + p.lado * d
+  // una sola pasada en orden a favor: el nivel solo avanza (buscar otra vez cada vez podía no
+  // terminar por el redondeo)
+  for (const ref of otra.unidades.map(u => u.ref).sort((a, b) => p.lado * (a - b))) {
+    if (Math.abs(ref - nivel) < d) nivel = ref + p.lado * d
+  }
   return nivel
 }
 

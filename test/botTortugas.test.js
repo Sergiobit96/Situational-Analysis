@@ -748,3 +748,15 @@ test('materias primas: sin cupo de histórico de IG, el plan espera una hora en 
     assert.equal(avisos.filter(a => /agotado el cupo semanal de histórico/.test(a)).length, 1)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('el añadido que salta las unidades del otro sistema siempre termina, aunque el redondeo no cuadre', () => {
+  // con N = 301,7, (25.000,1 + ½ N) − 25.000,1 sale un pelo menor que ½ N: buscar otra vez
+  // volvía a dar con la misma unidad y colgaba el servidor
+  const pos = { lado: 'largo', n0: 301.7, unidades: [{ entrada: 24_900 }] }
+  assert.ok(Math.abs(siguienteAnadido(pos, [25_000.1]) - (25_000.1 + 150.85)) < 1e-6)
+  // varias seguidas, en cualquier orden: salta todas
+  assert.ok(Math.abs(siguienteAnadido(pos, [25_250, 25_000.1, 25_120]) - (25_250 + 150.85)) < 1e-6)
+  // en corto, hacia abajo
+  const corto = { lado: 'corto', n0: 301.7, unidades: [{ entrada: 25_100 }] }
+  assert.ok(Math.abs(siguienteAnadido(corto, [24_999.9]) - (24_999.9 - 150.85)) < 1e-6)
+})

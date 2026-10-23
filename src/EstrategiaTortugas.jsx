@@ -1261,7 +1261,17 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones, futuros 
 }
 
 function Operaciones({ res, mostradas, onMas, acciones, futuros }) {
-  const filas = useMemo(() => [...res.abiertas, ...[...res.operaciones].reverse()], [res])
+  // el acumulado del neto en el orden en que se cerraron; las abiertas suman encima, como si
+  // se cerraran hoy
+  const filas = useMemo(() => {
+    const todas = []
+    let suma = 0
+    for (const o of [...res.operaciones, ...res.abiertas]) {
+      suma += o.neto
+      todas.push({ ...o, acumulado: suma })
+    }
+    return todas.reverse()
+  }, [res])
   const juntos = res.cfg.sistema === '1+2'
   const precio = acciones || futuros ? nfp : v => nf(v, 1)
   return (
@@ -1276,7 +1286,7 @@ function Operaciones({ res, mostradas, onMas, acciones, futuros }) {
             <tr>
               <th>{acciones ? 'Acción' : futuros ? 'Mercado' : 'Índice'}</th>{juntos && <th title="S1: ruptura de 20, salida en la de 10 · S2: la de 55 que el S1 se salta, salida en la de 20">Sistema</th>}<th>Lado</th><th>Entrada</th><th>Salida</th><th>Días</th><th title="N al entrar: de él salen los añadidos y el stop">N</th><th>Unidades</th>
               <th title={acciones ? 'Todas las unidades juntas, en acciones de las de entonces' : 'Todas las unidades juntas, en € por punto'}>Tamaño</th><th title="Tamaño por precio medio de entrada">Nominal</th>
-              <th title={acciones ? 'Ajustado por los splits posteriores' : undefined}>Precio medio</th><th>Precio salida</th><th>Motivo</th><th>Neto</th><th>Financiación</th>{acciones && <th>Comisiones</th>}<th>% capital</th>
+              <th title={acciones ? 'Ajustado por los splits posteriores' : undefined}>Precio medio</th><th>Precio salida</th><th>Motivo</th><th title="Antes de la financiación y las comisiones">Bruto</th><th>Financiación</th>{acciones && <th>Comisiones</th>}<th>Neto</th><th>% capital</th><th title="La suma del neto hasta esta operación, en el orden en que se cerraron (las abiertas, como si se cerraran hoy)">Acumulado</th>
             </tr>
           </thead>
           <tbody>
@@ -1297,10 +1307,12 @@ function Operaciones({ res, mostradas, onMas, acciones, futuros }) {
                 <td>{precio(o.precioEntrada)}</td>
                 <td>{precio(o.precioSalida)}</td>
                 <td>{o.motivo === 'abierta' ? '—' : o.motivo}</td>
-                <td className={tono(o.neto)}>{eur(o.neto)}</td>
+                <td className={tono(o.bruto)}>{eur(o.bruto)}</td>
                 <td>{eur(-o.financiacion)}</td>
                 {acciones && <td>{eur(-o.comision)}</td>}
+                <td className={tono(o.neto)}>{eur(o.neto)}</td>
                 <td className={tono(o.pctCapital)}>{pct(o.pctCapital, 2)}</td>
+                <td className={tono(o.acumulado)}>{eur(o.acumulado)}</td>
               </tr>
             ))}
           </tbody>

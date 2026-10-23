@@ -49,6 +49,9 @@ test('tapa las entradas de X minutos antes a X después, guarda lo leído y sigu
     assert.equal(n.bloqueo('^NDX', nfp, null), null, 'sin margen no mira las noticias')
     assert.equal(n.bloqueo('^GDAXI', Date.parse('2026-10-02T08:00:00Z') / 1000, 15), null, 'la de impacto medio no cuenta')
 
+    // lo leído, tal cual, para la pestaña Calendario (la semana siguiente aún no está: null)
+    assert.deepEqual(n.crudo(), { thisweek: FF, nextweek: [] })
+    assert.equal(n.crudo(-1), null, 'si es viejo, no')
     // otro arranque sin red: lo de la última vez
     const sinRed = crearNoticias({ archivo, fetchFn: async () => { throw new Error('sin red') }, log: () => {}, ahora: () => ahora })
     assert.equal(await sinRed.actualizar(), false)

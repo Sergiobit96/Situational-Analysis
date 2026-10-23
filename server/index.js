@@ -1056,14 +1056,17 @@ app.get('/api/ff-calendar', async (req, res) => {
     const cached = fromCache('ff_calendar')
     if (cached) return res.json(cached)
 
-    const slugs  = ['lastweek', 'thisweek', 'nextweek']
-    const events = (await Promise.all(
+    // esta semana y la siguiente, de lo que ya leyeron los bots (server/noticias.js) si es
+    // reciente: ForexFactory limita mucho las peticiones
+    const leido = noticias.crudo()
+    const slugs  = leido ? ['lastweek'] : ['lastweek', 'thisweek', 'nextweek']
+    const events = [...(await Promise.all(
       slugs.map(slug =>
         fetch(`https://nfs.faireconomy.media/ff_calendar_${slug}.json`, {
           headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-        }).then(r => r.ok ? r.json() : []).catch(() => [])
+        }).then(r => r.ok ? r.json() : []).then(l => (Array.isArray(l) ? l : [])).catch(() => [])
       )
-    )).flat()
+    )).flat(), ...(leido ? [...leido.thisweek, ...(leido.nextweek ?? [])] : [])]
 
     toCache('ff_calendar', events, 60 * 60_000)  // 1 hora
     res.json(events)

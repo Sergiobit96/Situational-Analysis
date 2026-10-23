@@ -2451,7 +2451,11 @@ async function fetchSheetRange(spreadsheetId, sheetName) {
 // probar las estrategias sobre 17 años en vez de sobre las últimas sesiones del feed, que
 // además limita por IP. Aquí se agrega a velas de 15 min de sesión (09:00-17:30 Berlín) y
 // se cachea en disco, porque parsear 453.000 filas en cada arranque no tiene sentido.
-const DAX_CSV   = process.env.DAX_CSV || 'C:\\Users\\Sergio\\Downloads\\DAX CASH MARKET DATA 5min from Feb 2009.csv'
+// En local, el de Descargas; en producción, el que se sube desde la pestaña Estrategias (PUT
+// /api/dax-historico/csv) al volumen, para que no pase por el repositorio, que es público.
+const DAX_CSV   = process.env.DAX_CSV || (process.env.NODE_ENV === 'production'
+  ? join(existsSync('/data') ? '/data' : '/tmp', 'dax-5m.csv')
+  : 'C:\\Users\\Sergio\\Downloads\\DAX CASH MARKET DATA 5min from Feb 2009.csv')
 const DAX_CACHE = join(DISK_CACHE_DIR, 'dax15m.json')
 
 // Hora de Berlín -> epoch UTC. El desfase se calcula por día (no fijo) porque marzo y
@@ -2498,12 +2502,17 @@ function construirSesionesDax() {
   for (const [fecha, cubos] of porDia) {
     if (cubos.size < 3) continue   // sin dos velas de bracket más una de rotura no hay nada
     const [anio, mes, dia] = fecha.split('-').map(Number)
+    // el desfase de Berlín, una vez por día (al mediodía): el cambio de hora es de madrugada y
+    // no cae nunca en la sesión. Calcularlo en cada vela con epochBerlin costaba minuto y medio.
+    const medianoche = Date.UTC(anio, mes - 1, dia) / 1000
+    const desfase = epochBerlin(anio, mes, dia, 12 * 60) - (medianoche + 12 * 3600)
+    const enBerlin = min => medianoche + min * 60 + desfase
     const velas = [...cubos.values()]
       .sort((a, b) => a.min - b.min)
-      .map(v => ({ time: epochBerlin(anio, mes, dia, v.min), open: v.open, high: v.high, low: v.low, close: v.close }))
+      .map(v => ({ time: enBerlin(v.min), open: v.open, high: v.high, low: v.low, close: v.close }))
     const finas = (finasPorDia.get(fecha) ?? [])
       .sort((a, b) => a.min - b.min)
-      .map(v => ({ time: epochBerlin(anio, mes, dia, v.min), open: v.open, high: v.high, low: v.low, close: v.close }))
+      .map(v => ({ time: enBerlin(v.min), open: v.open, high: v.high, low: v.low, close: v.close }))
     sesiones.push({ date: fecha, velas, finas })
   }
   sesiones.sort((a, b) => a.date.localeCompare(b.date))
@@ -2532,9 +2541,12 @@ function getSesionesDax() {
 }
 
 app.get('/api/dax-historico', (req, res) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
   try {
-    if (!existsSync(DAX_CSV)) return res.status(404).json({ error: `No se encuentra el CSV: ${DAX_CSV}` })
+    if (!existsSync(DAX_CSV)) {
+      return res.status(404).json({ falta: true, error: process.env.NODE_ENV === 'production'
+        ? 'El servidor online aún no tiene el CSV del DAX: súbelo aquí debajo'
+        : `No se encuentra el CSV: ${DAX_CSV}` })
+    }
     const todas = getSesionesDax()
     const desde = String(req.query.desde ?? '')
     const hasta = String(req.query.hasta ?? '')
@@ -2558,6 +2570,27 @@ app.get('/api/dax-historico', (req, res) => {
     })
   } catch (err) {
     console.error('[dax-historico]', err.message)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Sube el CSV del DAX al servidor (lo manda la pestaña Estrategias, con la clave del bot). Antes
+// de cambiarlo por el que hubiera, se comprueba que trae velas.
+app.put('/api/dax-historico/csv', claveBot.middleware, express.text({ type: () => true, limit: '80mb' }), (req, res) => {
+  const texto = typeof req.body === 'string' ? req.body : ''
+  const muestra = texto.slice(0, 200_000).split(/\r?\n/)
+  if (muestra.filter(l => /^\d{4}-\d{2}-\d{2};\d{1,2}:\d{2};[\d.]+;[\d.]+;[\d.]+;[\d.]+/.test(l)).length < 100) {
+    return res.status(400).json({ error: 'No parece el CSV del DAX (Date;Time;Open;High;Low;Close, separado por ;)' })
+  }
+  try {
+    mkdirSync(dirname(DAX_CSV), { recursive: true })
+    writeFileSync(`${DAX_CSV}.tmp`, texto)
+    renameSync(`${DAX_CSV}.tmp`, DAX_CSV)
+    _daxSesiones = null
+    _daxPorTf.clear()
+    const sesiones = getSesionesDax()
+    res.json({ ok: true, sesiones: sesiones.length, primera: sesiones[0]?.date ?? null, ultima: sesiones.at(-1)?.date ?? null })
+  } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
@@ -2786,7 +2819,6 @@ app.get('/api/grafico/velas', async (req, res) => {
 
   try {
     if (fuente === 'csv') {
-      if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'El CSV del DAX solo está en local' })
       if (ticker !== '^GDAXI') return res.status(400).json({ error: 'El CSV solo tiene el DAX' })
       if (tf === 'm1') return res.status(400).json({ error: 'El CSV del DAX va a 5 minutos: no hay velas de 1 min' })
       if (!existsSync(DAX_CSV)) return res.status(404).json({ error: `No se encuentra el CSV: ${DAX_CSV}` })

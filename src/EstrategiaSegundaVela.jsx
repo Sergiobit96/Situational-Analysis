@@ -11,6 +11,7 @@ import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './es
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
+import { conClaveBot, leerClaveBot } from './claveBot'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -255,6 +256,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [cargando,   setCargando]   = useState(false)
   const [progreso,   setProgreso]   = useState(null)
   const [error,      setError]      = useState(null)
+  const [faltaCsv,   setFaltaCsv]   = useState(false)   // el servidor online aún no tiene el CSV del DAX
+  const [subidaCsv,  setSubidaCsv]  = useState(null)    // { subiendo } | { hecho } | { error }
   const [filtros,    setFiltros]    = useState(() => new Set())   // vacío = sin filtrar
   const [vela1,      setVela1]      = useState('todas')
   const [aperturaPos, setAperturaPos] = useState('todas')
@@ -406,6 +409,19 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     })
   }, [fuente, ticker, estrategiaId])
 
+  // Sube el CSV del DAX al servidor online (se guarda en su disco) y, si va bien, analiza
+  const subirCsv = async archivo => {
+    if (!archivo) return
+    setSubidaCsv({ subiendo: true })
+    try {
+      const r = await fetch(`${API}/api/dax-historico/csv`, { method: 'PUT', headers: conClaveBot({ 'Content-Type': 'text/plain' }), body: archivo })
+      const d = await r.json().catch(() => ({ error: `HTTP ${r.status}` }))
+      if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`)
+      setSubidaCsv({ hecho: d })
+      setError(null)
+    } catch (err) { setSubidaCsv({ error: err.message }) }
+  }
+
   const analizarHistorico = async () => {
     cancelar()
     const ctrl = new AbortController()
@@ -421,6 +437,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       if (descarga === 'm5') p.set('velas', '5m')
       const r = await fetch(`${API}/api/dax-historico?${p}`, { signal: ctrl.signal })
       const d = await r.json()
+      setFaltaCsv(!!d.falta)
       if (d.error) throw new Error(d.error)
       // la N de las tortugas sale del diario del DAX
       const nDe = estr.tortuga ? nDiarioPorFecha(await bajarDiario('^GDAXI', Date.parse(`${anioDesde}-01-01`) / 1000, ctrl.signal)) : null
@@ -969,6 +986,22 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             </div>
           )}
           {error && <div className="error-global">{error}</div>}
+          {faltaCsv && fuente === 'csv' && (
+            <div className="filtro-group">
+              <label className="filtro-label">Subir el CSV del DAX al servidor online</label>
+              {!leerClaveBot() ? (
+                <p className="estr-explica">Hace falta la clave del bot: métela antes en la pestaña Bot.</p>
+              ) : (
+                <input type="file" accept=".csv,text/csv" disabled={subidaCsv?.subiendo} onChange={e => subirCsv(e.target.files?.[0])} />
+              )}
+              <p className="estr-explica">
+                {subidaCsv?.subiendo ? 'Subiendo y comprobando el CSV…'
+                  : subidaCsv?.error ? `No se ha podido subir: ${subidaCsv.error}`
+                  : subidaCsv?.hecho ? `Subido: ${subidaCsv.hecho.sesiones} sesiones, de ${subidaCsv.hecho.primera} a ${subidaCsv.hecho.ultima}. Ya puedes analizar.`
+                  : 'Elige «DAX CASH MARKET DATA 5min from Feb 2009.csv» (en tu carpeta Descargas). Se sube una vez al disco del servidor, no a GitHub.'}
+              </p>
+            </div>
+          )}
         </Bloque>
 
         <Bloque n={2} titulo="Qué sesiones cuentan" nota="Al momento: las estadísticas son solo de estas. El número es cuántas quedarían">

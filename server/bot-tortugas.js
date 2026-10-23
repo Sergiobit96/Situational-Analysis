@@ -821,9 +821,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
 
   // Al arrancar: las posiciones del bot (por su referencia, que dice el sistema) que el
   // registro no tiene se recuperan. Sin el registro no se sabe su N de entrada: se deduce de
-  // su stop (2 N).
+  // su stop, que está a 2 N de la última unidad (la de entrada más a favor), no de la primera.
   async function recuperarPosiciones() {
     const conocidas = new Set(Object.values(datos.posiciones).flatMap(p => p.unidades.map(u => u.dealId)))
+    const creadas = []
     const nuevas = (await ig.operar.posiciones())
       .filter(p => sistemaDeReferencia(p.referencia) && p.ticker && GRUPOS_TORTUGAS[p.ticker] && !conocidas.has(p.dealId))
       .sort((a, b) => Date.parse(`${a.abierta}Z`) - Date.parse(`${b.abierta}Z`))
@@ -838,12 +839,21 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
         continue
       }
       const m = await ig.operar.datosMercado(p.ticker, p.epic)
-      const n0 = p.stop != null ? Math.abs(p.nivel - p.stop) / STOP_N : null
+      creadas.push(claveDe(p.ticker, sistema))
       datos.posiciones[claveDe(p.ticker, sistema)] = {
-        ticker: p.ticker, sistema, lado: p.lado, n0, ruptura: null, abierta: fechaEnZona(hora, MERCADOS_TORTUGAS[p.ticker].zona), abiertaHora: hora,
+        ticker: p.ticker, sistema, lado: p.lado, n0: null, ruptura: null, abierta: fechaEnZona(hora, MERCADOS_TORTUGAS[p.ticker].zona), abiertaHora: hora,
         epic: p.epic, moneda: m.moneda, valorPunto: valorDe(m) ?? 1, cambioAEur: m.cambioAEur ?? 1, stop: p.stop, recuperada: true,
         unidades: [{ dealId: p.dealId, tamano: p.tamano, entrada: p.nivel, stop: p.stop, hora, referencia: p.referencia, nivel: null, deslizamiento: null }],
       }
+    }
+    for (const clave of creadas) {
+      const pos = datos.posiciones[clave]
+      const d = dir(pos.lado)
+      const conStop = pos.unidades.filter(u => u.stop != null)
+      if (!conStop.length) continue
+      const ultima = conStop.reduce((a, u) => (d * u.entrada > d * a.entrada ? u : a))
+      pos.n0 = Math.abs(ultima.entrada - ultima.stop) / STOP_N
+      pos.stop = d > 0 ? Math.max(...conStop.map(u => u.stop)) : Math.min(...conStop.map(u => u.stop))
     }
   }
 

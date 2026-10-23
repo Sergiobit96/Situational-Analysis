@@ -476,6 +476,22 @@ test('al arrancar recupera de IG las posiciones del bot y deja las de otros (SRS
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('al recuperar una pirámide, la N sale del stop de la última unidad, no de la primera', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_600, 25_601] } })
+  ig.reloj = () => 0
+  // N = 300: entradas cada ½ N y el stop de todas a 2 N de la última (25.600 − 600)
+  for (const [i, nivel] of [25_150, 25_300, 25_450, 25_600].entries())
+    ig.ponerPosicion({ dealId: `X${i}`, ticker: '^GDAXI', epic: 'IX.D.DAX.IFMM.IP', lado: 'largo', tamano: 0.6, nivel, stop: 25_000, referencia: `TOR2-GDAXI-20261019-${i}abc`, abierta: `2026-10-19T08:0${i}:00` })
+  const { bot, dir } = botDePrueba(ig, {}, soloDax)
+  try {
+    await bot._recuperar()
+    const pos = posicion(bot, '^GDAXI', 2)
+    assert.equal(pos.unidades.length, 4)
+    assert.equal(pos.n0, 300)
+    assert.equal(pos.stop, 25_000)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('si IG falla a mitad del plan, no lo reintenta en cada paso, y el saldo se pide una vez por ronda', async () => {
   const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001], '^FTSE': [10_000, 10_001] } })
   let cuentas = 0, fallar = true

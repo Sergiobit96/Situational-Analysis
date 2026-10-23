@@ -24,8 +24,10 @@ const dia = f => (f ? f.split('-').reverse().join('/') : '—')
 export default function Robustez({ serie, combos = [], filas = [], columnas = [], matrizDe, actual, nombreMedida, unidad = 'R', titulo = 'Robustez' }) {
   const r = conSigno(unidad)
   const resultados = useMemo(() => serie.map(s => s.r), [serie])
-  const m = useMemo(() => metricas(resultados), [resultados])
-  const mc = useMemo(() => monteCarlo(resultados, { veces: 2000 }), [resultados])
+  // en % del capital, las operaciones se componen; en R, se suman
+  const compuesto = unidad === '%'
+  const m = useMemo(() => metricas(resultados, { compuesto }), [resultados, compuesto])
+  const mc = useMemo(() => monteCarlo(resultados, { veces: 2000, compuesto }), [resultados, compuesto])
   const hist = useMemo(() => histograma(resultados, unidad === 'R' ? 0.5 : anchoCubo(resultados)), [resultados, unidad])
   const tercios = useMemo(() => porTercios(serie.map(s => ({ medida: s.medida, resultado: s.r }))), [serie])
   const [calculo, setCalculo] = useState(null)   // { clave de la serie, sens, wf }
@@ -65,18 +67,21 @@ export default function Robustez({ serie, combos = [], filas = [], columnas = []
 
       {mc && (
         <table className="estr-mitades-tabla">
-          <thead><tr><th>Monte Carlo ({mc.veces.toLocaleString('es-ES')} historias)</th><th>Lo normal</th><th>Malo (1 de 20)</th><th>Muy malo (1 de 100)</th><th>Lo que pasó</th></tr></thead>
+          <thead><tr><th>Monte Carlo: {mc.veces.toLocaleString('es-ES')} historias posibles</th><th>Lo normal</th><th>Malo (1 de cada 20)</th><th>Muy malo (1 de cada 100)</th><th>Lo que pasó</th></tr></thead>
           <tbody>
-            <tr><th>Peor drawdown</th><td>{r(mc.dd.p50, 1)}</td><td>{r(mc.dd.p95, 1)}</td><td>{r(mc.dd.p99, 1)}</td><td>{r(m.maxDD, 1)}</td></tr>
-            <tr><th>Peor racha perdedora</th><td>{mc.racha.p50}</td><td>{mc.racha.p95}</td><td>{mc.racha.p99}</td><td>{m.peorRacha}</td></tr>
-            <tr><th>Total</th><td>{r(mc.total.p50, 1)}</td><td>{r(mc.total.p5, 1)}</td><td>—</td><td>{r(m.total, 1)}</td></tr>
+            <tr><th>Mayor caída desde un máximo</th><td>{r(mc.dd.p50, 1)}</td><td>{r(mc.dd.p95, 1)}</td><td>{r(mc.dd.p99, 1)}</td><td>{r(m.maxDD, 1)}</td></tr>
+            <tr><th>Más pérdidas seguidas</th><td>{mc.racha.p50}</td><td>{mc.racha.p95}</td><td>{mc.racha.p99}</td><td>{m.peorRacha}</td></tr>
+            <tr><th>Resultado al final</th><td>{r(mc.total.p50, 1)}</td><td>{r(mc.total.p5, 1)}</td><td>{r(mc.total.p1, 1)}</td><td>{r(m.total, 1)}</td></tr>
           </tbody>
         </table>
       )}
       {mc && (
         <p className="estr-nota">
-          Se rehace la historia {mc.veces.toLocaleString('es-ES')} veces sacando sesiones al azar de las que hubo. <strong>{nf(mc.pctPierde, 0)}%</strong> de las historias acaban perdiendo.
-          Cuenta con ver el drawdown y la racha de la columna «Malo»: el que tocó en el histórico es solo uno de los posibles.{unidad === 'R' ? ' En R, para no depender del tamaño.' : ' Las operaciones se suman en % del capital, sin componer.'}
+          Cada historia es otra forma en que podrían haber salido las cosas: se sacan al azar, una a una, tantas {unidad === 'R' ? 'sesiones' : 'operaciones'} como hubo, de entre las que hubo (alguna sale repetida y otra no sale).
+          «Lo normal» es la historia de en medio; «Malo», una que solo empeoran 1 de cada 20; «Muy malo», 1 de cada 100.
+          <strong> {nf(mc.pctPierde, 0)}%</strong> de las historias acaban perdiendo.
+          Lo que pasó en el backtest es solo una de las posibles: prepárate para aguantar la columna «Malo».
+          {unidad === 'R' ? ' En R (lo arriesgado por operación), para no depender del tamaño.' : ' En % de la cuenta: cada operación es un % del capital que había en ese momento, así que se componen y nunca se pierde más del 100%.'}
         </p>
       )}
 

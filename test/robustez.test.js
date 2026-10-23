@@ -72,3 +72,15 @@ test('régimen: el resultado por tercios de volatilidad', () => {
   assert.equal(t[2].pctGanadas, 100)
   assert.equal(porTercios(sesiones.slice(0, 10)), null)
 })
+
+test('en % del capital las operaciones se componen: la caída nunca pasa del 100 %', () => {
+  const c = curvaDe([10, -50, -50, 20], { compuesto: true })
+  cerca(c.total, 100 * (1.1 * 0.5 * 0.5 * 1.2 - 1))
+  cerca(c.maxDD, -75)
+  assert.equal(c.peorRacha, 2)
+  const muchas = Array.from({ length: 100 }, () => -5)
+  assert.ok(curvaDe(muchas, { compuesto: true }).maxDD > -100)
+  assert.equal(curvaDe(muchas).maxDD, -500, 'sumando sí pasaría')
+  const mc = monteCarlo(muchas, { veces: 50, compuesto: true })
+  assert.ok(mc.dd.p99 > -100 && mc.total.p1 > -100)
+})

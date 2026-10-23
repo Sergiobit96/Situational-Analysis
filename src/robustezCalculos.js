@@ -38,27 +38,38 @@ export function aleatorio(semilla = 1) {
 }
 
 // La curva de una serie: el peor drawdown (≤ 0), la peor racha de pérdidas seguidas, el total y
-// cuántos pasos acabó por debajo de su máximo
-export function curvaDe(resultados) {
+// cuántos pasos acabó por debajo de su máximo. Con `compuesto`, los resultados son % del capital
+// de ese momento y se componen: el drawdown es la caída desde el máximo del capital y el total, lo
+// que ganó la cuenta, los dos en % (nunca por debajo de −100 %). Sin él, se suman (R o puntos).
+export function curvaDe(resultados, { compuesto = false } = {}) {
   let total = 0, pico = 0, maxDD = 0, racha = 0, peorRacha = 0, enDD = 0
+  let capital = 1, picoCapital = 1
   for (const r of resultados) {
-    total += r
-    if (total > pico) pico = total
-    if (total - pico < maxDD) maxDD = total - pico
-    if (total < pico) enDD++
+    if (compuesto) {
+      capital *= Math.max(0, 1 + r / 100)
+      if (capital > picoCapital) picoCapital = capital
+      const dd = 100 * (capital / picoCapital - 1)
+      if (dd < maxDD) maxDD = dd
+      if (capital < picoCapital) enDD++
+    } else {
+      total += r
+      if (total > pico) pico = total
+      if (total - pico < maxDD) maxDD = total - pico
+      if (total < pico) enDD++
+    }
     if (r < 0) { racha++; if (racha > peorRacha) peorRacha = racha } else if (r > 0) racha = 0
   }
-  return { total, maxDD, peorRacha, enDD }
+  return { total: compuesto ? 100 * (capital - 1) : total, maxDD, peorRacha, enDD }
 }
 
 // Las métricas de una serie. `ops`: solo las sesiones con operación (las de 0 no cuentan para la
 // expectativa ni el SQN, sí para la curva)
-export function metricas(resultados) {
+export function metricas(resultados, { compuesto = false } = {}) {
   const ops = resultados.filter(r => r !== 0)
   const m = media(ops)
   const sd = desviacion(ops)
   const bajada = ops.length ? Math.sqrt(suma(ops.map(r => Math.min(0, r) ** 2)) / ops.length) : 0
-  const c = curvaDe(resultados)
+  const c = curvaDe(resultados, { compuesto })
   return {
     n: ops.length,
     expectativa: m,
@@ -88,7 +99,7 @@ export function histograma(resultados, ancho = 0.5) {
 // Monte Carlo por remuestreo: `veces` historias del mismo número de sesiones sacadas al azar de
 // las que hubo. Da los percentiles del peor drawdown (el p95 es el que hay que esperar ver), de
 // la peor racha y del total, y la parte de historias que acaban perdiendo.
-export function monteCarlo(resultados, { veces = 2000, semilla = 1 } = {}) {
+export function monteCarlo(resultados, { veces = 2000, semilla = 1, compuesto = false } = {}) {
   if (resultados.length < 2) return null
   const azar = aleatorio(semilla)
   const dds = [], rachas = [], totales = []
@@ -96,7 +107,7 @@ export function monteCarlo(resultados, { veces = 2000, semilla = 1 } = {}) {
   const serie = new Array(n)
   for (let k = 0; k < veces; k++) {
     for (let i = 0; i < n; i++) serie[i] = resultados[Math.floor(azar() * n)]
-    const c = curvaDe(serie)
+    const c = curvaDe(serie, { compuesto })
     dds.push(c.maxDD); rachas.push(c.peorRacha); totales.push(c.total)
   }
   dds.sort((a, b) => a - b)          // del peor (más negativo) al mejor
@@ -106,7 +117,7 @@ export function monteCarlo(resultados, { veces = 2000, semilla = 1 } = {}) {
     veces,
     dd: { p50: percentil(dds, 0.5), p95: percentil(dds, 0.05), p99: percentil(dds, 0.01) },
     racha: { p50: percentil(rachas, 0.5), p95: percentil(rachas, 0.95), p99: percentil(rachas, 0.99) },
-    total: { p5: percentil(totales, 0.05), p50: percentil(totales, 0.5), p95: percentil(totales, 0.95) },
+    total: { p1: percentil(totales, 0.01), p5: percentil(totales, 0.05), p50: percentil(totales, 0.5), p95: percentil(totales, 0.95) },
     pctPierde: 100 * totales.filter(t => t < 0).length / veces,
   }
 }

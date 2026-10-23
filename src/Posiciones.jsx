@@ -7,9 +7,17 @@ import './Bot.css'
 // del prefijo de la referencia de la orden (server/index.js, /api/bot/posiciones).
 
 const num = (n, dec = 1) => n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec })
-const pts = n => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n)}`)
+// los decimales según el tamaño del precio: las divisas, con 5
+const decimales = x => { const a = Math.abs(x ?? 0); return a >= 1000 ? 1 : a >= 100 ? 2 : a >= 10 ? 3 : 5 }
+const pts = (n, ref) => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n, decimales(ref ?? n))}`)
 const dinero = (n, moneda) => (n == null ? '—' : `${n > 0 ? '+' : ''}${num(n, 2)} ${moneda ?? ''}`.trim())
-const precio = n => (n == null ? '—' : num(n, 2))
+const precio = n => (n == null ? '—' : num(n, decimales(n)))
+// la suma en € de un campo (cada posición en su moneda, pasada a € con el cambio de IG); null
+// si a alguna le falta el cambio, para no dar un total que no lo es
+const sumaEur = (posiciones, campo) => {
+  const conValor = posiciones.filter(p => p[campo.replace('Eur', '')] != null)
+  return conValor.some(p => p[campo] == null) ? null : conValor.reduce((s, p) => s + p[campo], 0)
+}
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
 const fechaHora = iso => (iso ? new Date(iso.endsWith('Z') ? iso : `${iso}Z`).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
 
@@ -70,11 +78,13 @@ export default function Posiciones() {
   }
 
   const { posiciones, cuenta } = datos
-  // el total por moneda: las posiciones pueden ir en monedas distintas
-  const totales = Object.entries(posiciones.reduce((acc, p) => {
-    if (p.resultado != null) acc[p.moneda ?? ''] = (acc[p.moneda ?? ''] ?? 0) + p.resultado
-    return acc
-  }, {}))
+  const resultadoEur = sumaEur(posiciones, 'resultadoEur')
+  const alStopEur = sumaEur(posiciones, 'alStopEur')
+  const sinStop = posiciones.filter(p => p.stop == null).length
+  // en % del saldo (la cuenta va en €)
+  const delSaldo = eur => (eur != null && cuenta?.saldo > 0 && cuenta.moneda === 'EUR' ? `${eur > 0 ? '+' : ''}${num(100 * eur / cuenta.saldo, 2)}% del saldo` : null)
+  // en otra moneda, lo mismo en €
+  const enEur = (eur, moneda) => (moneda !== 'EUR' && eur != null ? `≈ ${dinero(eur, '€')}` : null)
 
   return (
     <div className="bot-page">
@@ -88,9 +98,12 @@ export default function Posiciones() {
 
         <div className="bot-tarjeta-datos">
           <div className="bot-dato"><span>Posiciones</span><b className="bot-tile-valor">{posiciones.length}</b></div>
-          {totales.map(([moneda, total]) => (
-            <div className="bot-dato" key={moneda}><span>Resultado abierto</span><b className={`bot-tile-valor ${tono(total)}`}>{dinero(total, moneda)}</b></div>
-          ))}
+          <div className="bot-dato"><span>Resultado abierto</span><b className={`bot-tile-valor ${tono(resultadoEur)}`}>{dinero(resultadoEur, '€')}</b>{delSaldo(resultadoEur) && <small>{delSaldo(resultadoEur)}</small>}</div>
+          <div className="bot-dato" title="Lo que daría cerrar todo en sus stops, desde la entrada (sin contar el deslizamiento ni los huecos)">
+            <span>Si saltan los stops</span><b className={`bot-tile-valor ${tono(alStopEur)}`}>{dinero(alStopEur, '€')}</b>
+            <small>{delSaldo(alStopEur) ?? 'desde la entrada'}</small>
+          </div>
+          {sinStop > 0 && <div className="bot-dato"><span>Sin stop</span><b className="bot-tile-valor bot-neg">{sinStop}</b><small>riesgo sin límite</small></div>}
           {cuenta?.saldo != null && <div className="bot-dato"><span>Saldo</span><b className="bot-tile-valor">{num(cuenta.saldo, 2)} {cuenta.moneda}</b></div>}
           {cuenta?.disponible != null && <div className="bot-dato"><span>Disponible</span><b className="bot-tile-valor">{num(cuenta.disponible, 2)} {cuenta.moneda}</b></div>}
         </div>
@@ -99,7 +112,7 @@ export default function Posiciones() {
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla tor-todas pos-tabla">
               <thead>
-                <tr><th>Bot</th><th>Instrumento</th><th>Lado</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Ahora</th><th className="tor-num">Puntos</th><th className="tor-num">Resultado</th><th>Abierta</th></tr>
+                <tr><th>Bot</th><th>Instrumento</th><th>Lado</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Ahora</th><th className="tor-num">Puntos</th><th className="tor-num">Resultado</th><th className="tor-num" title="Lo que daría si saltara el stop, desde la entrada: negativo si pierde, positivo si el stop ya asegura ganancia (sin contar el deslizamiento)">Si salta el stop</th><th>Abierta</th></tr>
               </thead>
               <tbody>
                 {posiciones.map(p => (
@@ -111,8 +124,19 @@ export default function Posiciones() {
                     <td className="tor-num">{precio(p.nivel)}</td>
                     <td className="tor-num">{precio(p.stop)}</td>
                     <td className="tor-num">{precio(p.precio)}</td>
-                    <td className={`tor-num ${tono(p.puntos)}`}>{pts(p.puntos)}</td>
-                    <td className={`tor-num ${tono(p.resultado)}`}>{dinero(p.resultado, p.moneda)}</td>
+                    <td className={`tor-num ${tono(p.puntos)}`}>{pts(p.puntos, p.nivel)}</td>
+                    <td className={`tor-num ${tono(p.resultado)}`}>
+                      {dinero(p.resultado, p.moneda)}
+                      {enEur(p.resultadoEur, p.moneda) && <small className="tor-sub">{enEur(p.resultadoEur, p.moneda)}</small>}
+                    </td>
+                    <td className={`tor-num ${p.stop == null ? 'bot-neg' : tono(p.alStop)}`}>
+                      {p.stop == null ? 'sin stop' : dinero(p.alStop, p.moneda)}
+                      {p.stop != null && (
+                        <small className="tor-sub">
+                          {[enEur(p.alStopEur, p.moneda), delSaldo(p.alStopEur), `${pts(p.stop - p.nivel, p.nivel)} pts`].filter(Boolean).join(' · ')}
+                        </small>
+                      )}
+                    </td>
                     <td className="bot-celda-texto">{fechaHora(p.abierta)}</td>
                   </tr>
                 ))}

@@ -3162,14 +3162,33 @@ app.post('/api/bot/parar', async (req, res) => {
 
 // Las posiciones abiertas de la cuenta demo (las de los bots y cualquier otra), cada una con
 // el bot que la abrió, que se sabe por el prefijo de su referencia, y la cuenta
+// Con el cambio a euros de cada moneda (el de la ficha del mercado en IG, guardado 10 min para
+// no gastar peticiones en cada refresco), el resultado y lo que daría el stop van también en €.
 const BOT_DE_REFERENCIA = [['SRS-', 'SRS'], ['R4-', 'Rule of 4'], ['FBN-', 'First bar negative'], ['TOR', 'Tortugas']]
+const CAMBIO_VALE_MS = 10 * 60_000
+const cambiosAEur = new Map([['EUR', { cambio: 1, t: Infinity }]])
+async function cambioAEur(moneda, { ticker, epic }) {
+  const visto = cambiosAEur.get(moneda)
+  if (visto && Date.now() - visto.t < CAMBIO_VALE_MS) return visto.cambio
+  try {
+    const m = await ig.operar.datosMercado(ticker, epic)
+    if (m.moneda === moneda && m.cambioAEur) cambiosAEur.set(moneda, { cambio: m.cambioAEur, t: Date.now() })
+    return m.moneda === moneda ? m.cambioAEur : visto?.cambio ?? null
+  } catch { return visto?.cambio ?? null }
+}
 app.get('/api/bot/posiciones', async (req, res) => {
   if (!bot) return sinBot(res)
   try {
     const [posiciones, cuenta] = await Promise.all([ig.operar.posiciones(), ig.operar.cuenta().catch(() => null)])
+    const cambios = {}
+    for (const p of posiciones) if (p.moneda && !(p.moneda in cambios)) cambios[p.moneda] = await cambioAEur(p.moneda, p)
+    const aEur = (x, moneda) => (x == null || cambios[moneda] == null ? null : x * cambios[moneda])
     res.json({
       opera: BOT_OPERA, cuenta,
-      posiciones: posiciones.map(p => ({ ...p, bot: BOT_DE_REFERENCIA.find(([prefijo]) => p.referencia?.startsWith(prefijo))?.[1] ?? null })),
+      posiciones: posiciones.map(p => ({
+        ...p, bot: BOT_DE_REFERENCIA.find(([prefijo]) => p.referencia?.startsWith(prefijo))?.[1] ?? null,
+        resultadoEur: aEur(p.resultado, p.moneda), alStopEur: aEur(p.alStop, p.moneda),
+      })),
     })
   }
   catch (err) { res.status(500).json({ error: err.message }) }

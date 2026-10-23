@@ -837,6 +837,9 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
         precio: salida == null ? null : salida * f,
         puntos: salida == null ? null : sentido * (salida - p.level) * f,
         resultado: salida == null ? null : sentido * (salida - p.level) * p.size * (p.contractSize ?? 1),
+        // lo que daría si saltara el stop, desde la entrada (negativo si pierde; positivo si el
+        // stop ya asegura ganancia), sin contar el deslizamiento
+        alStop: p.stopLevel == null ? null : sentido * (p.stopLevel - p.level) * p.size * (p.contractSize ?? 1),
       }
     })
   }

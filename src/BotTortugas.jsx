@@ -337,6 +337,19 @@ function salidaDe(pos, sp) {
   return pos.lado === 'largo' ? Math.max(canal, pos.stop) : Math.min(canal, pos.stop)
 }
 
+// Como en el bot: ½ N a favor desde el último relleno, saltando más allá de los precios en los
+// que el otro sistema ya está en ese sentido (los dos van como uno)
+function siguienteAnadido(pos, pasoN, ocupados) {
+  const d = pasoN * pos.n0
+  let nivel = pos.unidades.at(-1).entrada + dir(pos.lado) * d
+  for (let o; (o = ocupados.find(x => Math.abs(x - nivel) < d)) != null;) nivel = o + dir(pos.lado) * d
+  return nivel
+}
+
+const ocupadosPorOtro = (m, sistema, lado) => Object.entries(m.posiciones)
+  .filter(([s, p]) => Number(s) !== sistema && p?.lado === lado)
+  .flatMap(([, p]) => p.unidades.filter(u => !u.salida).map(u => u.entrada))
+
 // Un índice: lo común (sesión, N, precio, unidad) una vez, y una fila por cada sistema que se
 // juega o que tiene una posición abierta
 function FilasIndice({ m, config, ocupado, reglas, alternar }) {
@@ -352,7 +365,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
         const pos = m.posiciones[s]
         const sp = hoy?.sistemas?.[s] ?? null
         const c = pos ? cuentasDe(pos, m.precio) : null
-        const siguiente = pos ? pos.unidades.at(-1).entrada + dir(pos.lado) * reglas.pasoN * pos.n0 : null
+        const siguiente = pos ? siguienteAnadido(pos, reglas.pasoN, ocupadosPorOtro(m, s, pos.lado)) : null
         const juega = config.sistemas.includes(s)
         const entrada = !sp ? '—'
           : pos ? (pos.unidades.length < config.maxUnidades ? `añade en ${px(siguiente)}` : 'pirámide llena')

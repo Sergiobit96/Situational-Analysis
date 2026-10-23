@@ -14,7 +14,8 @@
 //    la de 20 si la anterior perdió; si habría ganado se la salta, y esa ruptura la coge el 2
 //    en la de 55 y la lleva con su salida de 20. El 1 ya no tiene la de 55 de reserva. Van
 //    como uno: un sistema no entra si el otro ya tiene en el índice una unidad del mismo
-//    sentido a menos de `paso` N de su ruptura (la señal doble se ejecuta una sola vez), y
+//    sentido a menos de `paso` N de su ruptura (la señal doble se ejecuta una sola vez), ni
+//    añade a menos de `paso` N de una suya (salta a `paso` N más allá de ella), y
 //    cada entrada va con todo el capital, como la del bot (server/bot-tortugas.js).
 //  - Pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`.
 //  - Stop a 2 N del último relleno, común a todas las unidades.
@@ -98,6 +99,19 @@ function entradaDe(cfg, e, s) {
 export function senalDoble(cfg, e, s, lado, nivel, n) {
   const otra = cfg.sistema === '1+2' ? e.pos[s === 1 ? 2 : 1] : null
   return !!otra && otra.lado === lado && otra.unidades.some(u => Math.abs(u.ref - nivel) < cfg.paso * n)
+}
+
+// Dónde añade la pirámide del sistema `s`: `paso` N a favor desde su último relleno, pero si
+// ahí (a menos de `paso` N) ya hay una unidad del otro sistema en el mismo sentido, eso ya está
+// comprado y la unidad pasa a `paso` N más allá de ella
+export function anadidoDe(cfg, e, s) {
+  const p = e.pos[s]
+  const d = cfg.paso * p.n0
+  let nivel = p.unidades.at(-1).ref + p.lado * d
+  const otra = cfg.sistema === '1+2' ? e.pos[s === 1 ? 2 : 1] : null
+  if (otra?.lado !== p.lado) return nivel
+  for (let u; (u = otra.unidades.find(x => Math.abs(x.ref - nivel) < d));) nivel = u.ref + p.lado * d
+  return nivel
 }
 
 // ── Indicadores ─────────────────────────────────────────────────────────────
@@ -325,7 +339,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
         if (k && permite(e, lado) && !senalDoble(cfg, e, s, lado, canal[k][i], m.n[i])) res.push([canal[k][i], 0, { tipo: 'entra', sis: s, lado, k, limitada: true }])
       } else if (p.lado === lado) {
         if (p.unidades.length < cfg.maxUnidades) {
-          res.push([p.unidades.at(-1).ref + lado * cfg.paso * p.n0, 0, { tipo: 'anade', sis: s, limitada: true }])
+          res.push([anadidoDe(cfg, e, s), 0, { tipo: 'anade', sis: s, limitada: true }])
         }
       } else {
         const k = s === 1 ? 10 : 20
@@ -656,7 +670,7 @@ export function ordenesManana(res, capital) {
       fila.posicion = { lado: p.lado > 0 ? 'largo' : 'corto', unidades: p.unidades.length, desde: p.abierta, medio: precioMedio(p) }
       fila.salida = p.lado > 0 ? Math.max(p.stop, bajo(k)) : Math.min(p.stop, alto(k))
       if (p.unidades.length < cfg.maxUnidades) {
-        const anadido = { nivel: p.unidades.at(-1).ref + p.lado * cfg.paso * p.n0, k: null }
+        const anadido = { nivel: anadidoDe(cfg, e, s), k: null }
         if (p.lado > 0) fila.compra = anadido
         else fila.venta = anadido
       }

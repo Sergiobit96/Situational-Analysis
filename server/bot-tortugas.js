@@ -193,8 +193,15 @@ export function capitalNominal(saldo, pico, reduccion = true) {
   return Math.min(saldo, pico * 0.8 ** Math.max(tramos, 0))
 }
 
-// Dónde entra la siguiente unidad: ½ N a favor desde el último relleno
-export const siguienteAnadido = pos => pos.unidades.at(-1).entrada + dir(pos.lado) * PASO_N * pos.n0
+// Dónde entra la siguiente unidad: ½ N a favor desde el último relleno. `ocupados`, los precios
+// del otro sistema en el mismo sentido: si la unidad cae a menos de ½ N de uno, eso ya está
+// comprado (los dos van como uno) y pasa a ½ N más allá de él
+export function siguienteAnadido(pos, ocupados = []) {
+  const d = PASO_N * pos.n0
+  let nivel = pos.unidades.at(-1).entrada + dir(pos.lado) * d
+  for (let o; (o = ocupados.find(x => Math.abs(x - nivel) < d)) != null;) nivel = o + dir(pos.lado) * d
+  return nivel
+}
 
 // Los niveles de un sistema con la N y los canales del día. Con `filtroS1`, el Sistema 1
 // espera a la ruptura de 55 si la anterior de 20 habría ganado
@@ -213,7 +220,7 @@ export function nivelesSistema(nv, sistema, filtroS1 = false) {
 // Para un índice y un sistema. `ses` es la sesión de hoy del índice (null en fin de semana) y
 // `proxima`, la siguiente que abre; `velas`, las últimas de 1 min en directo; `cfg.encendido`
 // y `cfg.activo` ya dicen si ese índice y ese sistema se juegan y si el bot está encendido.
-export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima, sistema = 1 }) {
+export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima, sistema = 1, ocupados = [] }) {
   // una orden mandada cuya confirmación no llegó: antes de nada, ver en IG si entró
   if (intento) return { accion: 'reconciliar' }
   const enSesion = !!ses && ahora >= ses.abre && ahora < ses.cierra
@@ -252,7 +259,7 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
     if (pos.stop != null && (largo ? precio <= pos.stop : precio >= pos.stop)) return { accion: 'revisar-ya' }
     if (stopPendiente) return { accion: 'stop' }
     if (cfg.activo && hoy?.unidad?.ok && pos.unidades.length < cfg.maxUnidades && pos.sinAnadidos !== ses.fecha && !(pos.esperaAnadir > ahora)) {
-      const nivel = siguienteAnadido(pos)
+      const nivel = siguienteAnadido(pos, ocupados)
       if (largo ? alto >= nivel : bajo <= nivel) return { accion: 'anadir' }
     }
     return { accion: 'vigilar' }
@@ -418,7 +425,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       if (pos) {
         const n = pos.unidades.length
         partes.push(`S${s}: ${n} ${n === 1 ? 'unidad abierta' : 'unidades abiertas'}, stop ${px(pos.stop)}, salida por el canal en ${px(sp.salida[pos.lado])}`
-          + (n < cfg.maxUnidades ? `, siguiente unidad en ${px(siguienteAnadido(pos))}` : ''))
+          + (n < cfg.maxUnidades ? `, siguiente unidad en ${px(siguienteAnadido(pos, ocupadosPorOtro(ticker, s, pos.lado)))}` : ''))
       } else if (cfg.sistemas.includes(s)) {
         const lados = []
         if (cfg.lados !== 'cortos') lados.push(`compra por encima de ${px(sp.entrada.largo.nivel)} (máximo de ${sp.k} sesiones${sp.filtro ? ': la ruptura anterior habría ganado' : ''})`)
@@ -458,21 +465,25 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     return { saldo: c?.saldo ?? plan.saldo, disponible: c?.disponible ?? plan.disponible }
   }
 
+  // Los precios en los que el otro sistema ya está en el índice en ese sentido: sus unidades
+  // abiertas y su orden sin confirmar
+  function ocupadosPorOtro(ticker, sistema, lado) {
+    return SISTEMAS.filter(s => s !== sistema).flatMap(s => {
+      const pos = datos.posiciones[claveDe(ticker, s)]
+      const intento = datos.intentos[claveDe(ticker, s)]
+      return [
+        ...(pos?.lado === lado ? pos.unidades.filter(u => !u.salida).map(u => u.entrada) : []),
+        ...(intento?.lado === lado ? [intento.nivel] : []),
+      ].filter(p => p != null)
+    })
+  }
+
   // Los dos sistemas van como uno: si el otro ya tiene en el índice una unidad en el mismo
   // sentido a menos de ½ N de este precio (o una orden suya sin confirmar), es la misma señal
   // y no se ejecuta otra vez. Da el sistema que ya está dentro, o null.
   function otroYaDentro(ticker, sistema, lado, precio, n) {
-    for (const s of SISTEMAS) {
-      if (s === sistema) continue
-      const pos = datos.posiciones[claveDe(ticker, s)]
-      const intento = datos.intentos[claveDe(ticker, s)]
-      const precios = [
-        ...(pos?.lado === lado ? pos.unidades.filter(u => !u.salida).map(u => u.entrada) : []),
-        ...(intento?.lado === lado ? [intento.nivel] : []),
-      ]
-      if (precios.some(p => p != null && Math.abs(p - precio) < PASO_N * n)) return s
-    }
-    return null
+    if (!ocupadosPorOtro(ticker, sistema, lado).some(p => Math.abs(p - precio) < PASO_N * n)) return null
+    return SISTEMAS.find(s => s !== sistema)
   }
 
   // ── Entradas y añadidos ──
@@ -536,7 +547,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const largo = pos.lado === 'largo'
     const m = await ig.operar.datosMercado(ticker, pos.epic)
     const precio = largo ? m.oferta : m.bid
-    const nivel = siguienteAnadido(pos)
+    const nivel = siguienteAnadido(pos, ocupadosPorOtro(ticker, sistema, pos.lado))
     if (precio == null || (largo ? precio < nivel : precio > nivel)) { pos.esperaAnadir = ahora() + 5; return }
     // la unidad de hoy (la N y el capital de hoy), en el contrato de la posición
     const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin, paso: pasoDe(m) })
@@ -878,6 +889,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           const pos = datos.posiciones[clave]
           const p = siguientePasoTortugas({
             pos, plan: datos.planes[ticker], intento: datos.intentos[clave], ahora: t, velas, ses, proxima, sistema,
+            ocupados: pos ? ocupadosPorOtro(ticker, sistema, pos.lado) : [],
             cfg: { ...cfg, encendido: juega, activo: cfg.activo && juega },
           })
           // el plan es del índice: hecho, este paso ya no sigue con él

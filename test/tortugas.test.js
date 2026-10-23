@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops, peoresCaidas, expedienteBacktest, senalDoble, CONFIG_TORTUGAS } from '../src/tortugas.js'
+import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops, peoresCaidas, expedienteBacktest, senalDoble, anadidoDe, CONFIG_TORTUGAS } from '../src/tortugas.js'
 
 test('lo que pierde una pirámide si salta su stop, que sube 2 N por debajo de la última unidad', () => {
   assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStop(k)), [2, 3.5, 4.5, 5, 5, 4.5])
@@ -197,6 +197,15 @@ test('los dos a la vez van como uno: la ruptura a menos de ½ N de una unidad de
   assert.equal(senalDoble(juntos, e, 1, 1, 102.1, 2), false)    // a más de ½ N: entra
   assert.equal(senalDoble(juntos, e, 1, -1, 101, 2), false)     // en el otro sentido no es la misma señal
   assert.equal(senalDoble({ ...juntos, sistema: 1 }, e, 1, 1, 101, 2), false)   // con un solo sistema no aplica
+})
+
+test('los dos a la vez: la pirámide no añade a menos de ½ N de una unidad del otro sistema', () => {
+  const juntos = { ...CONFIG_TORTUGAS, sistema: '1+2' }
+  // el 1 entró a 99,5 con N = 2: añadiría a 100,5, pero el 2 ya tiene 100 y 101
+  const e = { pos: { 1: { lado: 1, n0: 2, unidades: [{ ref: 99.5 }] }, 2: { lado: 1, unidades: [{ ref: 100 }, { ref: 101 }] } } }
+  assert.equal(anadidoDe(juntos, e, 1), 102)
+  assert.equal(anadidoDe({ ...juntos, sistema: 1 }, e, 1), 100.5)              // con un solo sistema no aplica
+  assert.equal(anadidoDe(juntos, { pos: { ...e.pos, 2: { ...e.pos[2], lado: -1 } } }, 1), 100.5)
 })
 
 test('lo peor hasta los stops con dos pirámides por índice, una por sistema', () => {

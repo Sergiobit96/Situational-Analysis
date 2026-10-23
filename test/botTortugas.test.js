@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -138,6 +138,20 @@ test('entra al romper el canal con el precio de ahora, solo en la sesión y solo
   // el Sistema 2 espera a su canal de 55
   assert.equal(paso({ ahora, velas: v1(fra(10, 19, 10), 25_151, 25_140), sistema: 2 }).accion, 'nada')
   assert.deepEqual(paso({ ahora, velas: v1(fra(10, 19, 10), 25_401, 25_140), sistema: 2 }), { accion: 'entrar', lado: 'largo' })
+})
+
+test('los dos sistemas como uno: la pirámide no añade a menos de ½ N de una unidad del otro', () => {
+  const pos = { lado: 'largo', n0: 300, unidades: [{ entrada: 25_160 }] }
+  assert.equal(siguienteAnadido(pos), 25_310)
+  assert.equal(siguienteAnadido(pos, [25_470]), 25_310)                 // a 160, más de ½ N (150): no molesta
+  assert.equal(siguienteAnadido(pos, [25_250]), 25_400)                 // ese ya está comprado: ½ N más allá
+  assert.equal(siguienteAnadido(pos, [25_250, 25_420]), 25_570)         // y del siguiente del otro, igual
+  assert.equal(siguienteAnadido({ ...pos, lado: 'corto' }, [24_950]), 24_800)  // en corto, hacia abajo
+  const ahora = fra(10, 19, 11, 0, 30)
+  const con = (high, ocupados) => paso({ pos: { ...pos, stop: 24_560 }, ahora, velas: v1(fra(10, 19, 11), high, 25_200, high - 10), ocupados })
+  assert.equal(con(25_320, []).accion, 'anadir')
+  assert.equal(con(25_320, [25_250]).accion, 'vigilar')
+  assert.equal(con(25_410, [25_250]).accion, 'anadir')
 })
 
 test('con posición: añade cada ½ N, sale por el canal y vigila el stop', () => {

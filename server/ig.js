@@ -166,11 +166,15 @@ const ERRORES = {
   'error.security.api-key-disabled':    'La clave de API está desactivada en IG',
   'error.security.account-suspended':   'IG tiene la cuenta suspendida',
   'error.public-api.exceeded-api-key-allowance': 'IG limita las peticiones de esta clave: espera un minuto',
+  'error.public-api.exceeded-account-allowance': 'IG limita las peticiones de la cuenta: espera un minuto',
   'error.public-api.exceeded-account-historical-data-allowance': 'Agotado el cupo semanal de histórico de IG; el directo sigue funcionando',
   // sin documentar: salió el 20-oct-2026 en el Nikkei, en mitad de una orden
   'error.service.execution.find': 'Fallo interno de IG con la orden (error.service.execution.find)',
 }
 const mensaje = codigo => ERRORES[codigo] ?? `IG: ${codigo}`
+// Los cupos por minuto (no el semanal de histórico, que es otro) y lo que se deja de pedir
+const LIMITE_POR_MINUTO = /^error\.public-api\.exceeded-(api-key|account)-allowance$/
+const PAUSA_LIMITADO_MS = 60_000
 
 // ── Piezas puras (probadas en test/ig.test.js) ──
 
@@ -297,11 +301,17 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   let clienteLS = null
   let reconexion = null
   const tickerDeEpic = new Map()
+  // Con IG limitando las peticiones por minuto (de la clave o de la cuenta), cada petición de
+  // más alarga el castigo, y los bots, que comparten la clave, reintentan en cada vela: un
+  // rato, lo que no es operar falla aquí sin llegar a IG (las órdenes tienen su propio cupo)
+  let limitado = null
   try { mkdirSync(cacheDir, { recursive: true }) } catch { /* no crítico */ }
 
   // `oauth` son las cabeceras del login de la versión 3 (token y cuenta): con ellas la
   // petición va por su cuenta, sin la sesión de tokens CST/XST
   async function pedir(ruta, { metodo = 'GET', version = 1, cuerpo, reintento = true, oauth = null, cabeceras = null } = {}) {
+    const consulta = metodo === 'GET' && !ruta.startsWith('/confirms')
+    if (consulta && limitado && Date.now() < limitado.hasta) throw new Error(limitado.mensaje)
     if (!sesion && !oauth && ruta !== '/session') await login()
     const headers = {
       'X-IG-API-KEY': apiKey,
@@ -319,7 +329,11 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       sesion = null
       return pedir(ruta, { metodo, version, cuerpo, reintento: false, cabeceras })
     }
-    if (!resp.ok) throw new Error(mensaje(json.errorCode ?? `HTTP ${resp.status}`))
+    if (!resp.ok) {
+      const codigo = json.errorCode ?? `HTTP ${resp.status}`
+      if (consulta && LIMITE_POR_MINUTO.test(codigo)) limitado = { hasta: Date.now() + PAUSA_LIMITADO_MS, mensaje: mensaje(codigo) }
+      throw new Error(mensaje(codigo))
+    }
     return { json, resp }
   }
 

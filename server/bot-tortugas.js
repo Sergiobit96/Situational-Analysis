@@ -163,6 +163,7 @@ const ESPERA_STOP_FALLIDO_S = 30   // si IG falla al mover un stop (un error suy
 const BUSQUEDAS_CIERRE = 4
 const REINTENTO_PLAN_S = 600       // si no se pudo hacer el plan, se intenta de nuevo pasado este rato
 const REINTENTO_IG_S = 120         // si fue IG (p. ej., porque limita las peticiones), algo antes; nunca en cada paso
+const ESPERA_ERROR_S = 30          // un error al entrar o añadir no se reintenta en cada vela, sino pasado este rato
 const CUENTA_VALE_S = 30           // el saldo se pide una vez para todos los planes de una ronda
 const ESPERA_TRAS_CIERRE_S = 3600  // Yahoo tarda en dejar la vela del día: el plan de mañana, una hora después del cierre
 const DIAS_VIEJO = 6               // una vela diaria más vieja que esto (días naturales) es que Yahoo no está al día
@@ -506,12 +507,16 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const plan = datos.planes[ticker]
     const sp = plan.sistemas[sistema]
     const u = plan.unidad
+    const nivel = sp.entrada[lado].nivel
+    // el precio ha vuelto atrás desde la vela que lo rompió: se espera a que lo rompa otra vez.
+    // Se mira antes en el directo, sin preguntar a IG: la ruptura sigue entre las velas
+    // recientes un par de minutos, y preguntarle cada pocos segundos agota su cupo por minuto
+    const vuelto = p => p != null && (lado === 'largo' ? p < nivel : p > nivel) && Math.abs(p - nivel) > 0.25 * plan.n
+    if (vuelto(ultimasVelas('ig', ticker, 1).at(-1)?.close)) { sp.esperaEntrar = ahora() + 5; return }
     const m = await ig.operar.datosMercado(ticker, u.epic)
     const precio = lado === 'largo' ? m.oferta : m.bid
     if (precio == null) { sp.esperaEntrar = ahora() + 60; return }
-    const nivel = sp.entrada[lado].nivel
-    // el precio ha vuelto atrás desde la vela que lo rompió: se espera a que lo rompa otra vez
-    if ((lado === 'largo' ? precio < nivel : precio > nivel) && Math.abs(precio - nivel) > 0.25 * plan.n) { sp.esperaEntrar = ahora() + 5; return }
+    if (vuelto(precio)) { sp.esperaEntrar = ahora() + 15; return }
     // junto a una noticia de alto impacto no se entra: se espera a que pase
     const noticia = noticias?.bloqueo(ticker, ahora(), datos.config.margenNoticias)
     if (noticia) {
@@ -928,8 +933,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           })
           // el plan es del índice: hecho, este paso ya no sigue con él
           if (p.accion === 'plan')        { await calcularPlan(ticker, p.ses); break }
-          if (p.accion === 'entrar')      await entrar(ticker, sistema, p.lado, ses)
-          if (p.accion === 'anadir')      await anadir(ticker, sistema, ses)
+          if (p.accion === 'entrar')      await entrar(ticker, sistema, p.lado, ses).catch(err => { datos.planes[ticker].sistemas[sistema].esperaEntrar = ahora() + ESPERA_ERROR_S; throw err })
+          if (p.accion === 'anadir')      await anadir(ticker, sistema, ses).catch(err => { pos.esperaAnadir = ahora() + ESPERA_ERROR_S; throw err })
           if (p.accion === 'salir')       await salir(pos, p.motivo)
           if (p.accion === 'reconciliar') await reconciliar(ticker, sistema)
           if (p.accion === 'stop')        await reintentarStop(pos)

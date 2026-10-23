@@ -214,6 +214,23 @@ test('con credenciales malas lo dice claro y no se queda reintentando', async ()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('si IG limita las peticiones por minuto, un rato deja de consultarle, pero no de operar', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ig-'))
+  try {
+    const { fetchFn, peticiones } = igFalso()
+    const limitando = async (url, init) => (/\/accounts$|\/positions\/otc$/.test(url)
+      ? (peticiones.push({ url, init }), { ok: false, status: 403, json: async () => ({ errorCode: 'error.public-api.exceeded-account-allowance' }), headers: new Headers() })
+      : fetchFn(url, init))
+    const ig = crearIG({ apiKey: 'k', usuario: 'yo', password: 'secreta', cacheDir: dir, pausaBusquedaMs: 0, fetchFn: limitando, Lightstreamer: lightstreamerFalso().Lightstreamer })
+    await assert.rejects(ig.operar.cuenta(), /limita las peticiones de la cuenta/)
+    const antes = peticiones.length
+    await assert.rejects(ig.operar.cuenta(), /limita las peticiones de la cuenta/)
+    assert.equal(peticiones.length, antes)
+    await assert.rejects(ig.operar.cerrar({ ticker: '^GDAXI', dealId: 'D1', lado: 'largo', tamano: 1 }))
+    assert.equal(peticiones.length, antes + 1)
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('la vela de 1 min con cotizaciones sueltas', () => {
   const t = Date.UTC(2026, 9, 19, 8, 3, 0)
   let v = acumularPrecio(null, 100, t + 5_000)

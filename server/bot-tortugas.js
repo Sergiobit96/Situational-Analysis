@@ -351,8 +351,12 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   }
   const referenciaNueva = (ticker, sistema) => `${PREFIJO}${sistema}-${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
   const posicionesDe = sistema => Object.values(datos.posiciones).filter(p => p.sistema === sistema)
-  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots
-  cartera?.registrar('Tortugas', () => Object.values(datos.posiciones).map(p => ({ ticker: p.ticker, lado: p.lado, riesgoEur: riesgoHastaStop(p) })))
+  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots, la conciliación
+  // con IG y el resumen del día
+  cartera?.registrar('Tortugas', () => Object.values(datos.posiciones).map(p => ({
+    ticker: p.ticker, lado: p.lado, riesgoEur: riesgoHastaStop(p),
+    unidades: p.unidades.filter(u => !u.salida).map(u => ({ dealId: u.dealId, stop: u.stop ?? p.stop, tamano: u.tamano })),
+  })))
 
   // ── El plan de una sesión: niveles de Yahoo y tamaño de la unidad con la cuenta de IG ──
   // Sin cupo de histórico de IG fallan a la vez todas las materias primas: se avisa una vez,

@@ -430,10 +430,12 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     try { Promise.resolve(avisar(`${E.aviso}${texto}`)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
   }
 
-  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots
+  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots, la conciliación
+  // con IG y el resumen del día
   cartera?.registrar(E.nombre, () => Object.values(datos.dias).filter(d => d.operacion && !d.operacion.salida).map(d => ({
     ticker: d.ticker, lado: d.operacion.lado,
     riesgoEur: riesgoHastaStop({ ...d.operacion, valorPunto: d.plan?.valorPunto ?? 1, cambioAEur: d.plan?.cambioAEur ?? 1 }),
+    unidades: d.operacion.unidades.filter(u => !u.salida).map(u => ({ dealId: u.dealId, stop: u.stop ?? d.operacion.stop, tamano: u.tamano })),
   })))
 
   const clave = ses => `${ses.fecha} ${ses.ticker}`

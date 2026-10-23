@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { abiertoSrs, siguienteAnadidoSrs, rupturaMasCercana, acumulado, piernasDe } from '../src/botCalculos.js'
+import { abiertoSrs, siguienteAnadidoSrs, rupturaMasCercana, acumulado, piernasDe, realFrenteABacktest } from '../src/botCalculos.js'
 
 const daxCorto = {
   config: { piramide: 1 },
@@ -68,4 +68,33 @@ test('la ruptura más cercana de las tortugas, en N', () => {
 
 test('el acumulado de una lista de resultados', () => {
   assert.deepEqual(acumulado([{ valor: 100 }, { valor: -40 }, { valor: 10 }]).map(p => p.acumulado), [100, 60, 70])
+})
+
+test('real frente al backtest: deslizamiento por instrumento y diferencia con el backtest, en puntos y en R', () => {
+  const sesion = (ticker, real, bt, desl, rango = 20) => ({
+    ticker, bracket: { rango }, resultadoPts: real, backtest: { valido: true, resultadoPts: bt },
+    operacion: real == null ? null : { lado: 'largo', deslizamiento: desl[0], unidades: desl.map(x => ({ deslizamiento: x })) },
+  })
+  const historial = [
+    sesion('^GDAXI', 10, 12, [2, 4]),
+    sesion('^GDAXI', -20, -20, [0]),
+    sesion('^GDAXI', null, 15, []),                        // el bot no entró y el backtest sí
+    sesion('^NDX', 5, 5, [1], 10),
+    { ticker: '^NDX', backtest: { valido: false } },     // no comparable
+  ]
+  const { filas, total } = realFrenteABacktest(historial)
+  const dax = filas.find(f => f.ticker === '^GDAXI')
+  assert.equal(dax.entradas, 3)
+  assert.equal(dax.deslMedio, 2)
+  assert.equal(dax.deslMediana, 2)
+  assert.equal(dax.deslPctMedio, 10)
+  assert.equal(dax.sesiones, 3)
+  assert.equal(dax.real, -10)
+  assert.equal(dax.backtest, 7)
+  assert.ok(Math.abs(dax.difMedia - (-17 / 3)) < 1e-9)
+  assert.ok(Math.abs(dax.difMediaR - (-17 / 60)) < 1e-9)
+  assert.equal(dax.z, null, 'con menos de 5 no se juzga')
+  assert.equal(total.entradas, 4)
+  assert.equal(total.sesiones, 4)
+  assert.ok(Math.abs(total.difMediaR - (-17 / 20 / 4)) < 1e-9)
 })

@@ -22,6 +22,8 @@ import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
 import { crearTelegram } from './telegram.js'
 import { crearCartera, MAX_RIESGO_GRUPO_PCT } from './cartera.js'
 import { crearNoticias } from './noticias.js'
+import { crearConciliacion } from './conciliacion.js'
+import { crearResumenDiario } from './resumen-diario.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
@@ -3366,6 +3368,25 @@ const vigilancia = crearVigilancia({
   avisar: avisarServidor,
 })
 if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)
+
+// ── Conciliación con IG y resumen del día (server/conciliacion.js, server/resumen-diario.js) ──
+// Cada media hora, lo que los bots creen tener frente a lo que hay en IG; y de lunes a viernes a
+// las 23:15 de Madrid, el resumen del día. Los dos solo donde operan los bots.
+const conciliacion = bot ? crearConciliacion({ ig, cartera, avisar: avisarServidor }) : null
+const salidaHoy = (hora, fecha) => hora != null && fechaEnZona(hora, 'Europe/Madrid') === fecha
+const cerradasSrs = b => fecha => {
+  const e = b.estado()
+  return [...e.hoy, ...e.historial].filter(d => d.resultadoEur != null && salidaHoy(d.salida?.hora, fecha)).map(d => d.resultadoEur)
+}
+const resumenDiario = bot ? crearResumenDiario({
+  ig, cartera, archivo: join(dirname(BOT_PATH), 'resumen-diario.json'), avisar: avisarServidor,
+  bots: [
+    ...[['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn]].filter(([, b]) => b).map(([nombre, b]) => ({ nombre, cerradasHoy: cerradasSrs(b) })),
+    ...(botTortugas ? [{ nombre: 'Tortugas', cerradasHoy: fecha => botTortugas.estado().operaciones.filter(o => o.resultadoEur != null && salidaHoy(o.cerradaHora, fecha)).map(o => o.resultadoEur) }] : []),
+  ],
+}) : null
+if (BOT_OPERA) { conciliacion?.iniciar(); resumenDiario?.iniciar() }
+
 const bucle = medirBucle()
 app.get('/healthz/bots', (_req, res) => {
   const e = vigilancia.estado()

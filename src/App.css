@@ -4099,3 +4099,16 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   }
   .grafico-pro-pista { margin-left: 0; width: 100%; }
 }
+
+/* Robustez del backtest: histograma de R y mapa de sensibilidad */
+.estr-robustez-titulo { margin: 0.4rem 0 0; font-size: 0.85rem; color: var(--text); }
+.estr-robustez-hist { display: flex; align-items: flex-end; gap: 2px; height: 90px; padding-bottom: 1rem; }
+.estr-robustez-barra { flex: 1; min-width: 4px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; position: relative; }
+.estr-robustez-barra span { display: block; border-radius: 2px 2px 0 0; min-height: 1px; }
+.estr-robustez-barra span.pos { background: var(--green); }
+.estr-robustez-barra span.neg { background: var(--red); }
+.estr-robustez-barra small { position: absolute; bottom: -1rem; left: 0; font-size: 0.62rem; color: var(--muted); }
+.estr-sensibilidad td { text-align: center; }
+.estr-sensibilidad td.actual { outline: 2px solid var(--text); outline-offset: -2px; font-weight: 600; }
+.estr-mitades-tabla { display: block; overflow-x: auto; }
+@media (min-width: 640px) { .estr-mitades-tabla { display: table; } }

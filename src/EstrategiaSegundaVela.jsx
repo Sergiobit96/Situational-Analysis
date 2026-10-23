@@ -6,6 +6,7 @@ import { INSTRUMENTOS, intradayUrl, velasDeSesiones } from './intradayApi'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
 import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
+import Robustez from './Robustez'
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
@@ -664,6 +665,30 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     return { primera: trozo(val.slice(0, corte)), segunda: trozo(val.slice(corte)) }
   }, [analizadas])
 
+  // Para la robustez: el resultado en R de cada sesión válida en orden (0 si no operó), con el
+  // tamaño del bracket como volatilidad del día, y el backtest rehecho con cada combinación de
+  // stop (fijo o break even) y de pirámide en las mismas sesiones
+  const validasEnOrden = useMemo(
+    () => analizadas.filter(r => r.analisis.valido).sort((a, b) => a.sesion.date.localeCompare(b.sesion.date)),
+    [analizadas],
+  )
+  const serieRobustez = useMemo(() => validasEnOrden.map(({ sesion, analisis: a }) => ({
+    fecha: sesion.date, r: a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0, medida: a.rangoPct,
+  })), [validasEnOrden])
+  const combosRobustez = STOPS.flatMap(st => volumenes.map(v => ({ clave: `${st.id}|${v.id}`, fila: st.label, columna: v.label, st, v })))
+  const matrizRobustez = () => validasEnOrden.map(r => {
+    const fila = { fecha: r.sesion.date }
+    for (const c of combosRobustez) {
+      const a = analizarSesion({
+        ...opcionesMotor, ticker: tickerVisto,
+        beR: c.st.beR, piramide: c.v.piramide, piramideN: estr.tortuga && c.v.id === 'tortuga' ? estr.tortuga : null,
+        velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null, velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
+      })
+      fila[c.clave] = a.valido && a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0
+    }
+    return fila
+  })
+
   // Los filtros se acumulan: una sesión sale si cumple TODOS los que estén puestos, así que
   // "Sale en BE" + "Añade 3+" son los días en los que pasaron las dos cosas.
   const visibles = useMemo(
@@ -1163,6 +1188,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           <CurvaEquity sesiones={sesionesCurva} />
 
           <Mitades mitades={mitades} />
+
+          <Robustez serie={serieRobustez} combos={combosRobustez} filas={STOPS.map(x => x.label)} columnas={volumenes.map(v => v.label)}
+            matrizDe={matrizRobustez} actual={`${stopModo}|${volumen}`} nombreMedida="bracket en % del precio" />
 
           <div className="filtro-group">
             <label className="filtro-label">

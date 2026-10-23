@@ -37,7 +37,8 @@ export function riesgoHastaStop({ lado, unidades, stop = null, valorPunto = 1, c
 }
 
 export function crearCartera({ grupos = {}, maxPct = MAX_RIESGO_GRUPO_PCT } = {}) {
-  // nombre del bot → () => [{ ticker, lado, riesgoEur }] con sus posiciones abiertas
+  // nombre del bot → () => [{ ticker, lado, riesgoEur, unidades: [{ dealId, stop, tamano }] }] con sus
+  // posiciones abiertas (las unidades, para la conciliación con IG: server/conciliacion.js)
   const bots = new Map()
 
   function posiciones() {

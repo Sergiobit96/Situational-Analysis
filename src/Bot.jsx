@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { analizarSesion } from './segundaVelaCore'
 import { conClaveBot, guardarClaveBot } from './claveBot'
-import { piernasDe, abiertoSrs, siguienteAnadidoSrs, acumulado } from './botCalculos'
+import { piernasDe, abiertoSrs, siguienteAnadidoSrs, acumulado, realFrenteABacktest } from './botCalculos'
 import { GraficoSesion, Piramide, LineaDelDia, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
 
@@ -194,6 +194,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const saldo = deHoy.find(d => d.plan?.saldo)?.plan.saldo ?? null
   const curva = acumulado([...operados].reverse().map(d => ({ etiqueta: `${d.fecha} · ${nombre(d.ticker)}`, valor: d.resultadoEur ?? 0 })))
   const maxEur = Math.max(0, ...operados.map(d => Math.abs(d.resultadoEur ?? 0)))
+  const ejecucion = realFrenteABacktest(historial)
   // la próxima sesión de cualquier instrumento encendido (en la Rule of 4, la próxima reunión)
   const proximas = sesiones.filter(s => s.encendido && s.proxima).map(s => s.proxima)
   const proxima = proximas.length ? Math.min(...proximas) : null
@@ -323,6 +324,52 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
           </>
         )}
       </section>
+
+      {ejecucion.filas.length > 0 && (
+        <section className="bot-bloque">
+          <h3>Real frente al backtest</h3>
+          <div className="velas-tabla-wrap">
+            <table className="velas-tabla bot-tabla">
+              <thead>
+                <tr><th>Instrumento</th><th>Entradas</th><th>Deslizamiento medio</th><th>Mediana</th><th>% del bracket</th><th>Sesiones</th><th>Bot</th><th>Backtest</th><th>Diferencia por sesión</th><th>En R</th></tr>
+              </thead>
+              <tbody>
+                {ejecucion.filas.map(f => (
+                  <tr key={f.ticker}>
+                    <td className="bot-celda-texto">{nombre(f.ticker)}</td>
+                    <td>{f.entradas}</td>
+                    <td className={tono(f.deslMedio == null ? null : -f.deslMedio)}>{pts(f.deslMedio)}</td>
+                    <td>{pts(f.deslMediana)}</td>
+                    <td>{f.deslPctMedio == null ? '—' : `${num(f.deslPctMedio)}%`}</td>
+                    <td>{f.sesiones}</td>
+                    <td className={tono(f.real)}>{pts(f.real)}</td>
+                    <td className={tono(f.backtest)}>{pts(f.backtest)}</td>
+                    <td className={tono(f.difMedia)}>{pts(f.difMedia)}</td>
+                    <td className={tono(f.difMediaR)}>{f.difMediaR == null ? '—' : `${f.difMediaR > 0 ? '+' : ''}${num(f.difMediaR, 2)} R`}</td>
+                  </tr>
+                ))}
+                <tr className="bot-fila-total">
+                  <td className="bot-celda-texto"><b>Todos</b></td>
+                  <td>{ejecucion.total.entradas}</td>
+                  <td>—</td><td>—</td>
+                  <td>{ejecucion.total.deslPctMedio == null ? '—' : `${num(ejecucion.total.deslPctMedio)}%`}</td>
+                  <td>{ejecucion.total.sesiones}</td>
+                  <td>—</td><td>—</td><td>—</td>
+                  <td className={tono(ejecucion.total.difMediaR)}>{ejecucion.total.difMediaR == null ? '—' : `${ejecucion.total.difMediaR > 0 ? '+' : ''}${num(ejecucion.total.difMediaR, 2)} R`}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="bot-nota">
+            {ejecucion.total.z == null ? 'Con menos de 5 sesiones comparables aún no se puede decir si la diferencia es casualidad.'
+              : ejecucion.total.z < -2 ? <b className="bot-neg">El bot va peor que el backtest más de lo que explica el azar: revisa el deslizamiento y las sesiones que no operó.</b>
+              : ejecucion.total.z > 2 ? <b className="bot-pos">El bot va mejor que el backtest más de lo que explica el azar: mira si el backtest es demasiado pesimista.</b>
+              : 'La diferencia entre el bot y el backtest cabe en lo que da el azar: el backtest describe bien lo que pasa.'}
+            {' '}El deslizamiento es lo que se pagó de más sobre el nivel de la rotura (positivo, peor), en cada entrada y añadido. La diferencia es lo que hizo el bot menos lo que habría hecho el backtest en la misma sesión;
+            una sesión que el bot no operó y el backtest sí cuenta como 0 del bot. En R, entre el bracket, para poder juntar instrumentos.
+          </p>
+        </section>
+      )}
 
       <section className="bot-bloque">
         <h3>Configuración</h3>

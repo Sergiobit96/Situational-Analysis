@@ -48,13 +48,17 @@ export function crearNoticias({ archivo = null, fetchFn = fetch, log = console.l
 
   async function actualizar() {
     try {
-      const listas = await Promise.all(['thisweek', 'nextweek'].map(async slug => {
+      const leer = async slug => {
         const r = await fetchFn(URL_FF(slug), { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) })
         if (!r.ok) throw new Error(`ForexFactory contesta HTTP ${r.status}`)
-        return parsearFf(await r.json())
-      }))
-      if (!listas[0].length) throw new Error('el calendario de esta semana viene vacío')
-      usar(listas.flat())
+        // si limita, contesta 200 con una página HTML
+        return parsearFf(await r.json().catch(() => { throw new Error('ForexFactory no da el calendario (¿limita las peticiones?)') }))
+      }
+      const estaSemana = await leer('thisweek')
+      if (!estaSemana.length) throw new Error('el calendario de esta semana viene vacío')
+      // la siguiente solo la publica hacia el final de la semana: hasta entonces, 404
+      const siguiente = await leer('nextweek').catch(() => [])
+      usar([...estaSemana, ...siguiente])
       Object.assign(estado, { actualizado: new Date(ahora() * 1000).toISOString(), error: null })
       if (archivo) {
         try {

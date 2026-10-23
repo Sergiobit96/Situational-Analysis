@@ -9,6 +9,7 @@ import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './a
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
 import RevisionBacktest from './RevisionBacktest'
 import './Tortugas.css'
+import Robustez from './Robustez'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -376,6 +377,8 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const listo = mercados.length > 0 && (universo === 'indices' || !faltan.length)
   const res = useMemo(() => listo ? backtestTortugas(mercados, tipos, cfg) : null, [listo, mercados, tipos, cfg])
   const m = useMemo(() => res && metricasTortugas(res), [res])
+  // cada operación cerrada, en orden de salida, con lo que dejó en % del capital (para el Monte Carlo)
+  const serieRobustez = useMemo(() => (res ? [...res.operaciones].sort((a, b) => a.salida.localeCompare(b.salida)).map(o => ({ fecha: o.salida, r: o.pctCapital })) : []), [res])
   const ordenes = useMemo(() => res ? ordenesManana(res, ajustes.capital) : [], [res, ajustes.capital])
 
   async function cargar() {
@@ -810,6 +813,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <Anual res={res} />
           {acciones ? <PorSector res={res} /> : <PorIndice res={res} futuros={futuros} />}
           <Piramide res={res} />
+          <Robustez serie={serieRobustez} unidad="%" titulo="Robustez de las operaciones (en % del capital)" />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
           <RevisionBacktest clave={claveCfg} res={res} universo={universo} variantes={variantes?.clave === claveCfg ? variantes.filas : null} />
           <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} futuros={futuros} />

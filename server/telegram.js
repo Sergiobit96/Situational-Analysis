@@ -107,13 +107,14 @@ export function crearTelegram({ token = '', chatId = '', archivo = null, fetchFn
   let pendientes = []
   let primero = 0
   let temporizador = null
-  function enviar(texto) {
+  // `ya`: sin esperar a otros (el aviso de que el servidor se cae, que sale en 3 s)
+  function enviar(texto, { ya = false } = {}) {
     if (!token || !chat) return Promise.resolve(false)
     return new Promise(resolver => {
       if (!pendientes.length) primero = Date.now()
       pendientes.push({ texto, resolver })
       clearTimeout(temporizador)
-      temporizador = setTimeout(soltar, Math.max(0, Math.min(juntarMs, primero + juntarMaxMs - Date.now())))
+      temporizador = setTimeout(soltar, ya ? 0 : Math.max(0, Math.min(juntarMs, primero + juntarMaxMs - Date.now())))
     })
   }
   function soltar() {

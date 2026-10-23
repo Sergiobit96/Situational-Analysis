@@ -374,6 +374,15 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
           <label>Bracket máximo (% del precio)
             <input type="number" min="0.01" max="10" step="0.1" value={editando.rangoMaxPct} onChange={e => cambiar('rangoMaxPct', e.target.value)} />
           </label>
+          <label>Noticias de alto impacto
+            <select value={editando.margenNoticias ?? ''} onChange={e => cambiar('margenNoticias', e.target.value === '' ? null : Number(e.target.value))}>
+              <option value="">No las mira</option>
+              <option value={5}>No entra 5 min antes ni después</option>
+              <option value={15}>No entra 15 min antes ni después</option>
+              <option value={30}>No entra 30 min antes ni después</option>
+              <option value={60}>No entra 1 h antes ni después</option>
+            </select>
+          </label>
         </div>
         {tortuga ? (
           <p className="bot-nota">
@@ -382,6 +391,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             La entrada va a mercado, pero solo si el precio no se ha ido del mínimo más de lo que digas.
             La pirámide añade otra posición cada ½ N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
             N es la de las tortugas: el ATR de Wilder de 20 sesiones del diario del índice, hasta la anterior.
+            Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
             Un cambio vale para las sesiones que aún no han fijado su bracket.
           </p>
         ) : (
@@ -390,12 +400,13 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             Las órdenes van a mercado, pero solo si el precio no se ha ido del nivel más de lo que digas: si no, no entra (ni da la vuelta), y un añadido espera a que vuelva cerca.
             Con flip the switch, si salta el stop da la vuelta una vez; necesita el stop al otro lado del bracket.
             La pirámide abre como mucho {datos.maxUnidades ?? 4} posiciones (con la entrada) y lleva el stop de todas a su precio medio.
+            Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
             Un cambio vale para las sesiones que aún no han fijado su bracket.
           </p>
         )}
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct } = form
-          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct }).then(() => setForm(null))
+          const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias } = form
+          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
 

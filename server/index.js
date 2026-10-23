@@ -15,11 +15,13 @@ import { limpiarDiario, totalDiario } from './diario-fortalezas.js'
 import { suscribir, resumenTiempoReal, escucharFuente, sembrarVelas } from './tiempo-real.js'
 import { crearBot, RULE_OF_4, FIRST_BAR_NEGATIVE } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
-import { crearBotTortugas, MERCADOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
+import { crearBotTortugas, MERCADOS_TORTUGAS, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
 import { fechaEnZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
 import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
 import { crearTelegram } from './telegram.js'
+import { crearCartera, MAX_RIESGO_GRUPO_PCT } from './cartera.js'
+import { crearNoticias } from './noticias.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
@@ -3134,10 +3136,18 @@ process.on('unhandledRejection', err => {
 process.on('uncaughtException', err => {
   console.error('[proceso] excepción sin capturar, salgo:', err)
   setTimeout(() => process.exit(1), 3000)
-  avisarServidor(`🔴 El servidor se ha caído y se está reiniciando solo. En un minuto debería llegarte «Servidor arrancado»; si no llega, míralo en Railway.\nDetalle: ${textoError(err)}`).finally(() => process.exit(1))
+  // sin esperar a juntarlo con otros avisos: el proceso sale en 3 s
+  const aviso = `🔴 El servidor se ha caído y se está reiniciando solo. En un minuto debería llegarte «Servidor arrancado»; si no llega, míralo en Railway.\nDetalle: ${textoError(err)}`
+  ;(BOT_OPERA ? telegram.enviar(aviso, { ya: true }) : Promise.resolve(false)).finally(() => process.exit(1))
 })
 
-const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+// Lo que comparten los bots: el riesgo abierto en mercados que se mueven juntos (server/cartera.js;
+// RIESGO_GRUPO_MAX_PCT cambia el tope) y el calendario de noticias de alto impacto (server/noticias.js)
+const cartera = crearCartera({ grupos: GRUPOS_TORTUGAS, maxPct: Number(process.env.RIESGO_GRUPO_MAX_PCT) || MAX_RIESGO_GRUPO_PCT })
+const noticias = crearNoticias({ archivo: join(dirname(BOT_PATH), 'noticias.json') })
+if (BOT_OPERA) noticias.iniciar()
+
+const bot = ig && ig.estado().entorno === 'demo' ? crearBot({ ig, archivo: BOT_PATH, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (bot && BOT_OPERA) bot.arrancar()
 if (bot) console.log(`[bot] registro en ${BOT_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
@@ -3145,7 +3155,7 @@ const sinBot = res => res.status(404).json({ error: ig ? 'El bot solo funciona c
 
 app.get('/api/bot', (req, res) => {
   if (!bot) return sinBot(res)
-  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
+  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
 })
 
 app.put('/api/bot/config', (req, res) => {
@@ -3218,13 +3228,13 @@ const calendarioFomc = crearCalendarioFomc({
   avisar: BOT_OPERA ? telegram.enviar : undefined,
 })
 calendarioFomc.iniciar()
-const botRule4 = bot ? crearBot({ ig, archivo: BOT_RULE4_PATH, estrategia: RULE_OF_4, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+const botRule4 = bot ? crearBot({ ig, archivo: BOT_RULE4_PATH, estrategia: RULE_OF_4, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botRule4 && BOT_OPERA) botRule4.arrancar()
 if (botRule4) console.log(`[rule of 4] registro en ${BOT_RULE4_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
 app.get('/api/bot/rule-of-4', (req, res) => {
   if (!botRule4) return sinBot(res)
-  res.json({ archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, calendario: calendarioFomc.estado(), ...botRule4.estado() })
+  res.json({ archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, calendario: calendarioFomc.estado(), ...botRule4.estado() })
 })
 
 app.put('/api/bot/rule-of-4/config', (req, res) => {
@@ -3245,13 +3255,13 @@ app.post('/api/bot/rule-of-4/parar', async (req, res) => {
 // referencias (FBN-…), opera donde BOT_OPERA=1, el mismo Telegram y la misma clave. Nace apagado.
 const BOT_FBN_PATH = process.env.BOT_FBN || join(dirname(BOT_PATH), process.env.NODE_ENV === 'production' ? 'bot-first-bar-negative.json' : 'Bot First bar negative.json')
 // su N es la de las tortugas: la saca del mismo diario de Yahoo que el bot de las tortugas
-const botFbn = bot ? crearBot({ ig, archivo: BOT_FBN_PATH, estrategia: FIRST_BAR_NEGATIVE, velasDiarias: velasDiariasTortugas, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+const botFbn = bot ? crearBot({ ig, archivo: BOT_FBN_PATH, estrategia: FIRST_BAR_NEGATIVE, velasDiarias: velasDiariasTortugas, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botFbn && BOT_OPERA) botFbn.arrancar()
 if (botFbn) console.log(`[first bar negative] registro en ${BOT_FBN_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
 app.get('/api/bot/first-bar-negative', (req, res) => {
   if (!botFbn) return sinBot(res)
-  res.json({ archivo: BOT_FBN_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botFbn.estado() })
+  res.json({ archivo: BOT_FBN_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botFbn.estado() })
 })
 
 app.put('/api/bot/first-bar-negative/config', (req, res) => {
@@ -3341,7 +3351,7 @@ async function horasDukascopy(instrumento, desde, hasta) {
   return velas
 }
 
-const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugas, archivo: BOT_TORTUGAS_PATH, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugas, archivo: BOT_TORTUGAS_PATH, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botTortugas && BOT_OPERA) botTortugas.arrancar()
 if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
@@ -3364,7 +3374,7 @@ app.get('/healthz/bots', (_req, res) => {
 
 app.get('/api/bot/tortugas', (req, res) => {
   if (!botTortugas) return sinBot(res)
-  res.json({ archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() })
+  res.json({ archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() })
 })
 
 app.put('/api/bot/tortugas/config', (req, res) => {

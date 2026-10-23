@@ -7,10 +7,11 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
+import { crearCartera } from '../server/cartera.js'
 import { INDICES_TORTUGAS, prepararMercado, backtestTortugas, ordenesManana } from '../src/tortugas.js'
 
 // Hora local de Fráncfort en un día de octubre o noviembre de 2026 → instante UTC en segundos
@@ -248,14 +249,14 @@ function igFalso({ precios = {}, saldo = 20_000, disponible = 20_000, sinPrecio 
 const diarioPlano = (centro, medio, hasta = '2026-10-16') => laborables(hasta, 300)
   .map(date => ({ date, open: centro, high: centro + medio, low: centro - medio, close: centro }))
 
-function botDePrueba(ig, diarios, cambios = {}) {
+function botDePrueba(ig, diarios, cambios = {}, { cartera, noticias } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tortugas-'))
   let t = 0
   ig.reloj = () => t
   const avisos = []
   const pedidas = []
   const bot = crearBotTortugas({
-    ig, archivo: join(dir, 'Bot Tortugas.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar: x => avisos.push(x),
+    ig, archivo: join(dir, 'Bot Tortugas.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar: x => avisos.push(x), cartera, noticias,
     velasDiarias: async ticker => {
       pedidas.push(ticker)
       if (diarios[ticker] instanceof Error) throw diarios[ticker]
@@ -431,6 +432,36 @@ test('los límites de cartera: con el grupo lleno no entra otro índice del mism
     assert.equal(posicion(bot, '^FTSE'), null)
     assert.ok(bot.estado().eventos.some(e => e.ticker === '^FTSE' && /el Sistema 1 ya tiene 1 unidades largas en Europa/.test(e.texto)))
     assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 1)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('junto a una noticia no entra; pasada, entra. Y no entra si el riesgo de los otros bots en Europa ya llena el tope', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const pasa = fra(11, 2, 10, 15)
+  const noticias = { bloqueo: (ticker, t, minutos) => (t < pasa && minutos === 15 ? { texto: 'EUR IPC a las 10:00', hasta: pasa } : null) }
+  const otros = []
+  const cartera = crearCartera({ grupos: GRUPOS_TORTUGAS, maxPct: 6 })
+  cartera.registrar('SRS', () => otros)
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-10-30') }, soloS1, { cartera, noticias })
+  try {
+    enHora(fra(11, 2, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_155, 25_156]
+    vela1m('^GDAXI', fra(11, 2, 10), 25_156, 25_140)
+    enHora(fra(11, 2, 10, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI'), null)
+    assert.ok(bot.estado().eventos.some(e => /hay noticia \(EUR IPC a las 10:00\): no entra hasta que pase/.test(e.texto)))
+    // pasada la noticia, el SRS tiene el FTSE comprado con todo el tope: no entra
+    otros.push({ ticker: '^FTSE', lado: 'largo', riesgoEur: 1200 })
+    vela1m('^GDAXI', fra(11, 2, 10, 15), 25_156, 25_150)
+    enHora(pasa + 20); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI'), null)
+    assert.ok(bot.estado().eventos.some(e => /no entra: con índices europeos en largo ya hay 1200 € en riesgo \(SRS\)/.test(e.texto)))
+    // el SRS sale, y al minuto entra
+    otros.length = 0
+    vela1m('^GDAXI', fra(11, 2, 10, 17), 25_156, 25_150)
+    enHora(pasa + 90); await bot._paso()
+    assert.ok(posicion(bot, '^GDAXI'))
+    assert.ok(cartera.estado().posiciones.find(p => p.bot === 'Tortugas' && p.ticker === '^GDAXI').riesgoEur > 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

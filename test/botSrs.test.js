@@ -10,6 +10,8 @@ import { siguientePaso, nivelStop, crearBot, sesionDe, proximaApertura, tamanoPo
 import { buscarCierre, crearIG } from '../server/ig.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
+import { crearCartera } from '../server/cartera.js'
+import { GRUPOS_TORTUGAS } from '../server/bot-tortugas.js'
 
 // Hora local de una bolsa en un día de octubre (o del mes que se diga) de 2026 → instante UTC en segundos
 const en = (zona, mes = 9) => (dia, h, m = 0, s = 0) => {
@@ -213,12 +215,12 @@ function igFalso({ velas = {}, precios = {}, saldo = 20000, disponible = 20000, 
   return ig
 }
 
-function botDePrueba(ig, cambios = {}, { avisar, registro } = {}) {
+function botDePrueba(ig, cambios = {}, { avisar, registro, cartera, noticias } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'bot-'))
   if (registro) writeFileSync(join(dir, 'Bot SRS.json'), JSON.stringify(registro))
   let t = 0
   ig.reloj = () => t
-  const bot = crearBot({ ig, archivo: join(dir, 'Bot SRS.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar })
+  const bot = crearBot({ ig, archivo: join(dir, 'Bot SRS.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0, avisar, cartera, noticias })
   bot.cambiarConfig({ activo: true, ...cambios })
   return { bot, dir, enHora: x => { t = x }, archivo: join(dir, 'Bot SRS.json') }
 }
@@ -765,6 +767,68 @@ test('no entra si al romper el precio ya se ha ido del nivel más de un cuarto d
     const hoy = apunte(bot, '^GDAXI')
     assert.equal(hoy.estado, 'sin-operar')
     assert.match(hoy.eventos.at(-1).texto, /15\.0 puntos más allá de 25500, y el tope es 10\.0: hoy no se entra/)
+    assert.equal(ig.ordenes.length, 0)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('junto a una noticia de alto impacto no entra; cuando pasa, entra si el precio sigue cerca del nivel', async () => {
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(5, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25502, 25503] } })
+  const pasa = madridNov(5, 9, 45)
+  const pedidas = []
+  const noticias = { bloqueo: (ticker, t, minutos) => { pedidas.push([ticker, minutos]); return t < pasa ? { texto: 'EUR IPC a las 09:30', hasta: pasa } : null } }
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { noticias })
+  try {
+    enHora(madridNov(5, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(5, 9, 33), 25503, 25498, 25502)
+    enHora(madridNov(5, 9, 33, 5)); await bot._paso()
+    enHora(madridNov(5, 9, 40)); await bot._paso()
+    let hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'esperando-rotura')
+    assert.match(hoy.eventos.at(-1).texto, /hay noticia \(EUR IPC a las 09:30\): no se entra hasta las 09:45/)
+    assert.equal(hoy.eventos.filter(e => /hay noticia/.test(e.texto)).length, 1, 'se apunta una vez')
+    assert.equal(ig.ordenes.length, 0)
+    assert.deepEqual(pedidas[0], ['^GDAXI', 15])
+    enHora(pasa + 5); await bot._paso()
+    hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'en-posicion')
+    assert.equal(ig.ordenes.length, 1)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('no entra si con ella el riesgo abierto en índices que se mueven juntos, entre todos los bots, pasa del tope', async () => {
+  // otro bot ya tiene el Nasdaq comprado con 1.100 € hasta el stop; el tope es el 6% de 20.000 €
+  const cartera = crearCartera({ grupos: GRUPOS_TORTUGAS, maxPct: 6 })
+  cartera.registrar('Tortugas', () => [{ ticker: '^NDX', lado: 'largo', riesgoEur: 1100 }, { ticker: '^GDAXI', lado: 'largo', riesgoEur: 1000 }])
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(5, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25502, 25503] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { cartera })
+  try {
+    enHora(madridNov(5, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(5, 9, 33), 25503, 25498, 25502)
+    enHora(madridNov(5, 9, 33, 5)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    // el Nasdaq no cuenta para el DAX: 1.000 € de las tortugas y 200 € de esta son 1.200 €, que caben
+    assert.equal(hoy.estado, 'en-posicion')
+    const suya = cartera.estado().posiciones.find(p => p.bot === 'SRS')
+    assert.equal(suya.ticker, '^GDAXI')
+    assert.ok(suya.riesgoEur > 200 && suya.riesgoEur < 230, `riesgo ${suya.riesgoEur}`)  // 200 € y lo que entró por encima del nivel
+    // y ahora, con 1.000 € más en Europa, el tope (1.200 €) ya no deja entrar en el FTSE ni en otro DAX
+    assert.match(cartera.noCabe({ ticker: '^FTSE', lado: 'largo', riesgoEur: 200, saldo: 20000 }), /índices europeos en largo ya hay \d+ € en riesgo \(Tortugas, SRS\)/)
+    assert.equal(cartera.noCabe({ ticker: '^FTSE', lado: 'corto', riesgoEur: 200, saldo: 20000 }), null, 'el otro sentido no suma')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('una entrada que pasaría del tope de riesgo correlacionado no se manda y la sesión no opera', async () => {
+  const cartera = crearCartera({ grupos: GRUPOS_TORTUGAS, maxPct: 6 })
+  cartera.registrar('Tortugas', () => [{ ticker: '^FTSE', lado: 'largo', riesgoEur: 1100 }])
+  const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(5, 9, 15), 25480, 25500, 25460, 25490)] }, precios: { '^GDAXI': [25502, 25503] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax, { cartera })
+  try {
+    enHora(madridNov(5, 9, 30, 4)); await bot._paso()
+    vela1m('^GDAXI', madridNov(5, 9, 33), 25503, 25498, 25502)
+    enHora(madridNov(5, 9, 33, 5)); await bot._paso()
+    const hoy = apunte(bot, '^GDAXI')
+    assert.equal(hoy.estado, 'sin-operar')
+    assert.match(hoy.eventos.at(-1).texto, /hoy no se entra: con índices europeos en largo ya hay 1100 € en riesgo \(Tortugas\) y con esta serían \d+ €, más del 6% del saldo \(1200 €\)/)
     assert.equal(ig.ordenes.length, 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

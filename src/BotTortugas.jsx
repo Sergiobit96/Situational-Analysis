@@ -308,6 +308,15 @@ export default function BotTortugas() {
               <option value="no">No</option>
             </select>
           </label>
+          <label>Noticias de alto impacto
+            <select value={editando.margenNoticias ?? ''} onChange={e => cambiar('margenNoticias', e.target.value === '' ? null : Number(e.target.value))}>
+              <option value="">No las mira</option>
+              <option value={5}>No entra 5 min antes ni después</option>
+              <option value={15}>No entra 15 min antes ni después</option>
+              <option value={30}>No entra 30 min antes ni después</option>
+              <option value={60}>No entra 1 h antes ni después</option>
+            </select>
+          </label>
         </div>
         <p className="bot-nota">
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
@@ -319,11 +328,12 @@ export default function BotTortugas() {
           El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
+          Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
           Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, filtro, lados o riesgo rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { sistemas, filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD } = form
-          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD }).then(() => setForm(null))
+          const { sistemas, filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias } = form
+          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
     </div>

@@ -36,6 +36,7 @@ import { fechaEnZona, instanteEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
 import { nivelesTortugas } from './tortugas-niveles.js'
+import { riesgoHastaStop } from './cartera.js'
 
 // Los mercados que opera, con su grupo (para el límite de unidades muy correlacionadas), las
 // horas de su sesión en una zona (minutos desde la medianoche del día de la sesión; negativos si
@@ -145,6 +146,8 @@ export const CONFIG_TORTUGAS_BOT = {
   maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
   maxSentido:   15,         // por sentido y sistema
   reduccionDD:  true,       // un 20 % menos de capital por cada 10 % de caída desde el máximo
+  margenNoticias: 15,       // no entra de tantos minutos antes a tantos después de una noticia de alto impacto
+                            // de su divisa o del dólar (server/noticias.js); null: no mira las noticias
 }
 
 export const PASO_N = 0.5          // N entre añadidos
@@ -291,13 +294,15 @@ const DESCRIBIR = {
   maxGrupo:    v => `Hasta ${v} unidades por grupo, sentido y sistema`,
   maxSentido:  v => `Hasta ${v} unidades por sentido y sistema`,
   reduccionDD: v => `Reducción por drawdown: ${v ? 'sí' : 'no'}`,
+  margenNoticias: v => `Noticias de alto impacto: ${v == null ? 'no las mira' : `no entra de ${v} min antes a ${v} min después`}`,
 }
 const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
 // ── El bot ──
 // `velasDiarias(ticker)` da las diarias de Yahoo del índice ([{ date, open, high, low, close }],
-// en orden, con la fecha en la zona de su bolsa). `avisar(texto)` es Telegram.
-export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {} }) {
+// en orden, con la fecha en la zona de su bolsa). `avisar(texto)` es Telegram. `cartera` y
+// `noticias` frenan las entradas, como en el bot SRS (server/cartera.js, server/noticias.js).
+export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, cartera = null, noticias = null }) {
   const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [] })
   let datos = vacio()
   try {
@@ -346,6 +351,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   }
   const referenciaNueva = (ticker, sistema) => `${PREFIJO}${sistema}-${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
   const posicionesDe = sistema => Object.values(datos.posiciones).filter(p => p.sistema === sistema)
+  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots
+  cartera?.registrar('Tortugas', () => Object.values(datos.posiciones).map(p => ({ ticker: p.ticker, lado: p.lado, riesgoEur: riesgoHastaStop(p) })))
 
   // ── El plan de una sesión: niveles de Yahoo y tamaño de la unidad con la cuenta de IG ──
   // Sin cupo de histórico de IG fallan a la vez todas las materias primas: se avisa una vez,
@@ -501,13 +508,22 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const nivel = sp.entrada[lado].nivel
     // el precio ha vuelto atrás desde la vela que lo rompió: se espera a que lo rompa otra vez
     if ((lado === 'largo' ? precio < nivel : precio > nivel) && Math.abs(precio - nivel) > 0.25 * plan.n) { sp.esperaEntrar = ahora() + 5; return }
+    // junto a una noticia de alto impacto no se entra: se espera a que pase
+    const noticia = noticias?.bloqueo(ticker, ahora(), datos.config.margenNoticias)
+    if (noticia) {
+      sp.esperaEntrar = noticia.hasta
+      apuntar(ticker, `Ruptura de ${px(nivel)}, pero hay noticia (${noticia.texto}): no entra hasta que pase`, { sistema })
+      return
+    }
     const otro = otroYaDentro(ticker, sistema, lado, precio, plan.n)
     if (otro) {
       sp.bloqueado = `señal doble con el Sistema ${otro}`
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: el Sistema ${otro} ya ${lado === 'largo' ? 'compró' : 'vendió'} a menos de ½ N de ${px(precio)} (señal doble, se ejecuta una sola vez)`, { sistema })
       return
     }
-    const motivo = noCabe(ticker, sistema, lado, u.tamano, precio, m, await cuentaDeAhora(plan))
+    const cuenta = await cuentaDeAhora(plan)
+    const motivo = noCabe(ticker, sistema, lado, u.tamano, precio, m, cuenta)
+      ?? cartera?.noCabe({ ticker, lado, riesgoEur: u.tamano * STOP_N * plan.n * valorDe(m) * m.cambioAEur, saldo: cuenta.saldo })
     if (motivo) {
       sp.esperaEntrar = ahora() + 60
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: ${motivo}`, { sistema })
@@ -982,6 +998,11 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if ('maxSentido' in cambios) entero('maxSentido', 1, 50, 'Unidades por sentido: de 1 a 50')
     if ('reduccionDD' in cambios) c.reduccionDD = !!cambios.reduccionDD
     if ('filtroS1' in cambios) c.filtroS1 = !!cambios.filtroS1
+    if ('margenNoticias' in cambios) {
+      const v = cambios.margenNoticias === null || cambios.margenNoticias === '' ? null : Number(cambios.margenNoticias)
+      if (v !== null && !(v >= 1 && v <= 120)) throw new Error('Margen de las noticias entre 1 y 120 min, o ninguno')
+      c.margenNoticias = v
+    }
     const antes = datos.config
     datos.config = c
     // lo que cambia los niveles o la unidad obliga a rehacer los planes

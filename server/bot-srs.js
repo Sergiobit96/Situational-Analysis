@@ -55,6 +55,7 @@ import { fechaEnZona, diaSemanaEnZona, instanteEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
 import { HORA_FOMC_NY, diasFomc, esDiaFomc } from './fomc.js'
+import { riesgoHastaStop } from './cartera.js'
 
 // Apertura y cierre de cada sesión en la hora de su bolsa (minutos desde medianoche)
 export const SESIONES_BOT = {
@@ -82,6 +83,8 @@ export const CONFIG_INICIAL = {
   deslizamientoMaxR: 0.25,    // no entra (ni da la vuelta, ni añade) si el precio ya se ha ido del nivel más de esta
                               // fracción del bracket; donde IG no admite órdenes a mercado, es el límite de la orden
   rangoMaxPct:       0.8,     // si el bracket mide más (en % del precio), ese día no se opera
+  margenNoticias:    15,      // no entra de tantos minutos antes a tantos después de una noticia de alto impacto
+                              // de su divisa o del dólar (server/noticias.js); null: no mira las noticias
 }
 
 const MINUTOS_VELA = 15
@@ -194,6 +197,7 @@ export const RULE_OF_4 = {
   minutosVela: 10, nBracket: 4,
   configInicial: {
     ...CONFIG_INICIAL,
+    margenNoticias: null,   // opera justo la noticia: el comunicado del FOMC
     instrumentos: { '^N225': false, '^GDAXI': false, '^FTSE': false, '^NDX': true, '^GSPC': true, '^DJI': true, '^RUT': false },
   },
   sesionDe: sesionRuleOf4, proximaApertura: proximaRuleOf4,
@@ -385,14 +389,17 @@ const DESCRIBIR = {
   riesgoPct:         v => `Riesgo por operación: ${String(v).replace('.', ',')}% de la cuenta`,
   deslizamientoMaxR: v => `No entra si el precio se ha ido del nivel más de un ${Math.round(v * 100)}% del bracket`,
   rangoMaxPct:       v => `Bracket máximo: ${v}% del precio`,
+  margenNoticias:    v => `Noticias de alto impacto: ${v == null ? 'no las mira' : `no entra de ${v} min antes a ${v} min después`}`,
 }
 
 // ── El bot ──
 // `avisar(texto)` recibe lo que pasa (para Telegram); si falla, el bot sigue a lo suyo.
 // `estrategia`: SRS (por defecto), RULE_OF_4 o FIRST_BAR_NEGATIVE. `velasDiarias(ticker)`, las
 // diarias del índice ([{ date, open, high, low, close }], fechadas en su bolsa), para la N de
-// la pirámide de las tortugas.
-export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS, velasDiarias = null }) {
+// la pirámide de las tortugas. `cartera` (server/cartera.js) frena las entradas que juntarían
+// demasiado riesgo en mercados que se mueven juntos, contando las de los otros bots, y
+// `noticias` (server/noticias.js), las que caen junto a una noticia de alto impacto.
+export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, estrategia = SRS, velasDiarias = null, cartera = null, noticias = null }) {
   const E = estrategia
   const inicial = E.configInicial
   // de las velas de 1 min de la del bracket, las que tiene que haber para hacerla con el directo
@@ -422,6 +429,12 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   function avisarSinFallar(texto) {
     try { Promise.resolve(avisar(`${E.aviso}${texto}`)).catch(() => {}) } catch { /* el aviso es lo de menos */ }
   }
+
+  // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots
+  cartera?.registrar(E.nombre, () => Object.values(datos.dias).filter(d => d.operacion && !d.operacion.salida).map(d => ({
+    ticker: d.ticker, lado: d.operacion.lado,
+    riesgoEur: riesgoHastaStop({ ...d.operacion, valorPunto: d.plan?.valorPunto ?? 1, cambioAEur: d.plan?.cambioAEur ?? 1 }),
+  })))
 
   const clave = ses => `${ses.fecha} ${ses.ticker}`
   function apunteDe(ses, crear) {
@@ -651,6 +664,13 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const cfg = dia.config
     const { plan, bracket } = dia
     const nivel = nivelDe(bracket, lado)
+    // junto a una noticia de alto impacto no se entra: se espera a que pase, y entonces
+    // decide el tope de deslizamiento, como siempre
+    const noticia = noticias?.bloqueo(dia.ticker, ahora(), cfg.margenNoticias)
+    if (noticia) {
+      apuntar(dia, `Rotura de ${nivel}, pero hay noticia (${noticia.texto}): no se ${vuelta ? 'da la vuelta' : 'entra'} hasta las ${horaMadrid(noticia.hasta)}`)
+      return
+    }
     const stop = nivelStop(bracket, lado, cfg.stopPct)
     const tope = cfg.deslizamientoMaxR * bracket.rango
     const m = await ig.operar.datosMercado(dia.ticker, plan.epic)
@@ -659,6 +679,12 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     const noSigue = () => { if (vuelta) finalizar(dia); else dia.estado = 'sin-operar' }
     if (exceso > tope) {
       apuntar(dia, `El precio (${precio}) ya está ${exceso.toFixed(1)} puntos más allá de ${nivel}, y el tope es ${tope.toFixed(1)}: ${vuelta ? 'no se da la vuelta' : 'hoy no se entra'}`)
+      noSigue()
+      return
+    }
+    const correlacion = cartera?.noCabe({ ticker: dia.ticker, lado, riesgoEur: plan.riesgoEur, saldo: plan.saldo })
+    if (correlacion) {
+      apuntar(dia, `Rotura de ${nivel}, pero ${vuelta ? 'no se da la vuelta' : 'hoy no se entra'}: ${correlacion}`)
       noSigue()
       return
     }
@@ -1282,6 +1308,11 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     if ('riesgoPct' in cambios) numero('riesgoPct', 0.1, 10, 'Riesgo por operación entre el 0,1% y el 10% de la cuenta')
     if ('deslizamientoMaxR' in cambios) numero('deslizamientoMaxR', 0.01, 2, 'Deslizamiento máximo entre 0,01 y 2 veces el bracket')
     if ('rangoMaxPct' in cambios) numero('rangoMaxPct', 0.01, 10, 'Rango máximo entre 0,01% y 10%')
+    if ('margenNoticias' in cambios) {
+      const v = cambios.margenNoticias === null || cambios.margenNoticias === '' ? null : Number(cambios.margenNoticias)
+      if (v !== null && !(v >= 1 && v <= 120)) throw new Error('Margen de las noticias entre 1 y 120 min, o ninguno')
+      c.margenNoticias = v
+    }
     if (c.modo === 'flip' && c.stopPct !== 1) throw new Error('Flip the switch necesita el stop al otro lado del bracket, que es justo donde entra el sentido contrario')
     const antes = datos.config
     datos.config = c

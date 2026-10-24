@@ -7,12 +7,12 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
 import { crearCartera } from '../server/cartera.js'
-import { INDICES_TORTUGAS, prepararMercado, backtestTortugas, ordenesManana } from '../src/tortugas.js'
+import { INDICES_TORTUGAS, prepararMercado, backtestTortugas, ordenesManana, nHastaStop } from '../src/tortugas.js'
 
 // Hora local de Fráncfort en un día de octubre o noviembre de 2026 → instante UTC en segundos
 const fra = (mes, dia, h, m = 0, s = 0) => {
@@ -263,7 +263,8 @@ function botDePrueba(ig, diarios, cambios = {}, { cartera, noticias } = {}) {
       return diarios[ticker] ?? []
     },
   })
-  bot.cambiarConfig({ activo: true, ...cambios })
+  // un 5% por pirámide: con 6 unidades (pico de 5 N), 1 N por unidad cuesta el 1% del saldo
+  bot.cambiarConfig({ activo: true, riesgoPct: 5, ...cambios })
   return { bot, dir, avisos, pedidas, enHora: x => { t = x }, archivo: join(dir, 'Bot Tortugas.json') }
 }
 const soloDax = { instrumentos: { '^N225': false, '^GDAXI': true, '^FTSE': false, '^NDX': false, '^GSPC': false, '^DJI': false, '^RUT': false } }
@@ -559,10 +560,17 @@ test('la configuración se valida y un cambio de riesgo rehace los planes', asyn
     bot.cambiarConfig({ riesgoPct: 2 })
     assert.equal(mercado(bot, '^GDAXI').plan, null)
     await bot._paso()
-    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 1.3)   // con los dos sistemas, cada entrada con todo el capital: 400 / 300
+    // el 2% es lo que pierde la pirámide llena (6 unidades, 5 N): 400 € / 5 = 80 € por N
+    assert.equal(mercado(bot, '^GDAXI').plan.riesgoEurN, 80)
+    // con los dos sistemas, cada entrada con todo el capital; con una unidad el pico es 2 N: 200 € por N, 200 / 300
+    bot.cambiarConfig({ maxUnidades: 1 })
+    assert.equal(mercado(bot, '^GDAXI').plan, null)
+    await bot._paso()
+    assert.equal(mercado(bot, '^GDAXI').plan.riesgoEurN, 200)
+    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 0.6)
     bot.cambiarConfig({ sistemas: [2] })
     await bot._paso()
-    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 1.3)   // y con el Sistema 2 solo, lo mismo
+    assert.equal(mercado(bot, '^GDAXI').plan.unidad.tamano, 0.6)   // y con el Sistema 2 solo, lo mismo
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
@@ -592,7 +600,8 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con todo el c
 
     // rompe 55 lejos de la unidad del 1 (con una sola unidad, el 1 no añade): entra también el
     // Sistema 2, en una posición aparte
-    bot.cambiarConfig({ maxUnidades: 1 })
+    // (con una unidad el pico de la pirámide es 2 N: un 2% deja 1 N en el 1%, como antes)
+    bot.cambiarConfig({ maxUnidades: 1, riesgoPct: 2 })
     ig.precios['^GDAXI'] = [25_405, 25_406]
     vela1m('^GDAXI', fra(11, 23, 11), 25_406, 25_390)
     enHora(fra(11, 23, 11, 0, 20)); await bot._paso()
@@ -806,4 +815,22 @@ test('el añadido que salta las unidades del otro sistema siempre termina, aunqu
   // en corto, hacia abajo
   const corto = { lado: 'corto', n0: 301.7, unidades: [{ entrada: 25_100 }] }
   assert.ok(Math.abs(siguienteAnadido(corto, [24_999.9]) - (24_999.9 - 150.85)) < 1e-6)
+})
+
+test('la pirámide llena pierde como mucho riesgoPct: su peor punto, 5 N con 4 o más unidades', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(picoPiramide), [2, 3.5, 4.5, 5, 5, 5])
+  // el mismo que el del backtest
+  for (let k = 1; k <= 10; k++) assert.equal(picoPiramide(k), Math.max(...Array.from({ length: k }, (_, i) => nHastaStop(i + 1))))
+  // con el 1% y 6 unidades, 1 N por unidad cuesta el 0,2%: con 3 añadidos (4 unidades), 5 × 0,2 = 1%
+  assert.equal(nHastaStop(4) * 1 / picoPiramide(6), 1)
+})
+
+test('los planes de cuando riesgoPct era por N y unidad se rehacen al arrancar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'tortugas-'))
+  const archivo = join(dir, 'Bot Tortugas.json')
+  writeFileSync(archivo, JSON.stringify({ config: { riesgoPct: 1 }, planes: { '^GDAXI': { fecha: '2026-10-23', sistemas: {}, riesgoEurN: 200 }, '^FTSE': { fecha: '2026-10-23', sistemas: {}, picoN: 5, riesgoEurN: 40 } } }))
+  const bot = crearBotTortugas({ ig: {}, velasDiarias: async () => [], archivo, log: () => {} })
+  try {
+    assert.deepEqual(Object.keys(bot._datos().planes), ['^FTSE'])
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

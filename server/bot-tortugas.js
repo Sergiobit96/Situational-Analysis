@@ -11,8 +11,10 @@
 //     posiciones (un índice puede tener una de cada), y cada entrada va con todo el capital.
 //     Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene una
 //     unidad a menos de ½ N), solo se ejecuta una. Por defecto, solo largos, como el backtest;
-//   · una unidad es el tamaño con el que 1 N cuesta un `riesgoPct` % del capital del sistema
-//     (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest); el stop de
+//   · `riesgoPct` es lo más que pierde una pirámide si salta su stop, en % del capital del
+//     sistema (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest): con
+//     el stop a 2 N y añadidos cada ½ N, la peor es la de 4 o 5 unidades, 5 N, así que una
+//     unidad es el tamaño con el que 1 N cuesta un quinto de `riesgoPct`; el stop de
 //     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
 //     protegida de noche, en fin de semana o con el servidor caído;
 //   · pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`,
@@ -140,8 +142,8 @@ export const CONFIG_TORTUGAS_BOT = {
   sistemas:     [1, 2],     // los que juega, a la vez y con el capital a partes iguales
   filtroS1:     false,      // true: el Sistema 1 se salta la ruptura de 20 si la anterior habría ganado y entra en la de 55
   lados:        'largos',   // largos | ambos | cortos
-  riesgoPct:    1,          // lo que cuesta 1 N por unidad, en % del saldo (en cada sistema: todo el capital)
-                            // (el backtest usa 0,2 con 8 índices; las tortugas, 1)
+  riesgoPct:    1,          // lo más que pierde una pirámide hasta el stop, en % del saldo (en cada sistema: todo el capital);
+                            // 1 N por unidad cuesta riesgoPct / picoPiramide(maxUnidades): con 6 unidades, 0,2 (como el backtest)
   maxUnidades:  6,          // por índice y sistema, con la entrada
   maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
   maxSentido:   15,         // por sentido y sistema
@@ -152,6 +154,11 @@ export const CONFIG_TORTUGAS_BOT = {
 
 export const PASO_N = 0.5          // N entre añadidos
 export const STOP_N = 2            // N hasta el stop desde el último relleno
+// Lo que pierde una pirámide de k unidades si salta su stop, en N por unidad: la unidad i (desde
+// 0) pierde STOP_N − (k − 1 − i)·PASO_N (como nHastaStop en src/tortugas.js). Y su peor punto
+// hasta `maxUnidades`: 2 N con una, 3,5 con dos, 4,5 con tres y 5 con cuatro o más
+export const nHastaStop = k => (k > 0 ? k * STOP_N - PASO_N * k * (k - 1) / 2 : 0)
+export const picoPiramide = maxUnidades => Math.max(...Array.from({ length: Math.max(1, maxUnidades) }, (_, i) => nHastaStop(i + 1)))
 export const APALANCAMIENTO = 10   // nominal total de las posiciones (de los dos sistemas) / saldo, como mucho
 const MARGEN_MAX = 0.4             // una orden no puede pedir más margen que esta parte del disponible
 const PREFIJO = 'TOR'              // + el sistema: TOR1-…, TOR2-…
@@ -290,7 +297,7 @@ const DESCRIBIR = {
   sistemas:    describirSistemas,
   filtroS1:    v => (v ? 'Filtro del Sistema 1: si la ruptura anterior habría ganado, espera a la de 55' : 'Sistema 1 sin filtro: entra en toda ruptura de 20'),
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
-  riesgoPct:   v => `Riesgo: 1 N por unidad cuesta el ${String(v).replace('.', ',')}% del saldo`,
+  riesgoPct:   v => `Riesgo: una pirámide pierde como mucho el ${String(v).replace('.', ',')}% del saldo si salta su stop`,
   maxUnidades: v => `Hasta ${v} unidades por índice y sistema`,
   maxGrupo:    v => `Hasta ${v} unidades por grupo, sentido y sistema`,
   maxSentido:  v => `Hasta ${v} unidades por sentido y sistema`,
@@ -324,6 +331,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       }
     }
     for (const [t, p] of Object.entries(datos.planes)) if (!p?.sistemas && !p?.error) delete datos.planes[t]
+    // Los planes de cuando riesgoPct era lo que costaba 1 N por unidad (no traen picoN): se rehacen
+    for (const [t, p] of Object.entries(datos.planes)) if (p?.sistemas && p.picoN == null) delete datos.planes[t]
   } catch { /* primera vez */ }
 
   let guardado = JSON.stringify(datos, null, 2)
@@ -415,13 +424,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s, cfg.filtroS1)])),
     })
 
-    // La unidad sale del saldo de la cuenta y de la N: riesgoPct % del capital por cada N, en
-    // cada entrada (los sistemas no se reparten el capital)
+    // La unidad sale del saldo de la cuenta y de la N: que la pirámide llena pierda como mucho
+    // riesgoPct % del capital hasta el stop, en cada entrada (los sistemas no se reparten el capital)
     const cuenta = await cuentaReciente()
     if (!(cuenta?.saldo > 0)) return falla('IG no da el saldo de la cuenta: sin él no se sabe el tamaño')
     datos.picoSaldo = Math.max(datos.picoSaldo ?? cuenta.saldo, cuenta.saldo)
     const nominal = capitalNominal(cuenta.saldo, datos.picoSaldo, cfg.reduccionDD)
-    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, riesgoEurN: nominal * cfg.riesgoPct / 100 })
+    const picoN = picoPiramide(cfg.maxUnidades)
+    Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, picoN, riesgoEurN: nominal * cfg.riesgoPct / 100 / picoN })
     const descartes = []
     for (const epic of EPICS_OPERAR[ticker] ?? [null]) {
       const m = await ig.operar.datosMercado(ticker, epic)
@@ -999,7 +1009,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
     if ('riesgoPct' in cambios) {
       const n = Number(cambios.riesgoPct)
-      if (!(n >= 0.05 && n <= 5)) throw new Error('Riesgo por N entre el 0,05% y el 5% del saldo')
+      if (!(n >= 0.05 && n <= 5)) throw new Error('Riesgo por pirámide entre el 0,05% y el 5% del saldo')
       c.riesgoPct = n
     }
     if ('maxUnidades' in cambios) entero('maxUnidades', 1, 10, 'Unidades por índice: de 1 a 10')
@@ -1015,7 +1025,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const antes = datos.config
     datos.config = c
     // lo que cambia los niveles o la unidad obliga a rehacer los planes
-    if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
+    if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'maxUnidades', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
     guardar()
     const lineas = Object.entries(DESCRIBIR).filter(([k]) => !igual(antes[k], c[k])).map(([k, describir]) => describir(c[k]))
     for (const t of Object.keys(GRUPOS_TORTUGAS)) {

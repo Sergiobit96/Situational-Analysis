@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
-import { peorHastaStops } from './tortugas'
+import { peorHastaStops, nHastaStop } from './tortugas'
 import { rupturaMasCercana, acumulado } from './botCalculos'
 import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
@@ -127,7 +127,11 @@ export default function BotTortugas() {
     grupos: Object.values(mercados.filter(m => m.encendido).reduce((n, m) => ({ ...n, [m.grupo]: (n[m.grupo] ?? 0) + 1 }), {})),
     maxUnidades: config.maxUnidades, maxGrupo: config.maxGrupo, maxSentido: config.maxSentido, stopN: reglas.stopN, paso: reglas.pasoN,
   })
-  const peorPct = peor.n * config.riesgoPct * config.sistemas.length
+  // riesgoPct es lo más que pierde una pirámide llena hasta su stop: 1 N por unidad cuesta eso
+  // entre el peor punto de la pirámide (5 N con 4 o más unidades)
+  const picoN = Math.max(...Array.from({ length: Math.max(1, config.maxUnidades) }, (_, i) => nHastaStop(i + 1, reglas.stopN, reglas.pasoN)))
+  const porN = config.riesgoPct / picoN
+  const peorPct = peor.n * porN * config.sistemas.length
   const alStopPct = saldo && abiertas.length ? (100 * -alStop) / saldo : 0
 
   // La tabla, por grupos (con su cabecera) o de la ruptura más cercana a la más lejana
@@ -144,7 +148,7 @@ export default function BotTortugas() {
         <div>
           <div className={`bot-interruptor ${config.activo ? 'encendido' : ''}`}>{config.activo ? '● Encendido' : '○ Apagado'}</div>
           <p className="bot-nota">
-            Tortugas · {sistemasTexto} · {ladosTexto} · 1 N por unidad = {num(config.riesgoPct, 2)}% del saldo{dosSistemas ? ' en cada entrada, de cualquier sistema' : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
+            Tortugas · {sistemasTexto} · {ladosTexto} · pirámide llena hasta el stop = {num(config.riesgoPct, 2)}% del saldo (1 N por unidad = {num(porN, 2)}%){dosSistemas ? ' en cada entrada, de cualquier sistema' : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
           </p>
           {!opera && <p className="bot-aviso">Este servidor no opera (BOT_OPERA no es 1): el registro es el suyo, pero las órdenes las manda el servidor que tenga BOT_OPERA=1.</p>}
         </div>
@@ -290,7 +294,7 @@ export default function BotTortugas() {
               <option value="cortos">Solo cortos</option>
             </select>
           </label>
-          <label>1 N por unidad (% del saldo, entre los sistemas)
+          <label>Pérdida máxima de una pirámide hasta el stop (% del saldo, en cada sistema)
             <input type="number" min="0.05" max="5" step="0.05" value={editando.riesgoPct} onChange={e => cambiar('riesgoPct', e.target.value)} />
           </label>
           <label>Unidades por índice y sistema
@@ -322,10 +326,10 @@ export default function BotTortugas() {
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
           Cada entrada va con todo el capital, y cada sistema lleva sus propias posiciones y límites, así que con los dos llenos se arriesga el doble que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
           Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene en ese mercado una unidad del mismo sentido a menos de {num(reglas.pasoN, 1)} N), solo se ejecuta una vez.
-          Una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta ese % del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
-          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * config.riesgoPct * config.sistemas.length, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peorPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
+          Ese % es lo más que pierde una pirámide si salta su stop, en su peor punto ({num(picoN, 1)} N con estas unidades): una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta un {num(porN, 2)}% del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
+          Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * porN * config.sistemas.length, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peorPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
           (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
-          El backtest usa un 0,2% repartido en 8 índices; las tortugas originales, un 1%. Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
+          El backtest usa 1 N por unidad = 0,2% (un 1% por pirámide llena de 6 unidades); las tortugas originales, 1 N = 1% (un 5% por pirámide). Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
           Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
           Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.

@@ -2173,36 +2173,60 @@ Tu trabajo es decir si el resultado es sólido o frágil, no optimizarlo. Escrib
 
 Texto plano, sin títulos ni negritas, en cinco bloques cortos separados por una línea en blanco: el veredicto en dos frases con las cifras clave; de dónde sale el resultado; lo que lo hace frágil; el riesgo de operarlo; y una o dos pruebas concretas para hacer en la pestaña (cambiar un ajuste, quitar un mercado, mover el año de inicio...) que confirmarían o desmontarían la conclusión. Como mucho 350 palabras.`
 
+// Las estrategias intradía de la pestaña (SRS, Rule of 4, primera vela de 1 h, first bar
+// negative) van por el mismo camino, con su propio prompt: el `tipo` lo elige.
+const PROMPT_REVISION_INTRADIA = `Eres quien revisa los backtests intradía de un trader que opera CFD de índices desde Madrid con IG y quiere llevar a un bot alguna de estas estrategias de rotura: el máximo y el mínimo de una vela concreta de la sesión (la segunda de 15 min, la primera hora, la primera de 5 min, la cuarta de 10 min tras el FOMC) forman un bracket, se entra en la primera rotura con el stop al otro lado (o a mitad de la vela), a veces con vuelta de la posición al saltar el stop, break even, pirámide u objetivo, y lo que sigue abierto se cierra con la sesión. Te paso el expediente de un backtest: la estrategia, las sesiones analizadas, los ajustes, el resultado en puntos del instrumento y en R (el riesgo inicial de cada día), el año a año, las dos mitades del periodo, el drawdown, la concentración en las mejores sesiones, el desglose por lado, por salida, por pirámide y por día de la semana, la robustez con los otros stops y volúmenes en las mismas sesiones y las limitaciones de los datos.
+
+Tu trabajo es decir si la ventaja es sólida o frágil, no optimizarla. Escribe en español y de tú:
+- Mira primero cuántas operaciones hay: con pocas, dilo y no saques conclusiones fuertes.
+- Busca de qué depende el resultado: unas pocas sesiones, un año, un lado, un día de la semana, las pirámides. Da las cifras.
+- Compara las dos mitades y el año a año. Mira si la configuración puesta gana por poco a las otras combinaciones de stop y volumen (señal de ajuste a la historia) o si el resultado aguanta en todas.
+- Si se filtran sesiones (color de la primera vela, apertura respecto a ayer, días de la semana), recuerda que cada filtro reduce la muestra y suma riesgo de casualidad.
+- Juzga si el resultado medio por operación aguanta el spread y el deslizamiento reales de un CFD de índice si los costes del expediente están a cero, y cuánta racha perdedora y drawdown habría que aguantar.
+- No inventes nada que no esté en el expediente.
+
+Texto plano, sin títulos ni negritas, en cinco bloques cortos separados por una línea en blanco: el veredicto en dos frases con las cifras clave; de dónde sale el resultado; lo que lo hace frágil; lo que costaría operarlo (costes, rachas, drawdown); y una o dos pruebas concretas para hacer en la pestaña (cambiar un ajuste, otro instrumento, otro periodo, poner costes...) que confirmarían o desmontarían la conclusión. Como mucho 350 palabras.`
+
+const PROMPTS_BACKTEST = {
+  tortugas: [PROMPT_REVISION_BACKTEST, 'Expediente del backtest'],
+  intradia: [PROMPT_REVISION_INTRADIA, 'Expediente del backtest intradía'],
+}
+
 const MAX_CLAVE_BACKTEST = 20_000
-const idBacktest = clave => createHash('sha256').update(clave).digest('hex').slice(0, 16)
+// las de las tortugas conservan el id de antes de que hubiera tipos
+const idBacktest = (clave, tipo = 'tortugas') =>
+  createHash('sha256').update(tipo === 'tortugas' ? clave : `${tipo}|${clave}`).digest('hex').slice(0, 16)
 
 app.get('/api/revision-backtest', (req, res) => {
   if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
   const clave = String(req.query.clave ?? '')
+  const tipo = String(req.query.tipo ?? 'tortugas')
   if (!clave || clave.length > MAX_CLAVE_BACKTEST) return res.status(400).json({ error: 'falta la clave del backtest' })
-  res.json({ revision: leerRevisiones(REVISIONES_BACKTEST_PATH)[idBacktest(clave)] ?? null })
+  if (!Object.hasOwn(PROMPTS_BACKTEST, tipo)) return res.status(400).json({ error: 'tipo de backtest desconocido' })
+  res.json({ revision: leerRevisiones(REVISIONES_BACKTEST_PATH)[idBacktest(clave, tipo)] ?? null })
 })
 
 app.post('/api/revision-backtest', async (req, res) => {
   if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
-  const { clave, expediente } = req.body ?? {}
+  const { clave, expediente, tipo = 'tortugas' } = req.body ?? {}
   if (typeof clave !== 'string' || !clave || clave.length > MAX_CLAVE_BACKTEST) {
     return res.status(400).json({ error: 'falta la clave del backtest' })
   }
+  if (!Object.hasOwn(PROMPTS_BACKTEST, tipo)) return res.status(400).json({ error: 'tipo de backtest desconocido' })
   if (!expediente?.resultado || !expediente.periodo?.hasta) {
     return res.status(400).json({ error: 'El backtest no tiene resultado que revisar' })
   }
 
   try {
     const revision = {
-      ...await escribirRevision(PROMPT_REVISION_BACKTEST, `Expediente del backtest:\n\n${JSON.stringify(expediente, null, 2)}`),
+      ...await escribirRevision(PROMPTS_BACKTEST[tipo][0], `${PROMPTS_BACKTEST[tipo][1]}:\n\n${JSON.stringify(expediente, null, 2)}`),
       // para que el JSON se pueda leer a mano, y para avisar cuando el backtest tenga más sesiones
       universo: expediente.universo,
       configuracion: expediente.configuracion,
       datosHasta: expediente.periodo.hasta,
       conVariantes: Array.isArray(expediente.variantes),
     }
-    guardarRevision(REVISIONES_BACKTEST_PATH, idBacktest(clave), revision)
+    guardarRevision(REVISIONES_BACKTEST_PATH, idBacktest(clave, tipo), revision)
     res.json({ revision })
   } catch (err) {
     responderErrorRevision(res, err, 'revision-backtest')

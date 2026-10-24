@@ -7,6 +7,7 @@ import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
 import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
 import Robustez from './Robustez'
+import RevisionBacktest from './RevisionBacktest'
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
@@ -922,6 +923,32 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     setMostradas(POR_PAGINA)
   }
 
+  // La revisión con Claude va con lo analizado y con todo lo que cambia el resultado: al
+  // volver a esos ajustes sale la que ya se pagó
+  const claveRevision = JSON.stringify({
+    estrategia: estrategiaId, analizado, modo: modoEfectivo, volumen, tamano, nivelStop, stopModo,
+    tp: tpValor, coste: Number(coste), vela1, aperturaPos,
+  })
+  const armarExpediente = () => expedienteIntradia({
+    estr, nombre: INSTRUMENTOS.find(i => i.value === tickerVisto)?.label ?? tickerVisto,
+    base: baseAnalisis,
+    configuracion: {
+      operativa: modos.find(m => m.id === modoEfectivo)?.label,
+      volumen: volumenes.find(v => v.id === volumen)?.nota,
+      ...(volumen !== 'fijo' ? { anadidos: TAMANOS.find(t => t.id === tamano)?.nota } : {}),
+      ...(!estr.tortuga ? {
+        stop: NIVELES.find(n => n.id === nivelStop)?.nota,
+        breakEven: STOPS.find(x => x.id === stopModo)?.nota,
+      } : {}),
+      objetivo: tpValor != null ? `cierra al ganar un ${tpValor}% del índice con toda la posición` : 'sin objetivo',
+      costesPorUnidadPts: Number(coste),
+      primeraVela: vela1,
+      aperturaRespectoAAyer: aperturaPos,
+    },
+    analizadas, resumen, mitades,
+    robustez: { combos: combosRobustez, matriz: matrizRobustez(), actual: `${stopModo}|${volumen}` },
+  })
+
   // De dónde salen los resultados, tal como se analizaron
   const baseAnalisis = analizado && (() => {
     const diasTxt = nombreDias(new Set(analizado.dias.split(',').filter(Boolean).map(Number)))
@@ -1333,6 +1360,19 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           <Robustez serie={serieRobustez} combos={combosRobustez} filas={STOPS.map(x => x.label)} columnas={volumenes.map(v => v.label)}
             matrizDe={matrizRobustez} actual={`${stopModo}|${volumen}`} nombreMedida="bracket en % del precio" />
 
+          {resumen.nOps > 0 && (
+            <RevisionBacktest
+              tipo="intradia"
+              clave={claveRevision}
+              armar={armarExpediente}
+              hasta={validasEnOrden.at(-1).sesion.date}
+              nota={<>Claude lee el resumen, los años, las dos mitades, el drawdown, de dónde sale el resultado (lados, salidas,
+                pirámide, días de la semana, las mejores sesiones) y la robustez con los otros stops y volúmenes, y dice si la
+                ventaja es sólida o frágil y qué probar para comprobarlo. Lee las sesiones que cuentan ahora, con la operativa
+                puesta: cada combinación de ajustes guarda su revisión.</>}
+            />
+          )}
+
           <div className="filtro-group">
             <label className="filtro-label">
               Gráficos
@@ -1392,6 +1432,127 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       )}
     </div>
   )
+}
+
+// Lo que lee Claude de un backtest intradía, en JSON: el resumen, el año a año, las mitades, el
+// drawdown, de dónde sale el resultado y la robustez con los otros stops y volúmenes. Todo en
+// puntos del instrumento y en R (el riesgo de cada día), sin dinero ni interés compuesto.
+const r2 = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null)
+const DIA_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+
+function cifrasDe(ops) {
+  const pts = ops.map(o => o.pts)
+  const ganado  = pts.filter(p => p > 0).reduce((a, b) => a + b, 0)
+  const perdido = -pts.filter(p => p < 0).reduce((a, b) => a + b, 0)
+  return {
+    operaciones: ops.length,
+    ganadorasPct: ops.length ? r2(100 * pts.filter(p => p > 0).length / ops.length) : null,
+    totalPts: r2(pts.reduce((a, b) => a + b, 0)),
+    totalR: r2(ops.reduce((n, o) => n + o.r, 0)),
+    profitFactor: perdido > 0 ? r2(ganado / perdido) : ganado > 0 ? 'sin pérdidas' : null,
+  }
+}
+
+function agruparOps(ops, clave) {
+  const grupos = {}
+  for (const o of ops) (grupos[clave(o)] ??= []).push(o)
+  return Object.fromEntries(Object.entries(grupos).map(([k, xs]) => [k, cifrasDe(xs)]))
+}
+
+function expedienteIntradia({ estr, nombre, base, configuracion, analizadas, resumen: r, mitades, robustez }) {
+  const validas = analizadas.filter(x => x.analisis.valido).sort((a, b) => a.sesion.date.localeCompare(b.sesion.date))
+  const ops = validas.filter(x => x.analisis.entrada).map(({ sesion, analisis: a }) => ({
+    fecha: sesion.date, lado: a.lado, salida: a.salida.motivo, unidades: a.unidades,
+    vuelta: a.piernas?.length > 0, ambigua: a.ambigua,
+    pts: a.resultadoTotalPts ?? a.resultadoPts, r: a.resultadoTotalR ?? a.resultadoR,
+    bracketPts: a.rango,
+  }))
+  const curva = curvaEquity(ops.map(o => ({ date: o.fecha, pts: o.pts })))
+  const porR = [...ops].sort((a, b) => b.r - a.r)
+  const totalR = ops.reduce((n, o) => n + o.r, 0)
+  const sinLasMejores = k => r2(totalR - porR.slice(0, k).reduce((n, o) => n + o.r, 0))
+  const apunte = o => ({
+    fecha: o.fecha, lado: o.lado, salida: o.salida, unidades: o.unidades, resultadoPts: r2(o.pts), resultadoR: r2(o.r),
+    bracketPts: r2(o.bracketPts), ...(o.vuelta ? { conVuelta: true } : {}),
+  })
+  const mitad = m => ({
+    desde: m.desde, hasta: m.hasta, sesiones: m.r.n, operaciones: m.r.nOps, ganadorasPct: r2(m.r.pctGanadas),
+    totalPts: r2(m.r.totalPts), totalR: r2(m.r.totalR),
+    profitFactor: m.r.profitFactor == null ? 'sin pérdidas' : r2(m.r.profitFactor),
+    maxDrawdownPts: r2(m.curva.maxDD), sinLaMejorSesionPts: m.curva.mejor ? r2(m.curva.total - m.curva.mejor.pts) : null,
+  })
+  // el total en R de cada combinación de stop y volumen con las mismas sesiones
+  const combos = robustez.combos.map(c => {
+    const rs = robustez.matriz.map(f => f[c.clave]).filter(v => v !== 0)
+    const ganado  = rs.filter(v => v > 0).reduce((a, b) => a + b, 0)
+    const perdido = -rs.filter(v => v < 0).reduce((a, b) => a + b, 0)
+    return {
+      stop: c.fila, volumen: c.columna, ...(c.clave === robustez.actual ? { esLaPuesta: true } : {}),
+      totalR: r2(rs.reduce((a, b) => a + b, 0)), profitFactorEnR: perdido > 0 ? r2(ganado / perdido) : null,
+    }
+  })
+
+  return {
+    estrategia: estr.nota,
+    universo: base,
+    instrumento: nombre,
+    unidades: 'puntos del instrumento por unidad; R es el riesgo inicial de cada día (el bracket, o su mitad con el stop al 50%)',
+    configuracion,
+    periodo: { desde: validas[0].sesion.date, hasta: validas.at(-1).sesion.date, sesiones: validas.length },
+    resultado: {
+      sesionesSinDatosSuficientes: r.descartadas,
+      diasConOperacionPct: r2(r.pctEntrada),
+      operaciones: r.nOps,
+      cortos: r.nCortos,
+      sesionesConVuelta: r.nFlips,
+      ganadorasPct: r2(r.pctGanadas),
+      totalPts: r2(r.totalPts),
+      totalR: r2(r.totalR),
+      mediaPorOperacionPts: r2(r.resultadoMedPts),
+      medianaPorOperacionPts: r2(r.resultadoMdnPts),
+      mediaPorOperacionR: r2(r.resultadoMed),
+      profitFactor: r.profitFactor == null ? 'sin pérdidas' : r2(r.profitFactor),
+      costesPts: r2(r.costePts),
+      saltaElStopPct: r2(r.pctVenta),
+      breakEvenPct: r2(r.pctBE),
+      stopA2NPct: r2(r.pctStopN),
+      objetivoPct: r2(r.pctObjetivo),
+      recorridoMaximoMedianoR: r2(r.mfeMed),
+      llegaA1RPct: r2(r.pct1R),
+      llegaA2RPct: r2(r.pct2R),
+      bracketMedianoPts: r2(r.rangoMedPts),
+      bracketMedianoPctDelPrecio: r2(r.rangoMedPct),
+      minutosMedianosHastaLaEntrada: r.minutosMed,
+    },
+    curva: {
+      maxDrawdownPts: r2(curva.maxDD),
+      peorDrawdown: { desde: curva.peorDD.desde, hasta: curva.peorDD.hasta, pts: r2(curva.peorDD.profundidad), operaciones: curva.peorDD.sesiones },
+      drawdownAlFinalPts: r2(curva.ddActual),
+      peorRachaPerdedora: curva.peorRachaP,
+      mejorRachaGanadora: curva.mejorRachaG,
+    },
+    porAnio: agruparOps(ops, o => o.fecha.slice(0, 4)),
+    mitadesDelPeriodo: mitades ? [mitad(mitades.primera), mitad(mitades.segunda)] : 'menos de 40 sesiones: no se parte',
+    concentracion: {
+      totalR: r2(totalR),
+      sinLaMejor: sinLasMejores(1),
+      sinLas5Mejores: sinLasMejores(5),
+      sinEl10PorCientoMejor: sinLasMejores(Math.max(1, Math.round(ops.length * 0.1))),
+    },
+    porLado: agruparOps(ops, o => o.lado),
+    porSalida: agruparOps(ops, o => o.salida),
+    ...(ops.some(o => o.unidades > 1) ? { porUnidadesAlCerrar: agruparOps(ops, o => o.unidades) } : {}),
+    porDiaDeLaSemana: agruparOps(ops, o => DIA_SEMANA[new Date(`${o.fecha}T12:00:00Z`).getUTCDay()]),
+    mejoresSesiones: porR.slice(0, 8).map(apunte),
+    peoresSesiones: porR.slice(-8).reverse().map(apunte),
+    robustezConOtrosStopsYVolumenes: combos,
+    limitacionesDeLosDatos: [
+      'Las órdenes se llenan justo en el nivel, sin deslizamiento; los únicos costes son los del ajuste de costes.',
+      'Una vela que entra y toca el stop se lee como la operación que salta en esa misma vela, y se afina con velas más ' +
+        `finas cuando las hay; ${ops.filter(o => o.ambigua).length} operaciones son así.`,
+      'Lo que no salta se cierra con la sesión, al cierre de su última vela.',
+    ],
+  }
 }
 
 // Fila de cifras del conjunto. El valor va siempre en tinta normal: el color lo

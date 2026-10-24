@@ -4,7 +4,7 @@ import { madridOffsetAt } from './timezone'
 import {
   INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, prepararColumnas, backtestTortugas,
   metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, resumenPorGrupo, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
-  picoPiramide, riesgoPorN,
+  picoPiramide, riesgoPorN, expedienteBacktest,
 } from './tortugas'
 import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
@@ -887,7 +887,16 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <Piramide res={res} />
           <Robustez serie={serieRobustez} unidad="%" titulo="Robustez de las operaciones (en % del capital)" />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
-          <RevisionBacktest clave={claveCfg} res={res} universo={universo} variantes={variantes?.clave === claveCfg ? variantes.filas : null} />
+          <RevisionBacktest
+            clave={claveCfg}
+            armar={() => expedienteBacktest(res, { universo, variantes: variantes?.clave === claveCfg ? variantes.filas : null })}
+            hasta={res.curva.at(-1).date}
+            hayVariantes={variantes?.clave === claveCfg}
+            nota={<>Claude lee el resumen, los años, las peores caídas, las dos mitades del periodo, de dónde sale el
+              beneficio (mercados, pirámide, lados, las mejores operaciones) y las limitaciones de los datos, y dice si
+              el resultado es sólido o frágil y qué probar para comprobarlo. Si antes pulsas <strong>Comparar
+              variantes</strong>, también las tiene en cuenta para juzgar si estos ajustes están hechos a medida de la historia.</>}
+          />
           <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} futuros={futuros} />
           <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} futuros={futuros} />
           {futuros ? (

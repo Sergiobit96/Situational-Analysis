@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide, nHastaStop as nHastaStopBot } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -818,7 +818,7 @@ test('el añadido que salta las unidades del otro sistema siempre termina, aunqu
 })
 
 test('la pirámide llena pierde como mucho riesgoPct: su peor punto, 5 N con 4 o más unidades', () => {
-  assert.deepEqual([1, 2, 3, 4, 5, 6].map(picoPiramide), [2, 3.5, 4.5, 5, 5, 5])
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => picoPiramide(k)), [2, 3.5, 4.5, 5, 5, 5])
   // el mismo que el del backtest
   for (let k = 1; k <= 10; k++) assert.equal(picoPiramide(k), Math.max(...Array.from({ length: k }, (_, i) => nHastaStop(i + 1))))
   // con el 1% y 6 unidades, 1 N por unidad cuesta el 0,2%: con 3 añadidos (4 unidades), 5 × 0,2 = 1%
@@ -832,5 +832,28 @@ test('los planes de cuando riesgoPct era por N y unidad se rehacen al arrancar',
   const bot = crearBotTortugas({ ig: {}, velasDiarias: async () => [], archivo, log: () => {} })
   try {
     assert.deepEqual(Object.keys(bot._datos().planes), ['^FTSE'])
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('con añadidos de media unidad, cada añadido es la mitad y la pirámide sigue en riesgoPct', async () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStopBot(k, 0.5)), [2, 2.5, 2.75, 2.75, 2.5, 2])
+  assert.equal(picoPiramide(6, 0.5), 2.75)
+  for (let k = 1; k <= 8; k++) assert.equal(nHastaStopBot(k, 0.5), nHastaStop(k, 2, 0.5, 0.5))
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  // un 5% por pirámide con añadidos de media: 1 N por unidad, el 5 / 2,75 = 1,82% (363,6 €; N ≈ 300, 1,2 contratos)
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-11-30') }, { ...soloS1, lados: 'ambos', anadido: 0.5, riesgoPct: 5 })
+  try {
+    assert.throws(() => bot.cambiarConfig({ anadido: 0.3 }), /una unidad o de media/)
+    enHora(fra(12, 1, 9, 0, 5)); await bot._paso()
+    assert.equal(mercado(bot, '^GDAXI').plan.picoN, 2.75)
+    assert.ok(Math.abs(mercado(bot, '^GDAXI').plan.riesgoEurN - 20_000 * 0.05 / 2.75) < 1e-9)
+    ig.precios['^GDAXI'] = [24_845, 24_846]
+    vela1m('^GDAXI', fra(12, 1, 10), 24_860, 24_844)
+    enHora(fra(12, 1, 10, 0, 20)); await bot._paso()
+    ig.precios['^GDAXI'] = [24_694, 24_695]
+    vela1m('^GDAXI', fra(12, 1, 11), 24_710, 24_690)
+    enHora(fra(12, 1, 11, 0, 20)); await bot._paso()
+    // la entrada, 1,2; el añadido, 181,8 € por N: 0,61 → 0,6 (por encima del mínimo de IG, 0,5)
+    assert.deepEqual(posicion(bot, '^GDAXI').unidades.map(u => u.tamano), [1.2, 0.6])
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

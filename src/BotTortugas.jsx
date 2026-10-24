@@ -126,10 +126,11 @@ export default function BotTortugas() {
   const peor = peorHastaStops({
     grupos: Object.values(mercados.filter(m => m.encendido).reduce((n, m) => ({ ...n, [m.grupo]: (n[m.grupo] ?? 0) + 1 }), {})),
     maxUnidades: config.maxUnidades, maxGrupo: config.maxGrupo, maxSentido: config.maxSentido, stopN: reglas.stopN, paso: reglas.pasoN,
+    anadido: config.anadido ?? 1,
   })
   // riesgoPct es lo más que pierde una pirámide llena hasta su stop: 1 N por unidad cuesta eso
-  // entre el peor punto de la pirámide (5 N con 4 o más unidades)
-  const picoN = Math.max(...Array.from({ length: Math.max(1, config.maxUnidades) }, (_, i) => nHastaStop(i + 1, reglas.stopN, reglas.pasoN)))
+  // entre el peor punto de la pirámide (5 N con 4 o más unidades; 2,75 con añadidos de media)
+  const picoN = Math.max(...Array.from({ length: Math.max(1, config.maxUnidades) }, (_, i) => nHastaStop(i + 1, reglas.stopN, reglas.pasoN, config.anadido ?? 1)))
   const porN = config.riesgoPct / picoN
   const peorPct = peor.n * porN * config.sistemas.length
   const alStopPct = saldo && abiertas.length ? (100 * -alStop) / saldo : 0
@@ -297,6 +298,12 @@ export default function BotTortugas() {
           <label>Pérdida máxima de una pirámide hasta el stop (% del saldo, en cada sistema)
             <input type="number" min="0.05" max="5" step="0.05" value={editando.riesgoPct} onChange={e => cambiar('riesgoPct', e.target.value)} />
           </label>
+          <label>Tamaño de cada añadido
+            <select value={editando.anadido ?? 1} onChange={e => cambiar('anadido', Number(e.target.value))}>
+              <option value={1}>Una unidad, como las tortugas</option>
+              <option value={0.5}>Media unidad</option>
+            </select>
+          </label>
           <label>Unidades por índice y sistema
             <input type="number" min="1" max="10" step="1" value={editando.maxUnidades} onChange={e => cambiar('maxUnidades', e.target.value)} />
           </label>
@@ -330,14 +337,14 @@ export default function BotTortugas() {
           Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * porN * config.sistemas.length, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peorPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
           (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
           El backtest usa 1 N por unidad = 0,2% (un 1% por pirámide llena de 6 unidades); las tortugas originales, 1 N = 1% (un 5% por pirámide). Si el mínimo de IG obliga a más del doble de lo que toca, ese índice no opera (sale en la columna Unidad).
-          Pirámide: una unidad más cada {num(reglas.pasoN, 1)} N a favor, y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
+          Pirámide: {(config.anadido ?? 1) === 1 ? 'una unidad' : 'media unidad'} más cada {num(reglas.pasoN, 1)} N a favor (con media, la unidad sale más grande y el riesgo máximo es el mismo), y el stop de todas sube a {reglas.stopN} N de la última. El stop lo guarda IG, así que también puede saltar fuera de la sesión;
           las entradas, los añadidos y la salida por el canal, solo dentro de ella y a mercado.
           Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
-          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, filtro, lados o riesgo rehace los planes de todos los índices.
+          Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, filtro, lados, riesgo, unidades o añadido rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { sistemas, filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias } = form
-          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
+          const { sistemas, filtroS1, lados: l, riesgoPct, anadido, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias } = form
+          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, anadido: anadido ?? 1, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
     </div>

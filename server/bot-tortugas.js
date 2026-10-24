@@ -17,7 +17,8 @@
 //     unidad es el tamaño con el que 1 N cuesta un quinto de `riesgoPct`; el stop de
 //     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
 //     protegida de noche, en fin de semana o con el servidor caído;
-//   · pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`,
+//   · pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`
+//     (o media, con `anadido` = 0,5: la peor pirámide pierde entonces 2,75 N y la unidad crece),
 //     con los límites de cartera del backtest dentro de cada sistema (unidades por grupo y por
 //     sentido) y, entre los dos, el nominal total como mucho 10 veces el saldo.
 // Las entradas, los añadidos y la salida por el canal los decide el bot con el precio en
@@ -144,6 +145,7 @@ export const CONFIG_TORTUGAS_BOT = {
   lados:        'largos',   // largos | ambos | cortos
   riesgoPct:    1,          // lo más que pierde una pirámide hasta el stop, en % del saldo (en cada sistema: todo el capital);
                             // 1 N por unidad cuesta riesgoPct / picoPiramide(maxUnidades): con 6 unidades, 0,2 (como el backtest)
+  anadido:      1,          // tamaño de cada añadido, en unidades: 1 o 0,5 (la entrada, siempre una)
   maxUnidades:  6,          // por índice y sistema, con la entrada
   maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
   maxSentido:   15,         // por sentido y sistema
@@ -155,10 +157,13 @@ export const CONFIG_TORTUGAS_BOT = {
 export const PASO_N = 0.5          // N entre añadidos
 export const STOP_N = 2            // N hasta el stop desde el último relleno
 // Lo que pierde una pirámide de k unidades si salta su stop, en N por unidad: la unidad i (desde
-// 0) pierde STOP_N − (k − 1 − i)·PASO_N (como nHastaStop en src/tortugas.js). Y su peor punto
-// hasta `maxUnidades`: 2 N con una, 3,5 con dos, 4,5 con tres y 5 con cuatro o más
-export const nHastaStop = k => (k > 0 ? k * STOP_N - PASO_N * k * (k - 1) / 2 : 0)
-export const picoPiramide = maxUnidades => Math.max(...Array.from({ length: Math.max(1, maxUnidades) }, (_, i) => nHastaStop(i + 1)))
+// 0) pierde STOP_N − (k − 1 − i)·PASO_N, y cada añadido pesa `anadido` unidades (como nHastaStop
+// en src/tortugas.js). Y su peor punto hasta `maxUnidades`: con añadidos de una unidad, 2 N con
+// una, 3,5 con dos, 4,5 con tres y 5 con cuatro o más; con añadidos de media, 2,75 con tres o más
+export const nHastaStop = (k, anadido = 1) =>
+  (k > 0 ? STOP_N - (k - 1) * PASO_N + anadido * ((k - 1) * STOP_N - PASO_N * (k - 1) * (k - 2) / 2) : 0)
+export const picoPiramide = (maxUnidades, anadido = 1) =>
+  Math.max(...Array.from({ length: Math.max(1, maxUnidades) }, (_, i) => nHastaStop(i + 1, anadido)))
 export const APALANCAMIENTO = 10   // nominal total de las posiciones (de los dos sistemas) / saldo, como mucho
 const MARGEN_MAX = 0.4             // una orden no puede pedir más margen que esta parte del disponible
 const PREFIJO = 'TOR'              // + el sistema: TOR1-…, TOR2-…
@@ -298,6 +303,7 @@ const DESCRIBIR = {
   filtroS1:    v => (v ? 'Filtro del Sistema 1: si la ruptura anterior habría ganado, espera a la de 55' : 'Sistema 1 sin filtro: entra en toda ruptura de 20'),
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
   riesgoPct:   v => `Riesgo: una pirámide pierde como mucho el ${String(v).replace('.', ',')}% del saldo si salta su stop`,
+  anadido:     v => `Cada añadido, de ${v === 1 ? 'una unidad' : 'media unidad'}`,
   maxUnidades: v => `Hasta ${v} unidades por índice y sistema`,
   maxGrupo:    v => `Hasta ${v} unidades por grupo, sentido y sistema`,
   maxSentido:  v => `Hasta ${v} unidades por sentido y sistema`,
@@ -430,7 +436,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if (!(cuenta?.saldo > 0)) return falla('IG no da el saldo de la cuenta: sin él no se sabe el tamaño')
     datos.picoSaldo = Math.max(datos.picoSaldo ?? cuenta.saldo, cuenta.saldo)
     const nominal = capitalNominal(cuenta.saldo, datos.picoSaldo, cfg.reduccionDD)
-    const picoN = picoPiramide(cfg.maxUnidades)
+    const picoN = picoPiramide(cfg.maxUnidades, cfg.anadido)
     Object.assign(plan, { saldo: cuenta.saldo, disponible: cuenta.disponible, nominal, picoN, riesgoEurN: nominal * cfg.riesgoPct / 100 / picoN })
     const descartes = []
     for (const epic of EPICS_OPERAR[ticker] ?? [null]) {
@@ -588,8 +594,9 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const precio = largo ? m.oferta : m.bid
     const nivel = siguienteAnadido(pos, ocupadosPorOtro(ticker, sistema, pos.lado))
     if (precio == null || (largo ? precio < nivel : precio > nivel)) { pos.esperaAnadir = ahora() + 5; return }
-    // la unidad de hoy (la N y el capital de hoy), en el contrato de la posición
-    const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN, riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin, paso: pasoDe(m) })
+    // la unidad de hoy (la N y el capital de hoy), en el contrato de la posición, por lo que
+    // pesa cada añadido (una unidad o media)
+    const t = tamanoPorRiesgo({ riesgoEur: plan.riesgoEurN * (datos.config.anadido ?? 1), riesgoPts: plan.n, valorPunto: pos.valorPunto, cambioAEur: pos.cambioAEur, tamanoMin: m.tamanoMin, paso: pasoDe(m) })
     if (!t.ok) { pos.sinAnadidos = ses.fecha; apuntar(ticker, `Hoy no se añade: ${t.motivo}`, { sistema }); return }
     const motivo = noCabe(ticker, sistema, pos.lado, t.tamano, precio, m, await cuentaDeAhora(plan))
     if (motivo) {
@@ -1013,6 +1020,11 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       c.riesgoPct = n
     }
     if ('maxUnidades' in cambios) entero('maxUnidades', 1, 10, 'Unidades por índice: de 1 a 10')
+    if ('anadido' in cambios) {
+      const a = Number(cambios.anadido)
+      if (a !== 1 && a !== 0.5) throw new Error('Cada añadido: de una unidad o de media')
+      c.anadido = a
+    }
     if ('maxGrupo' in cambios) entero('maxGrupo', 1, 30, 'Unidades por grupo: de 1 a 30')
     if ('maxSentido' in cambios) entero('maxSentido', 1, 50, 'Unidades por sentido: de 1 a 50')
     if ('reduccionDD' in cambios) c.reduccionDD = !!cambios.reduccionDD
@@ -1025,7 +1037,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const antes = datos.config
     datos.config = c
     // lo que cambia los niveles o la unidad obliga a rehacer los planes
-    if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'maxUnidades', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
+    if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'maxUnidades', 'anadido', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
     guardar()
     const lineas = Object.entries(DESCRIBIR).filter(([k]) => !igual(antes[k], c[k])).map(([k, describir]) => describir(c[k]))
     for (const t of Object.keys(GRUPOS_TORTUGAS)) {

@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import './Tortugas.css'
+import { conClaveBot, leerClaveBot } from './claveBot'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-// la clave de Anthropic solo está en el servidor local: online solo se copia el expediente
-const CON_CLAUDE = import.meta.env.DEV
 
 const fmtGenerada = iso => new Date(iso).toLocaleString('es-ES', {
   day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -11,7 +10,7 @@ const fmtGenerada = iso => new Date(iso).toLocaleString('es-ES', {
 const dia = f => f.split('-').reverse().join('/')
 
 // Revisión del backtest escrita por Claude: si el resultado es sólido o frágil, de dónde sale,
-// el riesgo de operarlo y qué probar. La escribe el servidor local (/api/revision-backtest) y
+// el riesgo de operarlo y qué probar. La escribe el servidor (/api/revision-backtest) y
 // la guarda con los ajustes (`clave`), así que cada configuración se paga una sola vez salvo
 // que se vuelva a pedir. El expediente también se puede copiar para pegarlo en una
 // conversación con Claude. Sirve para las tortugas y para las intradía (`tipo`, que elige el
@@ -23,16 +22,19 @@ export default function RevisionBacktest({ clave, tipo = 'tortugas', armar, hast
   const [pidiendo, setPidiendo] = useState(false)
   const [error, setError] = useState(null)
   const [copiado, setCopiado] = useState(false)
+  // online la llamada va con la clave del bot, que se mete en la pestaña Bot: sin ella solo se
+  // copia el expediente
+  const conClaude = import.meta.env.DEV || !!leerClaveBot()
 
   useEffect(() => {
-    if (!CON_CLAUDE) return
+    if (!conClaude) return
     let vivo = true
-    fetch(`${API}/api/revision-backtest?tipo=${tipo}&clave=${encodeURIComponent(clave)}`)
+    fetch(`${API}/api/revision-backtest?tipo=${tipo}&clave=${encodeURIComponent(clave)}`, { headers: conClaveBot() })
       .then(r => r.json())
       .then(d => { if (vivo) setGuardada({ clave, revision: d.revision ?? null }) })
       .catch(() => { if (vivo) setGuardada({ clave, revision: null }) })
     return () => { vivo = false }
-  }, [clave, tipo])
+  }, [clave, tipo, conClaude])
 
   const pedir = useCallback(async () => {
     setPidiendo(true)
@@ -41,7 +43,7 @@ export default function RevisionBacktest({ clave, tipo = 'tortugas', armar, hast
       const expediente = armar()
       const r = await fetch(`${API}/api/revision-backtest`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: conClaveBot({ 'Content-Type': 'application/json' }),
         body:    JSON.stringify({ tipo, clave, expediente }),
       })
       const d = await r.json()
@@ -72,7 +74,7 @@ export default function RevisionBacktest({ clave, tipo = 'tortugas', armar, hast
       <div className="tortugas-cabecera">
         <strong>Revisión con Claude</strong>
         <span className="tortugas-botones">
-          {CON_CLAUDE && (
+          {conClaude && (
             <button
               className="chip"
               onClick={pedir}
@@ -109,10 +111,10 @@ export default function RevisionBacktest({ clave, tipo = 'tortugas', armar, hast
         </div>
       ) : (
         <p className="estr-nota">
-          {CON_CLAUDE
+          {conClaude
             ? nota
-            : <>La revisión con Claude solo está con el servidor local. Aquí puedes copiar el expediente (el resumen del
-                backtest que lee Claude, en JSON) y pegarlo en una conversación con Claude.</>}
+            : <>Para pedir la revisión con Claude, mete antes la clave del bot en la pestaña Bot. Sin ella puedes copiar
+                el expediente (el resumen del backtest que lee Claude, en JSON) y pegarlo en una conversación con Claude.</>}
         </p>
       )}
     </div>

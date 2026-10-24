@@ -2154,12 +2154,15 @@ app.post('/api/revision-dia', async (req, res) => {
   }
 })
 
-// ── Revisión de un backtest de las tortugas con Claude (solo local) ──
+// ── Revisión de un backtest con Claude ──
 // Como la del día: el navegador arma el expediente (expedienteBacktest en src/tortugas.js) y
 // aquí se le pasa a Claude y se guarda. Cada revisión va con los ajustes del backtest (la
 // `clave` de la pestaña, que aquí se resume en un hash), así que al volver a esos ajustes sale
 // la que ya se pagó, aunque desde entonces haya más sesiones (la pestaña lo avisa).
-const REVISIONES_BACKTEST_PATH = process.env.REVISIONES_BACKTEST || join(PHOTOS_ROOT, 'Revisiones backtest.json')
+// En producción va con la clave del bot, para que nadie más gaste la de Anthropic, y las
+// revisiones se guardan en el volumen de Railway.
+const REVISIONES_BACKTEST_PATH = process.env.REVISIONES_BACKTEST
+  || (PRODUCCION ? join(existsSync('/data') ? '/data' : DISK_CACHE_DIR, 'revisiones-backtest.json') : join(PHOTOS_ROOT, 'Revisiones backtest.json'))
 
 const PROMPT_REVISION_BACKTEST = `Eres quien revisa los backtests de un trader que opera CFD desde Madrid con IG y quiere llevar a un bot el sistema de las tortugas de Richard Dennis, adaptado: velas diarias, rupturas de 20 o 55 sesiones (sistema 1, sistema 2 o los dos juntos), unidades del tamaño con el que 1 N (el ATR de Wilder de 20 sesiones) cuesta un % fijo del capital, una unidad más cada ½ N a favor hasta un máximo, stop común a 2 N de la última, salida en el canal contrario de 10 o 20 sesiones, límites de unidades por grupo y por sentido, y con financiación overnight, spread y deslizamiento. Te paso el expediente de un backtest: los ajustes, el resultado, la rentabilidad de cada año, las peores caídas, las dos mitades del periodo, cuánto del resultado sale de las mejores operaciones, el desglose por mercado (o por sector y acción), por pirámide, por lado y por motivo de salida, a veces las variantes cercanas de ajustes y las limitaciones de los datos.
 
@@ -2197,8 +2200,7 @@ const MAX_CLAVE_BACKTEST = 20_000
 const idBacktest = (clave, tipo = 'tortugas') =>
   createHash('sha256').update(tipo === 'tortugas' ? clave : `${tipo}|${clave}`).digest('hex').slice(0, 16)
 
-app.get('/api/revision-backtest', (req, res) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+app.get('/api/revision-backtest', claveBot.middleware, (req, res) => {
   const clave = String(req.query.clave ?? '')
   const tipo = String(req.query.tipo ?? 'tortugas')
   if (!clave || clave.length > MAX_CLAVE_BACKTEST) return res.status(400).json({ error: 'falta la clave del backtest' })
@@ -2206,8 +2208,7 @@ app.get('/api/revision-backtest', (req, res) => {
   res.json({ revision: leerRevisiones(REVISIONES_BACKTEST_PATH)[idBacktest(clave, tipo)] ?? null })
 })
 
-app.post('/api/revision-backtest', async (req, res) => {
-  if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'No disponible en producción' })
+app.post('/api/revision-backtest', claveBot.middleware, async (req, res) => {
   const { clave, expediente, tipo = 'tortugas' } = req.body ?? {}
   if (typeof clave !== 'string' || !clave || clave.length > MAX_CLAVE_BACKTEST) {
     return res.status(400).json({ error: 'falta la clave del backtest' })

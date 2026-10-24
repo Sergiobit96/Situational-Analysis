@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops, peoresCaidas, expedienteBacktest, senalDoble, anadidoDe, CONFIG_TORTUGAS } from '../src/tortugas.js'
+import { prepararMercado, backtestTortugas, ordenesManana, nHastaStop, peorHastaStops, peoresCaidas, expedienteBacktest, senalDoble, anadidoDe, picoPiramide, riesgoPorN, CONFIG_TORTUGAS } from '../src/tortugas.js'
 
 test('lo que pierde una pirámide si salta su stop, que sube 2 N por debajo de la última unidad', () => {
   assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStop(k)), [2, 3.5, 4.5, 5, 5, 4.5])
@@ -309,4 +309,25 @@ test('expediente: la operación de la pirámide, sin repetirla entre las mejores
     sistema: 'S1 + S2', lados: 'ambos', maxUnidades: 4, esLaDeArriba: true,
     cagrPct: 1.23, maxDrawdownPct: null, mar: null, sharpe: null, operaciones: null, profitFactor: null, financiacionPctDelBruto: null,
   })
+})
+
+test('con añadidos de media unidad, la pirámide pesa menos y la unidad crece: el pico sigue en el riesgo', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(k => nHastaStop(k, 2, 0.5, 0.5)), [2, 2.5, 2.75, 2.75, 2.5, 2])
+  assert.equal(picoPiramide(6), 5)
+  assert.equal(picoPiramide(6, 2, 0.5, 0.5), 2.75)
+  assert.equal(picoPiramide(1, 2, 0.5, 0.5), 2)
+  assert.equal(riesgoPorN(CONFIG_TORTUGAS), 0.002)          // 1 % por pirámide, 6 unidades: 0,2 % por N
+})
+
+test('la pirámide de 4 unidades pierde el 1 % al stop, añada una unidad o media', () => {
+  const velas = conFechas([...base(), RUPTURA, vela(103, 103.5, 99, 99.5)])
+  const entera = backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, LIMPIO).operaciones[0]
+  const media = backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, { ...LIMPIO, anadido: 0.5 }).operaciones[0]
+  assert.equal(entera.neto, -1000)
+  // la unidad: 1 % · 100.000 / 2,75 / 2 = 181,8 €/pt; cada añadido, la mitad. Pierde 1 + (2 + 3 + 4) / 2 puntos por unidad
+  assert.equal(media.unidades, 4)
+  assert.ok(Math.abs(media.tamanos[0] - 100_000 * 0.01 / 2.75 / 2) < 1e-9)
+  assert.ok(Math.abs(media.tamanos[1] - media.tamanos[0] / 2) < 1e-9)
+  assert.ok(Math.abs(media.neto + 1000) < 1e-6)
+  assert.equal(expedienteBacktest(backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, { ...LIMPIO, anadido: 0.5 })).configuracion.anadidoEnUnidades, 0.5)
 })

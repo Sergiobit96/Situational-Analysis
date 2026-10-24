@@ -4,6 +4,7 @@ import { madridOffsetAt } from './timezone'
 import {
   INDICES_TORTUGAS, TICKER_TIPO, CONFIG_TORTUGAS, prepararMercado, prepararColumnas, backtestTortugas,
   metricasTortugas, curvaConDrawdown, rentabilidadAnual, resumenPorIndice, resumenPorGrupo, porUnidades, ordenesManana, peorHastaStops, sistemasDe,
+  picoPiramide, riesgoPorN,
 } from './tortugas'
 import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
@@ -147,6 +148,7 @@ const AJUSTES_INICIALES = {
   indices: INDICES_TORTUGAS.map(i => i.id),
   lados: CONFIG_TORTUGAS.lados,
   riesgo: 100 * CONFIG_TORTUGAS.riesgo,
+  anadido: CONFIG_TORTUGAS.anadido,
   maxUnidades: CONFIG_TORTUGAS.maxUnidades,
   maxGrupo: CONFIG_TORTUGAS.maxGrupo,
   maxSentido: CONFIG_TORTUGAS.maxSentido,
@@ -160,24 +162,24 @@ const AJUSTES_INICIALES = {
 }
 // En acciones, cada una con sus propios ajustes: con 500 mercados, los límites de los índices
 // (15 unidades por sentido) se llenan con las primeras rupturas de una unidad y la pirámide no
-// llega a crecer nunca. Por defecto, una unidad pequeña y límites que dejan unas 50 abiertas.
+// llega a crecer nunca. Por defecto, una unidad pequeña (0,1 % por N) y límites que dejan unas 50 abiertas.
 const AJUSTES_ACCIONES = {
   ...AJUSTES_INICIALES,
-  riesgo: 0.1,
+  riesgo: 0.5,
   maxGrupo: 15,
   maxSentido: 50,
   sectoresFuera: [],
   soloEnIndice: CONFIG_TORTUGAS.soloEnIndice,
   comisiones: CONFIG_TORTUGAS.comisiones,
 }
-// Los mercados de las tortugas, con sus reglas: 1 % por unidad, 4 unidades por mercado, 6 por
+// Los mercados de las tortugas, con sus reglas: 1 % por N y unidad (un 5 % la pirámide llena), 4 unidades por mercado, 6 por
 // grupo muy correlacionado y 12 por sentido, largos y cortos. Sin financiación: en un futuro, lo
 // que cuesta mantenerlo ya va en el precio al empalmar un contrato con el siguiente.
 const AJUSTES_FUTUROS = {
   ...AJUSTES_INICIALES,
   mercadosFuera: [],
   lados: 'ambos',
-  riesgo: 1,
+  riesgo: 5,
   maxUnidades: 4,
   maxGrupo: 6,
   maxSentido: 12,
@@ -196,6 +198,12 @@ function leerAjustes(universo) {
   const { clave, iniciales } = UNIVERSOS[universo]
   try {
     const guardados = JSON.parse(localStorage.getItem(clave) ?? 'null')
+    // Los de cuando el riesgo era lo que cuesta 1 N por unidad (no traen `anadido`): se pasa a lo
+    // que pierde la pirámide llena, que es el mismo tamaño de unidad
+    if (guardados && guardados.anadido == null && guardados.riesgo != null) {
+      const maxUnidades = guardados.maxUnidades ?? iniciales.maxUnidades
+      guardados.riesgo = Math.round(100 * guardados.riesgo * picoPiramide(maxUnidades)) / 100
+    }
     return guardados ? { ...iniciales, ...guardados } : iniciales
   } catch {
     return iniciales
@@ -213,8 +221,12 @@ const LADOS = [
   { v: 'ambos', label: 'Largos y cortos', nota: 'Simétrico, como las tortugas originales' },
   { v: 'cortos', label: 'Solo cortos', nota: 'Solo las rupturas a la baja' },
 ]
-const RIESGOS = [0.1, 0.2, 0.3, 0.5, 1]
-const RIESGOS_ACCIONES = [0.02, 0.05, 0.1, 0.2, 0.5]
+const RIESGOS = [0.5, 1, 1.5, 2.5, 5]
+const RIESGOS_ACCIONES = [0.1, 0.25, 0.5, 1, 2.5]
+const ANADIDOS = [
+  { v: 1, label: '1 unidad', nota: 'Como las tortugas: cada añadido, del tamaño de la entrada' },
+  { v: 0.5, label: '½ unidad', nota: 'Cada añadido, de media unidad: con el mismo riesgo máximo, la unidad sale más grande' },
+]
 const UNIDADES = [1, 4, 6, 7]
 const DESLICES = [0, 0.02, 0.05, 0.1]
 const RECARGOS = [2.5, 3.5]
@@ -328,6 +340,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     sistema,
     lados: ajustes.lados,
     riesgo: ajustes.riesgo / 100,
+    anadido: ajustes.anadido,
     maxUnidades: ajustes.maxUnidades,
     maxGrupo: ajustes.maxGrupo,
     maxSentido: ajustes.maxSentido,
@@ -484,8 +497,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
         ? gruposDe(lista.filter(a => !ajustes.sectoresFuera.includes(a.sector)).map(a => a.sector))
         : gruposDe(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.grupo)),
     maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
-    sistemas: sistemasDe(sistema).length,
+    sistemas: sistemasDe(sistema).length, anadido: ajustes.anadido,
   })
+  // `riesgo` es lo que pierde la pirámide llena en su peor punto: 1 N por unidad, eso entre el pico
+  const picoN = picoPiramide(ajustes.maxUnidades, CONFIG_TORTUGAS.stopN, CONFIG_TORTUGAS.paso, ajustes.anadido)
+  const porN = 100 * riesgoPorN(cfg)
   // la N y la unidad son las mismas para los dos sistemas: una caja por índice (en acciones,
   // solo las que tienen posición: son cientos)
   const conPosicion = new Set(ordenes.filter(f => f.posicion).map(f => f.indice))
@@ -497,7 +513,8 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const volver = campos => () => setAjustes(a => ({ ...a, ...Object.fromEntries(campos.map(c => [c, iniciales[c]])) }))
   const ajustesPuestos = [
     ajustes.lados !== iniciales.lados && { id: 'lados', texto: LADOS.find(l => l.v === ajustes.lados)?.label, quitar: volver(['lados']) },
-    ajustes.riesgo !== iniciales.riesgo && { id: 'riesgo', texto: `Riesgo ${nf(ajustes.riesgo, 2)} %`, quitar: volver(['riesgo']) },
+    ajustes.riesgo !== iniciales.riesgo && { id: 'riesgo', texto: `Riesgo ${nf(ajustes.riesgo, 2)} % por pirámide`, quitar: volver(['riesgo']) },
+    ajustes.anadido !== iniciales.anadido && { id: 'anadido', texto: `Añade ${ajustes.anadido === 0.5 ? '½' : nf(ajustes.anadido, 2)} unidad`, quitar: volver(['anadido']) },
     ajustes.maxUnidades !== iniciales.maxUnidades && {
       id: 'unidades', texto: ajustes.maxUnidades === 1 ? 'Sin pirámide' : `Pirámide de ${ajustes.maxUnidades} u`, quitar: volver(['maxUnidades']),
     },
@@ -524,7 +541,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     ajustes.desde !== iniciales.desde && { id: 'desde', texto: `Desde ${ajustes.desde}`, quitar: volver(['desde']) },
     ajustes.capital !== iniciales.capital && { id: 'capital', texto: `Capital ${eur(ajustes.capital)}`, quitar: volver(['capital']) },
   ].filter(Boolean)
-  const camposAjuste = ['lados', 'riesgo', 'maxUnidades', 'maxGrupo', 'maxSentido', 'media', 'reduccionDD', 'financiacion',
+  const camposAjuste = ['lados', 'riesgo', 'anadido', 'maxUnidades', 'maxGrupo', 'maxSentido', 'media', 'reduccionDD', 'financiacion',
     'recargo', 'deslizN', 'desde', 'capital', ...(acciones ? ['soloEnIndice', 'comisiones'] : [])]
   const baseAjustes = `${futuros ? 'Mercados de las tortugas' : acciones ? 'Acciones del S&P 500' : 'Índices'} · ${nf(mercados.length)} ${
     futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}`
@@ -654,21 +671,27 @@ export default function EstrategiaTortugas({ estrategiaId }) {
 
           <div className="filtro-group">
             <label className="filtro-label">
-              Riesgo por N y unidad
+              Riesgo máximo por pirámide
               <span className="filtro-valor">
-                {nf(ajustes.riesgo, 2)} % por unidad · {nf(ajustes.riesgo * peor.unidades, 1)} % con {peor.unidades} unidades
+                {nf(ajustes.riesgo, 2)} % por pirámide · 1 N por unidad = {nf(porN, 2)} %
               </span>
             </label>
             <div className="filtro-presets">
-              <Chips opciones={(acciones ? RIESGOS_ACCIONES : RIESGOS).map(r => ({ v: r, label: `${nf(r, r < 0.1 ? 2 : 1)} %`, nota: r === 1 ? 'El de las tortugas, pensado para futuros poco correlacionados' : undefined }))}
+              <Chips opciones={(acciones ? RIESGOS_ACCIONES : RIESGOS).map(r => ({ v: r, label: `${nf(r, Number.isInteger(r * 10) ? 1 : 2)} %`, nota: r === 5 ? 'El de las tortugas (1 % por N y unidad), pensado para futuros poco correlacionados' : undefined }))}
                 valor={ajustes.riesgo} onCambio={v => poner('riesgo', v)} />
-              <Numero valor={ajustes.riesgo} min={0.01} max={5} step={0.05} titulo="% del capital por N y unidad" onCambio={v => poner('riesgo', v)} />
+              <Numero valor={ajustes.riesgo} min={0.05} max={25} step={0.1} titulo="% del capital que pierde como mucho una pirámide llena si salta su stop" onCambio={v => poner('riesgo', v)} />
             </div>
             <p className="estr-explica">
-              1 N en contra cuesta {nf(ajustes.riesgo, 2)} % del capital por unidad ({nf(ajustes.riesgo * peor.unidades, 1)} % con las {peor.unidades} unidades que caben a la vez{ajustes.lados === 'ambos' ? ' en cada sentido' : ''}).
-              Hasta el stop, a {nf(CONFIG_TORTUGAS.stopN)} N, una unidad recién entrada pierde {nf(ajustes.riesgo * CONFIG_TORTUGAS.stopN, 2)} %;
-              como el stop sube con cada añadido, lo peor si saltan a la vez todos los stops{ajustes.lados === 'ambos' ? ' de un sentido' : ''} es un {nf(ajustes.riesgo * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
+              Lo más que pierde la pirámide de un {acciones ? 'valor' : futuros ? 'mercado' : 'índice'} si salta su stop, en su peor punto ({nf(picoN, 2)} N por unidad con {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} y añadidos de {ajustes.anadido === 0.5 ? '½' : nf(ajustes.anadido, 2)}):
+              así 1 N en contra cuesta {nf(porN, 2)} % del capital por unidad, y el máximo es el mismo añadas una unidad o media. Una unidad recién entrada pierde {nf(porN * CONFIG_TORTUGAS.stopN, 2)} % hasta el stop, a {nf(CONFIG_TORTUGAS.stopN)} N;
+              con todas las que caben a la vez ({peor.unidades}{ajustes.lados === 'ambos' ? ' en cada sentido' : ''}), lo peor si saltan a la vez todos los stops{ajustes.lados === 'ambos' ? ' de un sentido' : ''} es un {nf(porN * peor.n, 1)} % (sin contar los huecos, que pueden pasarlos)
             </p>
+          </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">Tamaño de cada añadido</label>
+            <div className="filtro-presets"><Chips opciones={ANADIDOS} valor={ajustes.anadido} onCambio={v => poner('anadido', v)} /></div>
+            <p className="estr-explica">{ANADIDOS.find(a => a.v === ajustes.anadido)?.nota}</p>
           </div>
 
           <div className="filtro-group">
@@ -679,7 +702,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
               <Numero valor={ajustes.maxUnidades} min={1} max={12} titulo="Unidades máximas por índice" onCambio={v => poner('maxUnidades', Math.round(v))} />
             </div>
             <p className="estr-explica">
-              Hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : futuros ? 'mercado' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: una más cada ½ N a favor
+              Hasta {ajustes.maxUnidades} unidad{ajustes.maxUnidades === 1 ? '' : 'es'} por {acciones ? 'acción' : futuros ? 'mercado' : 'índice'}{juntos ? ' y sistema' : ''}, contando la entrada: {ajustes.anadido === 1 ? 'una más' : `${ajustes.anadido === 0.5 ? 'media' : nf(ajustes.anadido, 2)} más`} cada ½ N a favor
             </p>
           </div>
 
@@ -915,6 +938,7 @@ function NDeHoy({ filas, paso, stopN, acciones, futuros }) {
             <span className="tortugas-n-sub">añade cada {fn(paso * f.n)} {pts}</span>
             <span className="tortugas-n-sub">stop a {fn(stopN * f.n)} {pts}</span>
             <span className="tortugas-n-sub">unidad {acciones ? `${nf(f.unidad)} acciones` : `${nf(f.unidad, 2)} €/pt`}</span>
+            {f.anadido !== f.unidad && <span className="tortugas-n-sub">añadido {acciones ? `${nf(f.anadido)} acciones` : `${nf(f.anadido, 2)} €/pt`}</span>}
           </div>
         ))}
       </div>
@@ -1239,7 +1263,7 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones, futuros 
                 {juntos && <td>S{f.sistema}</td>}
                 <td title={dia(f.ultimoDia)}>{acciones || futuros ? nfp(f.cierre) : nf(f.cierre, 2)}</td>
                 <td>{futuros ? nfp(f.n) : nf(f.n, acciones ? 2 : 1)}</td>
-                <td>{acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
+                <td title={f.anadido !== f.unidad ? `cada añadido: ${acciones ? `${nf(f.anadido)} acc.` : `${nf(f.anadido, 2)} €/pt`}` : undefined}>{acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
                 <td className="tortugas-izq">
                   {f.posicion
                     ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${acciones || futuros ? nfp(f.posicion.medio) : nf(f.posicion.medio, 1)}`
@@ -1257,7 +1281,7 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones, futuros 
       <p className="estr-nota">
         {acciones && <>De las {nf(todas.length / (juntos ? 2 : 1))} acciones, las que tienen posición y las {CERCANAS} filas con la ruptura más cerca. </>}
         Es la posición que tendría hoy el backtest. Entre paréntesis, las sesiones de la ruptura. La salida es el más
-        cercano entre el stop de 2 N y el canal contrario{juntos ? ' (de 10 en el S1 y de 20 en el S2)' : ''}. La unidad es riesgo · capital / N
+        cercano entre el stop de 2 N y el canal contrario{juntos ? ' (de 10 en el S1 y de 20 en el S2)' : ''}. La unidad es capital · riesgo por N / N (el riesgo de la pirámide entre su peor punto)
         {acciones ? ', en acciones enteras: si sale 0, hace falta más capital o más riesgo por unidad.' : ': si sale por debajo del mínimo del broker, hace falta más capital o más riesgo por unidad.'}
       </p>
     </div>

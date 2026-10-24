@@ -61,7 +61,9 @@ const TIPO_SIN_DATOS = 0.03
 export const CONFIG_TORTUGAS = {
   sistema: 1,           // 1 | 2 | '1+2'
   lados: 'largos',      // largos | ambos | cortos
-  riesgo: 0.002,        // fracción del capital que cuesta 1 N por unidad
+  riesgo: 0.01,         // fracción del capital que pierde como mucho una pirámide llena si salta su
+                        // stop (su peor punto, picoPiramide): con 6 unidades, 1 N por unidad cuesta el 0,2 %
+  anadido: 1,           // tamaño de cada añadido, en unidades (½: media unidad); la entrada, siempre 1
   maxUnidades: 6,
   maxGrupo: 9,          // las tortugas: 4 por mercado, 6 muy correlacionados, 12 por sentido
   maxSentido: 15,
@@ -272,8 +274,9 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   const valor = () => efectivo + abiertos.reduce((s, e) => s + abiertasDe(e).reduce((t, p) => t + resultadoDe(p, e.ultimo), 0), 0)
   // En acciones (`lote`), la unidad se redondea hacia abajo a acciones enteras de las de ese
   // día (`factor`: las de la serie, ajustada por splits, que hacían una)
-  const tamano = e => {
-    const t = cfg.riesgo * nominal / e.m.n[e.i]
+  const porN = riesgoPorN(cfg)
+  const tamano = (e, f = 1) => {
+    const t = f * porN * nominal / e.m.n[e.i]
     const lote = e.m.info.lote && e.m.info.lote * (e.m.factor?.[e.i] ?? 1)
     return lote ? Math.floor(t / lote + 1e-9) * lote : t
   }
@@ -386,7 +389,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     }
     const p = e.pos[accion.sis]
     if (accion.tipo === 'entra' || accion.tipo === 'anade') {
-      const tam = tamano(e)
+      const tam = tamano(e, accion.tipo === 'anade' ? cfg.anadido : 1)
       p.unidades.push({ fecha, ref: precio, precio: precio + p.lado * coste, tam, ...(m.factor ? { f: m.factor[e.i] } : {}) })
       p.stop = precio - p.lado * cfg.stopN * p.n0
       const comision = comisionDe(m, tam, e.i)
@@ -612,10 +615,21 @@ export function porUnidades(res) {
 // Lo que pierde una posición de k unidades si salta su stop, en N por unidad de riesgo. Cada
 // unidad entra `paso` N más allá que la anterior y el stop de todas queda a `stopN` N de la
 // última, así que la unidad i (desde 0) pierde stopN − (k − 1 − i)·paso: con 2 N y ½ N, 2 N
-// con una unidad, 3,5 con dos, 4,5 con tres, 5 con cuatro o cinco y 4,5 con seis. No cuenta
-// los huecos, que pueden pasar el stop.
-export const nHastaStop = (k, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso) =>
-  (k > 0 ? k * stopN - paso * k * (k - 1) / 2 : 0)
+// con una unidad, 3,5 con dos, 4,5 con tres, 5 con cuatro o cinco y 4,5 con seis. Con
+// añadidos de `anadido` unidades (la entrada, de una), cada añadido pesa eso: con ½, 2; 2,5;
+// 2,75; 2,75; 2,5 y 2. No cuenta los huecos, que pueden pasar el stop.
+export const nHastaStop = (k, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso, anadido = 1) =>
+  (k > 0 ? stopN - (k - 1) * paso + anadido * ((k - 1) * stopN - paso * (k - 1) * (k - 2) / 2) : 0)
+
+// El peor punto de una pirámide de hasta `maxUnidades`, en N por unidad: con 2 N y ½ N, 5 con
+// añadidos de una unidad (a las 4) y 2,75 con añadidos de media (a las 3)
+export const picoPiramide = (maxUnidades, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso, anadido = 1) =>
+  Math.max(...Array.from({ length: Math.max(1, maxUnidades) }, (_, i) => nHastaStop(i + 1, stopN, paso, anadido)))
+
+// La fracción del capital que cuesta 1 N por unidad: `riesgo` es lo más que pierde una pirámide
+// llena hasta su stop, así que 1 N por unidad es `riesgo` entre su peor punto. Así el riesgo
+// máximo es el mismo con añadidos de una unidad que de media, o con más o menos unidades
+export const riesgoPorN = cfg => cfg.riesgo / picoPiramide(cfg.maxUnidades, cfg.stopN, cfg.paso, cfg.anadido ?? 1)
 
 // Lo peor que se pierde, en N por unidad de riesgo, si saltan a la vez todos los stops de un
 // sentido: las unidades repartidas como peor convenga entre los índices (`grupos` son cuántos
@@ -624,7 +638,7 @@ export const nHastaStop = (k, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTU
 // cosas con programación dinámica. También devuelve cuántas unidades caben como mucho. Con
 // `sistemas` = 2 cada índice puede llevar dos pirámides a la vez, una por sistema, cada una con
 // su stop.
-export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, sistemas = 1, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso }) {
+export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, sistemas = 1, stopN = CONFIG_TORTUGAS.stopN, paso = CONFIG_TORTUGAS.paso, anadido = 1 }) {
   const repartir = (piezas, tope) => {
     let mejor = [0, ...new Array(tope).fill(-Infinity)]
     for (const pieza of piezas) {
@@ -639,7 +653,7 @@ export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, sist
     }
     return mejor
   }
-  const piramide = Array.from({ length: maxUnidades + 1 }, (_, k) => nHastaStop(k, stopN, paso))
+  const piramide = Array.from({ length: maxUnidades + 1 }, (_, k) => nHastaStop(k, stopN, paso, anadido))
   const indice = repartir(new Array(sistemas).fill(piramide), sistemas * maxUnidades)
   const porGrupo = grupos.filter(n => n > 0).map(n => repartir(new Array(n).fill(indice), Math.min(maxGrupo, maxSentido)))
   const total = repartir(porGrupo, maxSentido)
@@ -649,17 +663,18 @@ export function peorHastaStops({ grupos, maxUnidades, maxGrupo, maxSentido, sist
 
 // Las órdenes stop para la próxima sesión de cada índice, a partir del estado al último
 // cierre del backtest, con el tamaño de la unidad para `capital`. Con los dos sistemas a la
-// vez, una fila por índice y sistema.
+// vez, una fila por índice y sistema. `anadido`: el tamaño de cada añadido.
 export function ordenesManana(res, capital) {
   const { cfg } = res
   return res.estados.flatMap(e => sistemasDe(cfg.sistema).map(s => {
     const { m } = e
     const n = m.nCierre.at(-1)
     const alto = k => Math.max(...m.h.slice(-k)), bajo = k => Math.min(...m.l.slice(-k))
-    const unidad = cfg.riesgo * capital / n, lote = m.info.lote && m.info.lote * (m.factor?.at(-1) ?? 1)
+    const unidad = riesgoPorN(cfg) * capital / n, lote = m.info.lote && m.info.lote * (m.factor?.at(-1) ?? 1)
+    const enLotes = t => (lote ? Math.floor(t / lote + 1e-9) * lote : t)
     const fila = {
       indice: m.info.id, sistema: s, nombre: m.info.nombre, grupo: m.info.grupo, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
-      unidad: lote ? Math.floor(unidad / lote + 1e-9) * lote : unidad,
+      unidad: enLotes(unidad), anadido: enLotes(unidad * (cfg.anadido ?? 1)),
       posicion: null, compra: null, venta: null, salida: null, filtro: false,
     }
     const p = e.pos[s]
@@ -802,7 +817,9 @@ export function expedienteBacktest(res, { universo, variantes = null } = {}) {
     configuracion: {
       sistema: juntos ? 'S1 + S2' : `S${cfg.sistema}`,
       lados: cfg.lados,
-      riesgoPorUnidadPctDelCapital: Math.round(100_000 * cfg.riesgo) / 1000,
+      riesgoMaxPorPiramidePctDelCapital: Math.round(100_000 * cfg.riesgo) / 1000,
+      riesgoPorUnidadPctDelCapital: Math.round(100_000 * riesgoPorN(cfg)) / 1000,
+      anadidoEnUnidades: cfg.anadido ?? 1,
       maxUnidadesPorMercado: cfg.maxUnidades,
       maxUnidadesPorGrupoYSentido: cfg.maxGrupo,
       maxUnidadesPorSentido: cfg.maxSentido,

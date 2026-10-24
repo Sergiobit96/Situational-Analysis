@@ -1357,6 +1357,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
           <Mitades mitades={mitades} />
 
+          <PorAnios analizadas={analizadas} />
+
           <Robustez serie={serieRobustez} combos={combosRobustez} filas={STOPS.map(x => x.label)} columnas={volumenes.map(v => v.label)}
             matrizDe={matrizRobustez} actual={`${stopModo}|${volumen}`} nombreMedida="bracket en % del precio" />
 
@@ -1682,6 +1684,78 @@ function Mitades({ mitades }) {
         una de las dos mitades se hunde, lo que has encontrado es una casualidad de ese tramo.
         El drawdown de cada mitad se cuenta desde cero, dentro de su propio tramo. Cuando
         ganan pocas, mira el acumulado sin la mejor sesión: si se va a cero, todo dependía de un día.
+      </p>
+    </div>
+  )
+}
+
+// Cada año del histórico filtrado por separado, con la misma operativa: si la ventaja está
+// repartida o sale de uno o dos años buenos. El drawdown de cada año se cuenta desde cero.
+function PorAnios({ analizadas }) {
+  const anios = useMemo(() => {
+    const grupos = {}
+    for (const { sesion, analisis: a } of analizadas) {
+      if (a.valido) (grupos[sesion.date.slice(0, 4)] ??= []).push({ date: sesion.date, a })
+    }
+    return Object.entries(grupos).sort(([x], [y]) => x.localeCompare(y)).map(([anio, xs]) => {
+      const r = resumir(xs.map(x => x.a))
+      const curva = curvaEquity(xs.filter(x => x.a.entrada).map(x => ({ date: x.date, pts: x.a.resultadoTotalPts ?? x.a.resultadoPts })))
+      return { anio, r, curva }
+    })
+  }, [analizadas])
+  if (anios.length < 2) return null   // con un año solo, la tabla repite el resumen
+
+  const conOps = anios.filter(x => x.r.nOps > 0)
+  const enPositivo = conOps.filter(x => x.r.totalPts > 0).length
+  const total = conOps.reduce((n, x) => n + x.r.totalPts, 0)
+  const mejor = conOps.reduce((m, x) => (x.r.totalPts > (m?.r.totalPts ?? -Infinity) ? x : m), null)
+  const tono = v => (v > 0 ? 'positivo' : v < 0 ? 'negativo' : '')
+  const pf = r => (r.nOps === 0 ? '—' : r.profitFactor == null ? '∞' : r.profitFactor.toFixed(2))
+
+  return (
+    <div className="estr-resumen">
+      <table className="estr-mitades-tabla estr-anios-tabla">
+        <thead>
+          <tr>
+            <th>Año a año</th>
+            <th>Sesiones</th>
+            <th>Operaciones</th>
+            <th>Ganadoras</th>
+            <th>Acumulado</th>
+            <th>En R</th>
+            <th>Medio</th>
+            <th>Profit factor</th>
+            <th>Máx. drawdown</th>
+            <th>Mejor sesión</th>
+            <th>Peor sesión</th>
+          </tr>
+        </thead>
+        <tbody>
+          {anios.map(({ anio, r, curva }) => (
+            <tr key={anio}>
+              <th>{anio}</th>
+              <td>{r.n}</td>
+              <td>{r.nOps}</td>
+              <td>{fmtPct(r.pctGanadas)}</td>
+              <td className={tono(r.totalPts)}>{fmtPtsSgn(r.totalPts)}</td>
+              <td>{r.totalR == null ? '—' : `${fmtSgn(r.totalR)} R`}</td>
+              <td>{fmtPtsSgn(r.resultadoMedPts)}</td>
+              <td>{pf(r)}</td>
+              <td>{r.nOps ? fmtPtsSgn(curva.maxDD) : '—'}</td>
+              <td>{fmtPtsSgn(curva.mejor?.pts)}</td>
+              <td>{fmtPtsSgn(curva.peor?.pts)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="estr-nota">
+        <strong>{enPositivo} de {conOps.length} años en positivo.</strong>
+        {mejor && total > 0 && mejor.r.totalPts > 0 && <>
+          {' '}El mejor, {mejor.anio}, deja {fmtPtsSgn(mejor.r.totalPts)}: el {fmtPct(100 * mejor.r.totalPts / total)} del
+          acumulado{mejor.r.totalPts >= total ? ', así que el resto de años juntos no gana nada' : ''}.
+        </>}
+        {' '}Cada año se mide por separado con la misma operativa y el drawdown se cuenta desde cero dentro del año.
+        Si casi todo sale de uno o dos años, la ventaja depende de lo que pasó entonces.
       </p>
     </div>
   )

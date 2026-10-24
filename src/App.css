@@ -3601,6 +3601,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   text-align: left;
 }
 .estr-mitades-tabla thead th:first-child { text-align: left; }
+.estr-anios-tabla { white-space: nowrap; }
+.estr-anios-tabla td.positivo { color: var(--green); }
+.estr-anios-tabla td.negativo { color: var(--red); }
 .estr-mitades-tabla tbody tr:last-child th,
 .estr-mitades-tabla tbody tr:last-child td { border-bottom: none; }
 

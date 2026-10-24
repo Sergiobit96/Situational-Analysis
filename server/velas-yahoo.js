@@ -18,6 +18,14 @@ export const INDICE_YAHOO = {
   '^GDAXI': 'DAX', '^FTSE': 'FTSE', '^GSPC': 'SPX', '^NDX': 'NDX', '^DJI': 'DJI', '^RUT': 'RUT',
 }
 
+// Los que se pueden analizar en Estrategias con los CSV de 1 y 5 min (recoger_yahoo.py también
+// graba el Nikkei, que no hace falta para el MFE/MAE)
+export const INDICE_YAHOO_CSV = { ...INDICE_YAHOO, '^N225': 'N225' }
+
+// Las diarias de Documents\Yahoo\diario (<ID>_1d.csv, con el id de INDICES_TORTUGAS e IRX para
+// el tipo a 3 meses), para el backtest de las tortugas
+export const DIARIOS_YAHOO = ['N225', 'HSI', 'DAX', 'FTSE', 'SPX', 'NDX', 'DJI', 'RUT', 'IRX']
+
 // Índices cuyo CFD no va pegado al contado: se corrigen con el desfase del día
 export const CALIBRAR = new Set(['^GSPC', '^NDX', '^DJI', '^RUT'])
 
@@ -36,6 +44,19 @@ export function parsearCsvYahoo(texto) {
     if ([v.time, v.open, v.high, v.low, v.close].every(Number.isFinite)) velas.push(v)
   }
   return velas.sort((a, b) => a.time - b.time)
+}
+
+// "Date;Open;High;Low;Close", con la fecha de su bolsa → [{ date, open, high, low, close }], en orden
+export function parsearDiarioYahoo(texto) {
+  const velas = []
+  for (const linea of texto.split(/\r?\n/)) {
+    const [date, open, high, low, close] = linea.split(';')
+    // una celda vacía sería un 0: esa fila no vale
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? '') || [open, high, low, close].some(x => !x?.trim())) continue
+    const v = { date, open: +open, high: +high, low: +low, close: +close }
+    if ([v.open, v.high, v.low, v.close].every(Number.isFinite)) velas.push(v)
+  }
+  return velas.sort((a, b) => a.date.localeCompare(b.date))
 }
 
 // Primera posición con time >= t (búsqueda binaria)

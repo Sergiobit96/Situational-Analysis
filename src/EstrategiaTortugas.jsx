@@ -86,6 +86,27 @@ async function bajarDiario(ticker, signal) {
   return velas
 }
 
+// Los mismos diarios desde los CSV de Documents\Yahoo\diario (recoger_yahoo.py), de una petición
+// por índice: <ID>_1d.csv con el id de INDICES_TORTUGAS, e IRX para el tipo
+const cacheDiarioCsv = new Map()    // ticker → { velas, cuando }
+const ID_CSV = { ...Object.fromEntries(INDICES_TORTUGAS.map(i => [i.ticker, i.id])), [TICKER_TIPO]: 'IRX' }
+async function bajarDiarioCsv(ticker, signal) {
+  const visto = cacheDiarioCsv.get(ticker)
+  if (visto && Date.now() - visto.cuando < VIGENCIA_MS) return visto.velas
+  let j
+  try {
+    j = await pedirJson(`${API}/api/yahoo-csv/diario/${ID_CSV[ticker]}`, signal)
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    throw new Error(`${ticker}: ${e.message}`, { cause: e })
+  }
+  cacheDiarioCsv.set(ticker, { velas: j.velas, cuando: Date.now() })
+  return j.velas
+}
+const csvEnCache = () => Object.fromEntries(
+  [...cacheDiarioCsv].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
+)
+
 const datosEnCache = () => Object.fromEntries(
   [...cacheDiario].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
 )
@@ -146,6 +167,7 @@ async function bajarFuturos(signal) {
 
 const AJUSTES_INICIALES = {
   indices: INDICES_TORTUGAS.map(i => i.id),
+  fuenteDiario: 'yahoo',   // de dónde salen los diarios de los índices: 'yahoo' (en línea) o 'csv' (Documentos)
   lados: CONFIG_TORTUGAS.lados,
   riesgo: 100 * CONFIG_TORTUGAS.riesgo,
   anadido: CONFIG_TORTUGAS.anadido,
@@ -285,6 +307,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const ajustes = todosAjustes[universo]
   const setAjustes = f => setTodosAjustes(t => ({ ...t, [universo]: f(t[universo]) }))
   const [datos, setDatos] = useState(datosEnCache)
+  const [datosCsv, setDatosCsv] = useState(csvEnCache)
   const [datosAcciones, setDatosAcciones] = useState(accionesEnCache)
   const [datosFuturos, setDatosFuturos] = useState(futurosEnCache)
   const [cargando, setCargando] = useState(false)
@@ -357,20 +380,23 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     // como el eurodólar de las tortugas (un millón de dólares por contrato)
     apalancamiento: universo === 'futuros' ? 0 : CONFIG_TORTUGAS.apalancamiento,
   }), [ajustes, sistema, universo])
-  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera, ajustes.mercadosFuera])
+  // en índices, los diarios pueden salir de los CSV de Documentos en vez de Yahoo en línea
+  const deCsv = universo === 'indices' && ajustes.fuenteDiario === 'csv'
+  const diarios = deCsv ? datosCsv : datos
+  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera, ajustes.mercadosFuera, deCsv])
 
   // los indicadores solo dependen de los datos: se calculan una vez por índice
   const preparados = useMemo(() => {
     const r = {}
     for (const info of INDICES_TORTUGAS) {
-      if (datos[info.ticker]) r[info.id] = prepararMercado(info, sinSesionEnCurso(info, datos[info.ticker]))
+      if (diarios[info.ticker]) r[info.id] = prepararMercado(info, sinSesionEnCurso(info, diarios[info.ticker]))
     }
     return r
-  }, [datos])
+  }, [diarios])
   // las acciones ya llegan preparadas (bajarAcciones), en el orden de la lista
   const accionesPreparadas = useMemo(() => (acciones && datosAcciones
     ? datosAcciones.universo.acciones.map(a => datosAcciones.mercados[a.ticker]).filter(Boolean) : []), [acciones, datosAcciones])
-  const tipos = datos[TICKER_TIPO] ?? null
+  const tipos = diarios[TICKER_TIPO] ?? null
   const mercados = useMemo(() => {
     if (futuros) {
       const fuera = new Set(ajustes.mercadosFuera)
@@ -444,6 +470,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
       return
     }
     const tickers = [...INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.ticker), TICKER_TIPO]
+    const bajar = deCsv ? bajarDiarioCsv : bajarDiario
     setProgreso({ hechos: 0, total: tickers.length })
     const nuevos = {}
     const fallos = []
@@ -453,7 +480,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
       while (siguiente < tickers.length && !ctrl.signal.aborted) {
         const t = tickers[siguiente++]
         try {
-          nuevos[t] = await bajarDiario(t, ctrl.signal)
+          nuevos[t] = await bajar(t, ctrl.signal)
         } catch (e) {
           if (e.name !== 'AbortError') fallos.push(e.message)
         }
@@ -462,8 +489,8 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     }
     await Promise.all([trabajador(), trabajador(), trabajador()])
     if (ctrl.signal.aborted) return
-    setDatos(d => ({ ...d, ...nuevos }))
-    if (fallos.length) setError(`No se pudieron bajar: ${fallos.join(' · ')}`)
+    ;(deCsv ? setDatosCsv : setDatos)(d => ({ ...d, ...nuevos }))
+    if (fallos.length) setError(`No se pudieron ${deCsv ? 'leer' : 'bajar'}: ${fallos.join(' · ')}`)
     setCargando(false)
     setProgreso(null)
     setMostradas(25)
@@ -544,7 +571,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const camposAjuste = ['lados', 'riesgo', 'anadido', 'maxUnidades', 'maxGrupo', 'maxSentido', 'media', 'reduccionDD', 'financiacion',
     'recargo', 'deslizN', 'desde', 'capital', ...(acciones ? ['soloEnIndice', 'comisiones'] : [])]
   const baseAjustes = `${futuros ? 'Mercados de las tortugas' : acciones ? 'Acciones del S&P 500' : 'Índices'} · ${nf(mercados.length)} ${
-    futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}`
+    futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}${deCsv ? ' · CSV de Documentos' : ''}`
 
   return (
     <div className="estrategia-panel tortugas">
@@ -606,6 +633,28 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </div>
           )}
 
+          {universo === 'indices' && (
+            <div className="filtro-group">
+              <label className="filtro-label">
+                Datos
+                {deCsv && Object.keys(datosCsv).length > 0 && (
+                  <span className="filtro-valor">hasta el {dia(Object.values(datosCsv).map(v => v.at(-1)?.date ?? '').sort()[0])}</span>
+                )}
+              </label>
+              <div className="filtro-presets">
+                <Chips opciones={[
+                  { v: 'yahoo', label: 'Yahoo en línea', nota: 'El servidor baja de Yahoo el diario de cada índice, al día' },
+                  { v: 'csv', label: 'CSV de Documentos', nota: 'Los CSV diarios de Documents\\Yahoo\\diario que deja recoger_yahoo.py' },
+                ]} valor={ajustes.fuenteDiario ?? 'yahoo'} onCambio={v => poner('fuenteDiario', v)} />
+              </div>
+              <p className="estr-explica">
+                {deCsv
+                  ? 'Los CSV diarios de Yahoo de Documents\\Yahoo\\diario (y el del tipo a 3 meses, IRX): llegan hasta el día que se grabaron'
+                  : 'Del servidor, que los baja de Yahoo al día'}
+              </p>
+            </div>
+          )}
+
           {acciones && (
             <div className="filtro-group">
               <label className="filtro-label">
@@ -656,7 +705,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
                 ? 'Futuros de las tortugas (Yahoo)…'
                 : acciones
                   ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
-                  : `Diario de Yahoo… ${progreso.hechos}/${progreso.total}`}
+                  : `${deCsv ? 'CSV diarios de Documentos' : 'Diario de Yahoo'}… ${progreso.hechos}/${progreso.total}`}
             </div>
           )}
           {error && <div className="error-global">{error}</div>}

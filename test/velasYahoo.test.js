@@ -2,7 +2,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parsearCsvYahoo, velasYahooDeOperacion, desfaseDelDia } from '../server/velas-yahoo.js'
+import { parsearCsvYahoo, parsearDiarioYahoo, velasYahooDeOperacion, desfaseDelDia, DIARIOS_YAHOO, INDICE_YAHOO_CSV } from '../server/velas-yahoo.js'
+import { INDICES_TORTUGAS } from '../src/tortugas.js'
 import { calcularExcursion } from '../server/excursiones.js'
 
 const utc = (y, mo, d, h = 0, mi = 0, s = 0) => Date.UTC(y, mo - 1, d, h, mi, s) / 1000
@@ -74,4 +75,15 @@ test('al Dow se le corrige el desfase y al DAX no', () => {
   assert.equal(dow[0].high, 123)
   const delDax = velasYahooDeOperacion(velas, dax(), ejecuciones)
   assert.equal(delDax[0].high, 103)
+})
+
+test('las diarias de Documents/Yahoo/diario: en orden, sin cabecera ni filas rotas', () => {
+  const texto = 'Date;Open;High;Low;Close\n2026-10-16;25495.28;25693.89;25466.09;25622.61\n2026-10-15;25145.07;25420.62;25133.71;25382.62\n2026-10-14;;;;\nbasura\n'
+  assert.deepEqual(parsearDiarioYahoo(texto), [
+    { date: '2026-10-15', open: 25145.07, high: 25420.62, low: 25133.71, close: 25382.62 },
+    { date: '2026-10-16', open: 25495.28, high: 25693.89, low: 25466.09, close: 25622.61 },
+  ])
+  // los ids son los de las tortugas, y el Nikkei se puede analizar también a 1 y 5 min
+  assert.deepEqual(DIARIOS_YAHOO.filter(id => id !== 'IRX'), INDICES_TORTUGAS.map(i => i.id))
+  assert.equal(INDICE_YAHOO_CSV['^N225'], 'N225')
 })

@@ -34,6 +34,30 @@ async function bajarDiario(ticker, desde, signal) {
   return [...porFecha.values()]
 }
 
+// Los CSV de Yahoo de Documents\Yahoo (recoger_yahoo.py): la sesión de contado de cada índice a
+// 1 y 5 min de los últimos meses, de una petición por índice y repartida por la fecha de Madrid
+// (la del Nikkei también cae en su mañana). Se guardan mientras la pestaña siga abierta.
+const TICKERS_YAHOO_CSV = new Set(['^GDAXI', '^FTSE', '^NDX', '^DJI', '^GSPC', '^RUT', '^N225'])
+const cacheYahooCsv = new Map()   // `${ticker}|${intervalo}` → Map(fecha → velas)
+async function sesionesYahooCsv(ticker, intervalo, signal) {
+  const clave = `${ticker}|${intervalo}`
+  if (!cacheYahooCsv.has(clave)) {
+    const r = await fetch(`${API}/api/yahoo-csv/intradia?${new URLSearchParams({ ticker, intervalo })}`, { signal })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`)
+    const porDia = new Map()
+    for (const v of d.velas ?? []) {
+      const f = fechaMadrid(v.time)
+      if (!porDia.has(f)) porDia.set(f, [])
+      porDia.get(f).push(v)
+    }
+    cacheYahooCsv.set(clave, porDia)
+  }
+  return cacheYahooCsv.get(clave)
+}
+// Las de 5 min de una sesión, en velas de 15 en los cuartos de hora, como las del feed
+const en15 = v5 => (v5.length ? agruparVelas(v5, 15, Math.floor(v5[0].time / 900) * 900) : [])
+
 const DIAS = [
   { n: 1, label: 'Lun', nombre: 'Lunes' },
   { n: 2, label: 'Mar', nombre: 'Martes' },
@@ -270,7 +294,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [tpModo,     setTpModo]     = useState('no')
   const [tpPct,      setTpPct]      = useState(TP_POR_DEFECTO)
   const [aPantalla,  setAPantalla]  = useState(null)   // fecha de la sesión abierta a pantalla completa
-  const [fuente,     setFuente]     = useState('feed')   // 'feed' (Dukascopy) o 'csv' (DAX 2009→)
+  const [fuente,     setFuente]     = useState('feed')   // 'feed' (Dukascopy), 'csv' (DAX 2009→) o 'yahoo' (los CSV de Documentos)
   // la Rule of 4 arranca en los últimos años: cada reunión es una descarga del feed
   const [anioDesde,  setAnioDesde]  = useState(estr.soloFomc ? 2024 : 2009)
   const [anioHasta,  setAnioHasta]  = useState(2026)
@@ -300,6 +324,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   }
   const camposQueCuentan = estr.soloFomc ? ['ticker', 'dias', 'anios']
     : fuente === 'csv' ? ['fuente', 'dias', 'anios']
+    : fuente === 'yahoo' ? ['fuente', 'ticker', 'dias']
     : ['fuente', 'ticker', 'dias', 'meses', 'cantidad']
   const cambiosPendientes = analizado && resultados.length > 0
     ? CAMPOS_DESCARGA
@@ -389,6 +414,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         const q = new URLSearchParams({ finas: '1', dias: dudosas.join(',') })
         const d = await (await fetch(`${API}/api/dax-historico?${q}`, { signal: ctrl.signal })).json()
         for (const s of d.sesiones ?? []) mapa.set(s.date, s.finas)
+      } else if (fuente === 'yahoo') {
+        const cinco = await sesionesYahooCsv(ticker, '5min', ctrl.signal)
+        for (const f of dudosas) if (cinco.get(f)?.length) mapa.set(f, cinco.get(f))
       } else {
         for await (const { fecha, velas } of velasDeSesiones(ticker, dudosas, 'm5', ctrl.signal)) {
           if (velas.length) mapa.set(fecha, velas)
@@ -397,13 +425,21 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       return mapa
     })
 
-    // 1 min: siempre del feed, que es quien lo tiene (Dukascopy no llega a los años más
-    // antiguos del CSV, así que alguna sesión se queda sin resolver y se dice en la tarjeta)
+    // 1 min: del feed, que es quien lo tiene (Dukascopy no llega a los años más antiguos del
+    // CSV, así que alguna sesión se queda sin resolver y se dice en la tarjeta). Con los CSV de
+    // Yahoo, primero su 1 min (que se graba desde septiembre), y lo que no tenga, del feed.
     await paso('1m', async dudosas => {
       const mapa = new Map()
       const tkr = fuente === 'csv' ? '^GDAXI' : ticker
-      for await (const { fecha, velas } of velasDeSesiones(tkr, dudosas, 'm1', ctrl.signal)) {
-        if (velas.length) mapa.set(fecha, velas)
+      if (fuente === 'yahoo') {
+        const uno = await sesionesYahooCsv(ticker, '1min', ctrl.signal).catch(e => { if (e.name === 'AbortError') throw e; return new Map() })
+        for (const f of dudosas) if (uno.get(f)?.length) mapa.set(f, uno.get(f))
+      }
+      const faltan = dudosas.filter(f => !mapa.has(f))
+      if (faltan.length) {
+        for await (const { fecha, velas } of velasDeSesiones(tkr, faltan, 'm1', ctrl.signal)) {
+          if (velas.length) mapa.set(fecha, velas)
+        }
       }
       return mapa
     })
@@ -487,6 +523,62 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     }
   }
 
+  // Los CSV de Yahoo de Documentos: todas las sesiones que traen (unos meses), de una sola
+  // petición y sin el límite del feed. Las de 5 min se agrupan en las de la estrategia.
+  const analizarYahoo = async () => {
+    cancelar()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    setCargando(true)
+    setError(null)
+    setResultados([])
+    reiniciarVista()
+    setProgreso({ done: 0, total: 0 })
+
+    try {
+      const cinco = await sesionesYahooCsv(ticker, '5min', ctrl.signal)
+      const fechas = [...cinco.keys()].sort()
+      if (fechas.length === 0) throw new Error('El CSV de Yahoo no trae sesiones')
+      const nDe = estr.tortuga ? nDiarioPorFecha(await bajarDiario(ticker, Date.parse(fechas[0]) / 1000, ctrl.signal)) : null
+
+      // el rango del día anterior, de la lista entera antes de filtrar por día de la semana
+      const previos = new Map()
+      let anterior = null
+      for (const f of fechas) {
+        if (anterior) previos.set(f, anterior)
+        const v = cinco.get(f)
+        anterior = { high: Math.max(...v.map(x => x.high)), low: Math.min(...v.map(x => x.low)) }
+      }
+
+      const semana = new Set(dias)
+      const lista = fechas.filter(f => semana.has(new Date(`${f}T12:00:00Z`).getUTCDay())).reverse()
+      if (lista.length === 0) throw new Error('Ninguna sesión del CSV de Yahoo cumple el filtro')
+
+      setProgreso({ done: lista.length, total: lista.length })
+      const base = lista.map(f => {
+        const v5 = cinco.get(f)
+        const prep = prepararSesion(estr, ticker, descarga === 'm5' ? v5 : en15(v5))
+        const nDiario = nDe?.(f) ?? null
+        return {
+          sesion: { date: f, prevClose: null },
+          velas: prep.velas, finas: prep.finas, finasEtiqueta: prep.finas ? '15m' : undefined,
+          ventana: prep.ventana, nDiario,
+          previo: previos.get(f) ?? null,
+          fuente: 'CSV Yahoo 5 min',
+          analisis: analizarSesion({
+            ...opcionesMotor, velas: prep.velas, n: nDiario, velasFinas: prep.finas, finasEtiqueta: '15m', ventana: prep.ventana,
+          }),
+        }
+      })
+      setResultados(base)
+      await afinarDudosas(ctrl, opcionesMotor, base)
+    } catch (err) {
+      if (err.name !== 'AbortError') setError(err.message)
+    } finally {
+      if (!ctrl.signal.aborted) { setCargando(false); setProgreso(null) }
+    }
+  }
+
   // Rule of 4: solo los días de reunión del FOMC, y de cada uno su ventana de dos horas
   // desde el comunicado. Las velas llegan de 5 min y se agrupan en velas de 10 ancladas en
   // la noticia; las de 5 se guardan como finas, así que el recorrido ya se camina con ellas.
@@ -547,6 +639,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     setAnalizado(descargaActual)
     if (estr.soloFomc) return analizarFomc()
     if (fuente === 'csv') return analizarHistorico()
+    if (fuente === 'yahoo') return analizarYahoo()
     cancelar()
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -769,6 +862,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           const q = new URLSearchParams({ finas: '1', dias: faltan.join(',') })
           const d = await (await fetch(`${API}/api/dax-historico?${q}`)).json()
           for (const ses of d.sesiones ?? []) if (ses.finas?.length) nuevas[ses.date] = ses.finas
+        } else if (fuenteVista === 'yahoo') {
+          const cinco = await sesionesYahooCsv(tickerVisto, '5min')
+          for (const f of faltan) if (cinco.get(f)?.length) nuevas[f] = cinco.get(f)
         } else {
           for (const f of faltan) {
             const d = await (await fetch(intradayUrl(tickerVisto, f, 'm5'))).json()
@@ -833,6 +929,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     const nombre = INSTRUMENTOS.find(i => i.value === analizado.ticker)?.label ?? analizado.ticker
     if (estr.soloFomc) return `${nombre} · reuniones del FOMC de ${desde} a ${hasta} · ${diasTxt}`
     if (analizado.fuente === 'csv') return `DAX cash (CSV) · de ${desde} a ${hasta} · ${diasTxt}`
+    if (analizado.fuente === 'yahoo') return `${nombre} · todas las sesiones del CSV de Yahoo (Documentos) · ${diasTxt}`
     const periodo = PERIODOS.find(p => p.meses === analizado.meses)?.label ?? `${analizado.meses} meses`
     return `${nombre} · las ${analizado.cantidad} sesiones más recientes de ${periodo} · ${diasTxt}`
   })()
@@ -841,20 +938,31 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     <div className="estrategia-panel">
       <div className="filtro-controls">
         <Bloque n={1} titulo="Qué se analiza" nota="Se descarga al pulsar Analizar">
-          {estr.admiteCsv && <div className="filtro-group">
+          {!estr.soloFomc && <div className="filtro-group">
             <label className="filtro-label">Datos</label>
             <div className="filtro-presets">
               <button className={`chip ${fuente === 'feed' ? 'activo' : ''}`} onClick={() => setFuente('feed')}>
                 Feed (Dukascopy)
               </button>
-              <button className={`chip ${fuente === 'csv' ? 'activo' : ''}`} onClick={() => { setFuente('csv'); setTicker('^GDAXI') }}>
-                DAX 2009 → 2026
+              {estr.admiteCsv && (
+                <button className={`chip ${fuente === 'csv' ? 'activo' : ''}`} onClick={() => { setFuente('csv'); setTicker('^GDAXI') }}>
+                  DAX 2009 → 2026
+                </button>
+              )}
+              <button
+                className={`chip ${fuente === 'yahoo' ? 'activo' : ''}`}
+                title="Los CSV de 1 y 5 min de Documents\Yahoo que graba recoger_yahoo.py cada mañana"
+                onClick={() => { setFuente('yahoo'); if (!TICKERS_YAHOO_CSV.has(ticker)) setTicker('^GDAXI') }}
+              >
+                CSV Yahoo (Documentos)
               </button>
             </div>
             <p className="estr-explica">
               {fuente === 'csv'
                 ? 'CSV de DAX cash a 5 min, sin límite de peticiones'
-                : 'Del feed, unas pocas sesiones por tanda'}
+                : fuente === 'yahoo'
+                  ? 'Los CSV de Yahoo de Documentos: el contado de cada índice a 5 min desde julio (y a 1 min desde septiembre para afinar), todas sus sesiones de una vez'
+                  : 'Del feed, unas pocas sesiones por tanda'}
             </p>
           </div>}
 
@@ -880,11 +988,11 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             </div>
           )}
 
-          {fuente === 'feed' && (
+          {fuente !== 'csv' && (
             <div className="filtro-group">
               <label className="filtro-label">Instrumento</label>
               <div className="filtro-presets">
-                {INSTRUMENTOS.map(i => (
+                {INSTRUMENTOS.filter(i => fuente !== 'yahoo' || TICKERS_YAHOO_CSV.has(i.value)).map(i => (
                   <button
                     key={i.value}
                     className={`chip ${ticker === i.value ? 'activo' : ''}`}

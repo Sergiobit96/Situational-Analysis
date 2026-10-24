@@ -25,7 +25,7 @@ import { crearNoticias } from './noticias.js'
 import { crearConciliacion } from './conciliacion.js'
 import { crearResumenDiario } from './resumen-diario.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
-import { INDICE_YAHOO, parsearCsvYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
+import { INDICE_YAHOO, INDICE_YAHOO_CSV, DIARIOS_YAHOO, parsearCsvYahoo, parsearDiarioYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
 import { crearFuturosTortugas } from './futuros-tortugas.js'
 import { crearColaFeed } from './cola-feed.js'
@@ -1830,8 +1830,8 @@ function excursionesPendientes(reintentar = false) {
 const YAHOO_DIR = process.env.YAHOO_DIR || process.env.YAHOO_1MIN_DIR
   || (process.env.NODE_ENV === 'production' ? (existsSync('/data') ? '/data/yahoo' : join(DISK_CACHE_DIR, 'yahoo')) : 'C:\\Users\\Sergio\\Documents\\Yahoo')
 const velasYahooCache = new Map()   // `${ticker}|${intervalo}` → { mtime, velas }
-function velasYahooLocales(ticker, intervalo = '1min') {
-  const indice = INDICE_YAHOO[ticker]
+function velasYahooLocales(ticker, intervalo = '1min', indices = INDICE_YAHOO) {
+  const indice = indices[ticker]
   if (!indice) return null
   const file = join(YAHOO_DIR, `${indice}_${intervalo}.csv`)
   const clave = `${ticker}|${intervalo}`
@@ -1846,6 +1846,45 @@ function velasYahooLocales(ticker, intervalo = '1min') {
     return null
   }
 }
+
+// Las diarias de Documents\Yahoo\diario (ver DIARIOS_YAHOO), con el mismo truco de caché
+const diariosYahooCache = new Map()   // id → { mtime, velas }
+function diarioYahooLocal(id) {
+  const file = join(YAHOO_DIR, 'diario', `${id}_1d.csv`)
+  try {
+    const mtime = statSync(file).mtimeMs
+    const visto = diariosYahooCache.get(id)
+    if (visto?.mtime === mtime) return visto.velas
+    const velas = parsearDiarioYahoo(readFileSync(file, 'utf8'))
+    diariosYahooCache.set(id, { mtime, velas })
+    return velas
+  } catch {
+    return null
+  }
+}
+
+// Los CSV de Yahoo para analizar en Estrategias. Intradía: todas las velas de 1 o 5 min de un
+// índice (unos meses de sesiones de contado, en UTC); la pestaña las reparte por sesión.
+// Diario: la serie entera de un índice, para las tortugas.
+const faltaYahoo = fichero => (process.env.NODE_ENV === 'production'
+  ? `El servidor online no tiene ${fichero}: súbelo con node scripts/subir-yahoo.mjs desde tu PC`
+  : `No está ${fichero} en ${YAHOO_DIR}`)
+app.get('/api/yahoo-csv/intradia', (req, res) => {
+  const ticker = String(req.query.ticker ?? '')
+  const intervalo = req.query.intervalo === '1min' ? '1min' : '5min'
+  const indice = INDICE_YAHOO_CSV[ticker]
+  if (!indice) return res.status(400).json({ error: `No hay CSV de Yahoo de ${ticker}` })
+  const velas = velasYahooLocales(ticker, intervalo, INDICE_YAHOO_CSV)
+  if (!velas?.length) return res.status(404).json({ falta: true, error: faltaYahoo(`${indice}_${intervalo}.csv`) })
+  res.json({ ticker, intervalo, velas })
+})
+app.get('/api/yahoo-csv/diario/:id', (req, res) => {
+  const { id } = req.params
+  if (!DIARIOS_YAHOO.includes(id)) return res.status(400).json({ error: `No hay CSV diario de ${id}` })
+  const velas = diarioYahooLocal(id)
+  if (!velas?.length) return res.status(404).json({ falta: true, error: faltaYahoo(`diario/${id}_1d.csv`) })
+  res.json({ id, primera: velas[0].date, ultima: velas.at(-1).date, velas })
+})
 
 // Si el fichero de 1 min de Dukascopy de ese día ya está en la caché de disco, se lee de ahí
 // aunque el feed esté cortado. Es el nombre que le pone dukascopy-node (el mes en base 0).
@@ -3055,20 +3094,24 @@ if (grabacion) {
 // recoger_yahoo.py deja cada mañana en tu PC la sesión de contado de los índices; desde ahí,
 // scripts/subir-yahoo.mjs la sube aquí para que el servidor online la tenga (ver YAHOO_DIR).
 // Solo en producción: en local, YAHOO_DIR es la carpeta de la que salen.
-app.put('/api/yahoo/:fichero', claveBot.middleware, express.text({ type: () => true, limit: '50mb' }), (req, res) => {
+// Las diarias van a diario/ (PUT /api/yahoo/diario/<ID>_1d.csv), como en la carpeta del PC.
+app.put(['/api/yahoo/:fichero', '/api/yahoo/diario/:diario'], claveBot.middleware, express.text({ type: () => true, limit: '50mb' }), (req, res) => {
   if (process.env.NODE_ENV !== 'production') return res.status(404).json({ error: 'Solo en el servidor online' })
-  const { fichero } = req.params
-  const nombres = Object.values(INDICE_YAHOO).join('|')
-  if (!new RegExp(`^(${nombres})_(1|5)min\\.csv$`).test(fichero)) return res.status(400).json({ error: `Fichero desconocido: ${fichero}` })
+  const { fichero, diario } = req.params
+  const nombres = Object.values(INDICE_YAHOO_CSV).join('|')
+  if (diario ? !new RegExp(`^(${DIARIOS_YAHOO.join('|')})_1d\\.csv$`).test(diario) : !new RegExp(`^(${nombres})_(1|5)min\\.csv$`).test(fichero)) {
+    return res.status(400).json({ error: `Fichero desconocido: ${diario ?? fichero}` })
+  }
   const texto = typeof req.body === 'string' ? req.body : ''
-  const velas = parsearCsvYahoo(texto).length
+  const velas = (diario ? parsearDiarioYahoo(texto) : parsearCsvYahoo(texto)).length
   if (!velas) return res.status(400).json({ error: 'El fichero no trae velas' })
   try {
-    mkdirSync(YAHOO_DIR, { recursive: true })
-    const destino = join(YAHOO_DIR, fichero)
+    const carpeta = diario ? join(YAHOO_DIR, 'diario') : YAHOO_DIR
+    mkdirSync(carpeta, { recursive: true })
+    const destino = join(carpeta, diario ?? fichero)
     writeFileSync(`${destino}.tmp`, texto)
     renameSync(`${destino}.tmp`, destino)
-    res.json({ ok: true, fichero, velas })
+    res.json({ ok: true, fichero: diario ? `diario/${diario}` : fichero, velas })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

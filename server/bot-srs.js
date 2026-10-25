@@ -214,12 +214,14 @@ export const FIRST_BAR_NEGATIVE = {
     modo: 'corto', stopPct: 1, beR: null,
     piramide: 0.5, tamanoAnadido: 1,
     colorBracket: 'bajista', piramideN: true, stopN: 2,
+    tpN: null,   // toma de beneficios a 1 o 2 N de la rotura; null, sin objetivo
     // 4 posiciones en total, la entrada y 3 añadidos (lo pidió el usuario el 20-oct-2026), aunque el
     // SRS cambie su MAX_UNIDADES
     maxUnidades: 4,
   },
   describir: {
     piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta 3 añadidos`}`,
+    tpN: v => `Objetivo: ${v == null ? 'ninguno' : `cierra todo a ${v} N de la entrada`}`,
   },
   sesionDe: sesionFirstBar, proximaApertura,
 }
@@ -244,6 +246,9 @@ const nivelAnadido = (op, cfg, n) => op.nivelOrden + (op.lado === 'largo' ? 1 : 
 // Con la pirámide de las tortugas (cfg.piramideN), `piramide` N desde el precio de la última
 // posición, como el backtest. null sin N
 const nivelAnadidoN = (op, cfg, n) => (n > 0 ? op.unidades.at(-1).entrada + (op.lado === 'largo' ? 1 : -1) * cfg.piramide * n : null)
+// Toma de beneficios a `tpN` N del nivel de la rotura (desde donde mide el backtest): al tocarla
+// se cierra toda la pierna. null sin objetivo o sin N
+export const nivelObjetivoN = (op, cfg, n) => (cfg.tpN > 0 && n > 0 ? (op.nivelOrden ?? op.entrada) + (op.lado === 'largo' ? 1 : -1) * cfg.tpN * n : null)
 const redondear = x => Math.round(x * 10) / 10
 
 // La N de las tortugas para la sesión de `fecha`: el ATR de Wilder de 20 sesiones en velas
@@ -288,14 +293,19 @@ export function siguientePaso({ dia, cfg, ahora, velas, ses }) {
     if (puedeDarLaVuelta(dia, cfg) && !op.be && op.stop != null && precio != null && (largo ? precio <= op.stop : precio >= op.stop)) {
       return { accion: 'revisar-ya' }
     }
+    // el objetivo en N: con el precio en él o más allá, fuera toda la pierna
+    const objetivo = nivelObjetivoN(op, cfg, dia.n)
+    if (objetivo != null && precio != null && (largo ? precio >= objetivo : precio <= objetivo)) return { accion: 'cerrar', motivo: 'objetivo' }
     // un stop que IG no movió por un fallo suyo: se reintenta al rato
     if (op.stopPendiente != null && !(op.esperaStop > ahora)) return { accion: 'stop' }
-    // pirámide: el precio llegó al nivel de la siguiente posición (una como mucho cada 5 min)
+    // pirámide: el precio llegó al nivel de la siguiente posición (una como mucho cada 5 min).
+    // Un añadido en el objetivo o más allá no se pone: se cerraría en el acto
     const n = op.unidades?.length ?? 1
     if (cfg.activo && cfg.piramide && n < (cfg.maxUnidades ?? MAX_UNIDADES) && !op.sinAnadidos && precio != null
         && Math.floor(ahora / 300) !== op.ultimoCubo5 && !(op.esperaAnadir > ahora)) {
       const nivel = cfg.piramideN ? nivelAnadidoN(op, cfg, dia.n) : nivelAnadido(op, cfg, n)
-      if (nivel != null && (largo ? precio >= nivel : precio <= nivel)) return { accion: 'anadir' }
+      const antesDelObjetivo = objetivo == null || (largo ? nivel < objetivo : nivel > objetivo)
+      if (nivel != null && antesDelObjetivo && (largo ? precio >= nivel : precio <= nivel)) return { accion: 'anadir' }
     }
     if (cfg.beR != null && !op.be) {
       const despues = velas.filter(v => v.time + 60 > op.hora)
@@ -587,7 +597,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
         apuntar(dia, `Rango fuera del límite (${cfg.rangoMaxPct}% del precio): hoy no se opera`)
         return
       }
-      if (cfg.piramideN && cfg.piramide) await medirN(dia, ses)
+      if (cfg.piramideN && (cfg.piramide || cfg.tpN)) await medirN(dia, ses)
     }
     const { rango } = dia.bracket
 
@@ -657,7 +667,9 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     dia.estado = 'esperando-rotura'
     apuntar(dia, `Plan: ${plan.tamano} contratos de ${plan.epic} (${plan.valorPunto} ${plan.moneda} por punto), ${Math.round(plan.riesgoEur)} € hasta el stop`
       + ` (el ${String(cfg.riesgoPct).replace('.', ',')}% de ${Math.round(cuenta.saldo).toLocaleString('es-ES')} € son ${Math.round(riesgoEur)} €)`
-      + (dia.n ? `. N = ${dia.n.toFixed(1)}: añade cada ${(cfg.piramide * dia.n).toFixed(1)} puntos y lleva el stop a ${(cfg.stopN * dia.n).toFixed(1)} de la última` : ''))
+      + (dia.n ? `. N = ${dia.n.toFixed(1)}` : '')
+      + (dia.n && cfg.piramide ? `: añade cada ${(cfg.piramide * dia.n).toFixed(1)} puntos y lleva el stop a ${(cfg.stopN * dia.n).toFixed(1)} de la última` : '')
+      + (dia.n && cfg.tpN ? `${cfg.piramide ? ';' : ':'} objetivo a ${(cfg.tpN * dia.n).toFixed(1)} puntos de la rotura (${cfg.tpN} N)` : ''))
   }
 
   // Entra en la rotura (o, con `vuelta`, en el sentido contrario tras saltar el stop) si el
@@ -1302,6 +1314,12 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const p = cambios.piramide === null || cambios.piramide === '' ? null : Number(cambios.piramide)
       if (p !== null && !(p >= 0.25 && p <= 5)) throw new Error('Pirámide no válida: ninguna, o cada 0,25 a 5 R')
       c.piramide = p
+    }
+    if ('tpN' in cambios) {
+      if (!c.piramideN) throw new Error('El objetivo en N solo está en First bar negative')
+      const v = cambios.tpN === null || cambios.tpN === '' ? null : Number(cambios.tpN)
+      if (![null, 1, 2].includes(v)) throw new Error('Objetivo no válido: ninguno, 1 N o 2 N')
+      c.tpN = v
     }
     if ('tamanoAnadido' in cambios) {
       if (![1, 0.5].includes(Number(cambios.tamanoAnadido))) throw new Error('Cada añadido es de 1 o de 0,5 unidades')

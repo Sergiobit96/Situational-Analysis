@@ -73,7 +73,7 @@ function backtestDe(d, maxUnidades) {
   const a = analizarSesion({
     velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: piramideN ? 0 : c.piramide ?? 0,
     tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades: c.maxUnidades ?? maxUnidades, tpPct: null, ventana: d.ventana,
-    colorBracket: c.colorBracket ?? null, piramideN, n: d.n ?? null,
+    colorBracket: c.colorBracket ?? null, piramideN, tpN: c.tpN ?? null, n: d.n ?? null,
   })
   if (!a.valido) return { valido: false, motivo: a.motivo }
   if (!a.entrada) return { valido: true, resultadoPts: null }
@@ -399,13 +399,25 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
           <label>Pirámide
             <select value={editando.piramide ?? ''} onChange={e => cambiar('piramide', e.target.value === '' ? null : Number(e.target.value))}>
               <option value="">No</option>
-              {tortuga ? <option value={0.5}>Una más cada ½ N, con el stop a 2 N de la última</option> : <>
+              {tortuga ? <>
+                <option value={0.5}>Una más cada ½ N, con el stop a 2 N de la última</option>
+                <option value={0.25}>Una más cada ¼ N, con el stop a 2 N de la última</option>
+              </> : <>
                 <option value={0.5}>Una más cada 0,5R a favor</option>
                 <option value={1}>Una más cada 1R a favor</option>
                 <option value={2}>Una más cada 2R a favor</option>
               </>}
             </select>
           </label>
+          {tortuga && (
+            <label>Objetivo
+              <select value={editando.tpN ?? ''} onChange={e => cambiar('tpN', e.target.value === '' ? null : Number(e.target.value))}>
+                <option value="">Sin objetivo: hasta el stop o el cierre</option>
+                <option value={1}>Cierra todo a 1 N de la entrada</option>
+                <option value={2}>Cierra todo a 2 N de la entrada</option>
+              </select>
+            </label>
+          )}
           <label>Cada añadido
             <select value={editando.tamanoAnadido ?? 1} disabled={editando.piramide == null} onChange={e => cambiar('tamanoAnadido', Number(e.target.value))}>
               <option value={1}>Del tamaño de la entrada</option>
@@ -436,7 +448,8 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             Solo vende, y solo los días en que la primera vela de 5 min cierra en negativo: al perder su mínimo, con el stop en su máximo.
             El tamaño sale del riesgo, que es lo que se pierde si salta ese stop: ese % del saldo de la cuenta entre el rango de la vela (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
             La entrada va a mercado, pero solo si el precio no se ha ido del mínimo más de lo que digas.
-            La pirámide añade otra posición cada ½ N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
+            La pirámide añade otra posición cada {editando.piramide === 0.25 ? '¼' : '½'} N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
+            {editando.tpN ? `Con el precio a ${editando.tpN} N del mínimo de la vela (donde entra), cierra todas las posiciones; un añadido que caería ahí o más allá no se pone. ` : ''}
             N es la de las tortugas: el ATR de Wilder de 20 sesiones del diario del índice, hasta la anterior.
             Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
             Un cambio vale para las sesiones que aún no han fijado su bracket.
@@ -453,7 +466,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
         )}
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
           const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias } = form
-          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
+          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias: margenNoticias ?? null, ...(tortuga ? { tpN: form.tpN ?? null } : {}) }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
 
@@ -551,7 +564,7 @@ function SesionHoy({ cuentas, nombre, maxUnidades, ahora }) {
           <small>{d.bracket ? `${precio(d.bracket.low)} – ${precio(d.bracket.high)}` : 'esperando su vela'}</small></div>
         {d.n > 0 && (
           <div className="bot-dato"><span>N</span><b>{precio(d.n)}</b>
-            <small>añade cada {precio(d.n * (d.config.piramide ?? 0.5))} · stop a {precio(d.n * (d.config.stopN ?? 2))}</small></div>
+            <small>añade cada {precio(d.n * (d.config.piramide ?? 0.5))} · stop a {precio(d.n * (d.config.stopN ?? 2))}{d.config.tpN ? ` · objetivo a ${precio(d.n * d.config.tpN)}` : ''}</small></div>
         )}
         <div className="bot-dato"><span>Riesgo</span><b>{plan ? `${Math.round(plan.riesgoEur)} €` : '—'}</b>
           <small>{plan ? `${num(plan.tamano, 1)} contratos de ${plan.valorPunto} ${plan.moneda}/punto` : ''}</small></div>

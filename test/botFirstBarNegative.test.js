@@ -78,6 +78,29 @@ test('añade hasta tener 4 posiciones, con la entrada', () => {
   assert.equal(siguientePaso({ dia: pierna([90, 88, 86, 84]), cfg, ahora, velas, ses }).accion, 'vigilar')
 })
 
+test('con ¼ N añade cada cuarto de N y con objetivo cierra todo a tantas N de la rotura', () => {
+  const ses = sesionFirstBar('^GDAXI', utc(5, 12))
+  const cfg = { ...FIRST_BAR_NEGATIVE.configInicial, activo: true, piramide: 0.25, tpN: 1 }
+  // N = 4: añade cada punto desde la última y el objetivo está en 86 (90 − 1 N)
+  const pierna = entradas => ({
+    estado: 'en-posicion', n: 4, bracket: { high: 100, low: 90, rango: 10 },
+    operacion: { lado: 'corto', entrada: 90, nivelOrden: 90, riesgo: 10, stop: 100, hora: utc(5, 8, 6), unidades: entradas.map(entrada => ({ entrada })) },
+  })
+  const enPrecio = p => [{ time: utc(5, 9), open: p, high: p, low: p, close: p }]
+  const ahora = utc(5, 9, 0, 20)
+  assert.equal(siguientePaso({ dia: pierna([90]), cfg, ahora, velas: enPrecio(88.8), ses }).accion, 'anadir')
+  assert.equal(siguientePaso({ dia: pierna([90, 89]), cfg, ahora, velas: enPrecio(88.5), ses }).accion, 'vigilar')
+  assert.deepEqual(siguientePaso({ dia: pierna([90, 89, 88]), cfg, ahora, velas: enPrecio(85.9), ses }), { accion: 'cerrar', motivo: 'objetivo' })
+  // sin objetivo, en el mismo precio añadiría
+  assert.equal(siguientePaso({ dia: pierna([90, 89, 88]), cfg: { ...cfg, tpN: null }, ahora, velas: enPrecio(85.9), ses }).accion, 'anadir')
+  // cada ½ N con el objetivo a 1 N: el añadido en 86 caería en el objetivo y no se pone
+  const medio = { ...cfg, piramide: 0.5 }
+  assert.equal(siguientePaso({ dia: pierna([90, 88]), cfg: medio, ahora, velas: enPrecio(86.5), ses }).accion, 'vigilar')
+  assert.deepEqual(siguientePaso({ dia: pierna([90, 88]), cfg: medio, ahora, velas: enPrecio(86), ses }), { accion: 'cerrar', motivo: 'objetivo' })
+  // sin N no hay objetivo
+  assert.equal(siguientePaso({ dia: { ...pierna([90]), n: null }, cfg, ahora, velas: enPrecio(80), ses }).accion, 'vigilar')
+})
+
 // ── El bot entero, con un IG de mentira ──
 
 const MERCADOS = {
@@ -255,5 +278,16 @@ test('la configuración no deja comprar', () => {
   try {
     assert.throws(() => bot.cambiarConfig({ modo: 'ambos' }), /Modo no válido: corto/)
     assert.equal(bot.cambiarConfig({ modo: 'corto', piramide: null }).piramide, null)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('la configuración admite la pirámide cada ¼ N y el objetivo a 1 o 2 N', () => {
+  const ig = igFalso()
+  const { bot, dir } = botDePrueba(ig)
+  try {
+    assert.equal(bot.cambiarConfig({ piramide: 0.25 }).piramide, 0.25)
+    assert.equal(bot.cambiarConfig({ tpN: 2 }).tpN, 2)
+    assert.equal(bot.cambiarConfig({ tpN: null }).tpN, null)
+    assert.throws(() => bot.cambiarConfig({ tpN: 3 }), /Objetivo no válido/)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })

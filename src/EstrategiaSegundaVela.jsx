@@ -8,7 +8,7 @@ import { fmtFechaTS } from './parseTrades'
 import { SESIONES, analizarSesion, resumir, rentabilidadCompuesta, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
 import Robustez from './Robustez'
 import RevisionBacktest from './RevisionBacktest'
-import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
+import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4, conVelaDeSetup } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
 import { Bloque, AjustesPuestos } from './AjustesEstrategia'
@@ -304,6 +304,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [nivelStop,  setNivelStop]  = useState('extremo')
   const [tamano,     setTamano]     = useState('uno')
   const [coste,      setCoste]      = useState(0)
+  const [velaSetup,  setVelaSetup]  = useState(5)   // First bar negative: de cuántos minutos es la vela del setup
   const [riesgoOp,   setRiesgoOp]   = useState(1)   // % del capital hasta el stop en cada operación, para el CAGR (el del bot)
   const [stopModo,   setStopModo]   = useState('fijo')
   const [volumen,    setVolumen]    = useState(estr.tortuga ? 'tortuga' : 'fijo')
@@ -358,7 +359,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const porDefecto = {
     modo: estr.modoInicial ?? 'ambos', volumen: estr.tortuga ? 'tortuga' : 'fijo',
     tamano: 'uno', nivelStop: 'extremo', stopModo: 'fijo', tpModo: 'no', coste: 0,
-    vela1: 'todas', aperturaPos: 'todas',
+    vela1: 'todas', aperturaPos: 'todas', velaSetup: 5,
   }
 
   // Todo lo que define la operativa, en un solo sitio: lo usan las tres descargas, el
@@ -728,18 +729,23 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // La operativa se recalcula sobre las velas ya descargadas: cambiar de modo no vuelve
   // a pedirle nada al feed.
   // Va con el instrumento del análisis, no con el chip marcado ahora: las velas son de aquel.
-  const conModo = useMemo(() => resultados.map(r => ({
-    ...r,
-    analisis: analizarSesion({
-      ...opcionesMotor,
-      ticker: tickerVisto,
-      velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null,
-      velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
-    }),
+  // Con otra vela del setup (First bar negative), las de 5 se juntan aquí: no hay que volver a bajar nada
+  const conModo = useMemo(() => resultados.map(r0 => {
+    const r = estr.velasSetup ? conVelaDeSetup(r0, velaSetup) : r0
+    return {
+      ...r,
+      analisis: analizarSesion({
+        ...opcionesMotor,
+        ticker: tickerVisto,
+        velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null,
+        velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
+      }),
+    }
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
   // recalculo, y son todas valores sueltos
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  })), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, tpModo, stopPct, tamano, coste])
+  }), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, tpModo, stopPct, tamano, coste, velaSetup])
+  const etiquetaSetup = estr.velasSetup ? `${velaSetup} min` : estr.etiquetaVela
 
   const dirVela1 = VELAS1.find(v => v.id === vela1)?.dir
   const posApertura = APERTURAS.find(x => x.id === aperturaPos)?.pos
@@ -914,6 +920,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // para la barra de encima de los resultados
   const conPiramide = volumen !== 'fijo'
   const ajustesPuestos = [
+    velaSetup !== porDefecto.velaSetup && {
+      id: 'velaSetup', texto: `Vela de ${velaSetup} min`, quitar: () => setVelaSetup(porDefecto.velaSetup),
+    },
     modoEfectivo !== porDefecto.modo && {
       id: 'modo', texto: modos.find(m => m.id === modoEfectivo)?.label, quitar: () => setModo(porDefecto.modo),
     },
@@ -950,7 +959,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const restablecer = () => {
     setModo(porDefecto.modo); setVolumen(porDefecto.volumen); setTamano(porDefecto.tamano)
     setNivelStop(porDefecto.nivelStop); setStopModo(porDefecto.stopModo); setTpModo(porDefecto.tpModo)
-    setCoste(porDefecto.coste); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos)
+    setCoste(porDefecto.coste); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos); setVelaSetup(porDefecto.velaSetup)
     setMostradas(POR_PAGINA)
   }
 
@@ -958,12 +967,13 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // volver a esos ajustes sale la que ya se pagó
   const claveRevision = JSON.stringify({
     estrategia: estrategiaId, analizado, modo: modoEfectivo, volumen, tamano, nivelStop, stopModo,
-    tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos,
+    tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos, velaSetup,
   })
   const armarExpediente = () => expedienteIntradia({
     estr, nombre: INSTRUMENTOS.find(i => i.value === tickerVisto)?.label ?? tickerVisto,
     base: baseAnalisis,
     configuracion: {
+      ...(estr.velasSetup ? { velaDelSetup: `${velaSetup} min` } : {}),
       operativa: modos.find(m => m.id === modoEfectivo)?.label,
       volumen: volumenes.find(v => v.id === volumen)?.nota,
       ...(volumen !== 'fijo' ? { anadidos: TAMANOS.find(t => t.id === tamano)?.nota } : {}),
@@ -1172,7 +1182,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
         <Bloque n={2} titulo="Qué sesiones cuentan" nota="Al momento: las estadísticas son solo de estas. El número es cuántas quedarían">
           <div className="filtro-group">
-            <label className="filtro-label">1ª vela de {estr.etiquetaVela}</label>
+            <label className="filtro-label">1ª vela de {etiquetaSetup}</label>
             <div className="filtro-presets">
               {VELAS1.map(v => (
                 <button
@@ -1208,6 +1218,22 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         </Bloque>
 
         <Bloque n={3} titulo="Cómo se opera" nota="Se recalcula al momento con las sesiones ya analizadas">
+          {estr.velasSetup && (
+            <div className="filtro-group">
+              <label className="filtro-label">Primera vela</label>
+              <div className="filtro-presets">
+                {estr.velasSetup.map(m => (
+                  <button key={m} className={`chip ${velaSetup === m ? 'activo' : ''}`}
+                    onClick={() => { setVelaSetup(m); setMostradas(POR_PAGINA) }}>{m} min</button>
+                ))}
+              </div>
+              <p className="estr-explica">
+                {velaSetup === 5
+                  ? 'La primera vela de 5 min de la sesión: si cierra en negativo, vende al perder su mínimo con el stop en su máximo'
+                  : `La primera vela de ${velaSetup} min (las de 5 juntas desde la apertura): si cierra en negativo, vende al perder su mínimo con el stop en su máximo. Después se recorre en velas de 5 min`}
+              </p>
+            </div>
+          )}
           <div className="filtro-group">
             <label className="filtro-label">Operativa</label>
             <div className="filtro-presets">
@@ -1467,13 +1493,13 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           ) : (
             <>
               <div className="multi-charts-grid">
-                {enVista.map(({ sesion: s, analisis: a, velas, fuente, finas, finasEtiqueta }) => (
+                {enVista.map(({ sesion: s, analisis: a, velas, velas5, fuente, finas, finasEtiqueta }) => (
                   <SesionEstrategia
                     key={s.date}
                     sesion={s} analisis={a} velas={velas} fuente={fuente}
                     // las de 1 min del afinado no sirven aquí: el mosaico va en velas de 5
-                    velasGrafico={finas5m[s.date] ?? (finasEtiqueta === '5m' ? finas : descarga === 'm5' ? velas : null)}
-                    etiquetaVela={estr.etiquetaVela}
+                    velasGrafico={finas5m[s.date] ?? (finasEtiqueta === '5m' ? finas : descarga === 'm5' ? (velas5 ?? velas) : null)}
+                    etiquetaVela={etiquetaSetup}
                     sinTf={descarga === 'm5'}
                     ticker={tickerVisto} trades={tradesPara(s.date)}
                     pantallaCompleta={aPantalla === s.date}

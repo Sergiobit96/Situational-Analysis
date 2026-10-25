@@ -9,7 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { analizarSesion, resumir, rentabilidadCompuesta, SESIONES, nDiarioPorFecha } from '../src/segundaVelaCore.js'
-import { agruparVelas, ventanaRuleOf4, prepararSesion, estrategiaDe } from '../src/estrategias.js'
+import { agruparVelas, ventanaRuleOf4, prepararSesion, estrategiaDe, conVelaDeSetup } from '../src/estrategias.js'
 import { madridOffsetAt, nuevaYorkOffsetAt } from '../src/timezone.js'
 
 // 2 de febrero de 2026, invierno: Madrid es UTC+1, así que la apertura del DAX (09:00) cae
@@ -451,4 +451,29 @@ test('el CAGR compone cada sesión en R por el riesgo de cada operación', () =>
   // con el doble de riesgo, todo pesa el doble: 1,04 × 0,98
   assert.ok(Math.abs(rentabilidadCompuesta([{ date: '2025-01-01', r: 2 }, { date: '2026-01-01', r: -1 }], 2).total - 1.92) < 1e-9)
   assert.equal(rentabilidadCompuesta([{ date: '2025-01-01', r: 1 }], 1), null)
+})
+
+test('First bar negative con la primera vela de 10 min junta las dos primeras de 5', () => {
+  const r = {
+    ventana: OPC_FBN.ventana, finas: null,
+    velas: velas5De(
+      [108, 110, 100, 104],     // la de 5 min: cierra en negativo, mínimo 100
+      [104, 105, 95, 96],       // con ella, la de 10 min va de 108 a 96: mínimo 95, máximo 110
+      [96, 97, 94, 94.5],
+      [94.5, 95, 93, 93.5],
+    ),
+  }
+  const opc = { ...OPC_FBN, piramideN: null }
+  const de5 = analizarSesion({ ...opc, velas: r.velas, ventana: r.ventana })
+  assert.equal(de5.entrada.precio, 100)
+  assert.equal(de5.rango, 10)
+  const r10 = conVelaDeSetup(r, 10)
+  assert.equal(r10.velas[0].low, 95)
+  assert.equal(r10.velas5, r.velas)
+  const de10 = analizarSesion({ ...opc, velas: r10.velas, ventana: r10.ventana, velasFinas: r10.finas, finasEtiqueta: r10.finasEtiqueta })
+  assert.equal(de10.minutosVela, 10)
+  assert.equal(de10.rango, 15)
+  assert.equal(de10.entrada.precio, 95)            // pierde el mínimo en la tercera de 5
+  assert.equal(de10.entrada.time, r.velas[2].time)
+  assert.equal(conVelaDeSetup(r, 5), r)            // con 5 min, tal cual
 })

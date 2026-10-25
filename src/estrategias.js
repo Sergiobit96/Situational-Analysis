@@ -53,6 +53,8 @@ export const ESTRATEGIAS = [
     tortuga: { pasoN: 0.5, stopN: 2 },
     // 4 posiciones en total: la entrada y 3 añadidos
     maxUnidades: 4,
+    // se puede probar con la primera vela de 10 o 15 min (conVelaDeSetup)
+    velasSetup: [5, 10, 15],
   },
 ]
 
@@ -115,6 +117,18 @@ export function prepararSesion(estr, ticker, velas15) {
     finas: velas15,
     ventana,
   }
+}
+
+// Una sesión de First bar negative (en velas de 5 min) con la vela del setup de otro tamaño: las de 5
+// se juntan en velas de `minutos` desde la apertura, y el recorrido sigue sobre las finas (las de
+// 1 min si el afinado ya las trajo; si no, las mismas de 5). `velas5` guarda las de 5 para dibujar.
+export function conVelaDeSetup(r, minutos) {
+  const ses = r.ventana
+  if (!ses || !minutos || minutos === ses.minutosVela || !r.velas?.length) return r
+  const apertura = r.velas.find(v => minutosMadrid(v.time) >= ses.open)
+  if (!apertura) return r
+  const finas = r.finas?.length ? { finas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '1m' } : { finas: r.velas, finasEtiqueta: '5m' }
+  return { ...r, velas5: r.velas, velas: agruparVelas(r.velas, minutos, apertura.time), ...finas, ventana: { ...ses, minutosVela: minutos } }
 }
 
 // La ventana que mira la Rule of 4 ese día: desde el comunicado hasta el cierre de Wall

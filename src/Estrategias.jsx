@@ -58,7 +58,8 @@ const ESTRATEGIAS = [
                  'Wilder de 20 sesiones hasta la anterior, con el diario de Yahoo del índice. Como mucho un añadido por vela de 5 min ' +
                  'y hasta 4 posiciones con la entrada (3 añadidos); lo que siga abierto se cierra con la sesión. Con flip, si salta el stop en el ' +
                  'máximo de la vela se compra ahí mismo, con el stop en su mínimo y la misma pirámide hacia arriba. Se puede probar ' +
-                 'también añadiendo cada ¼ N, y con una toma de beneficios a 1 N o 2 N de la entrada que cierra toda la posición.',
+                 'también añadiendo cada ¼ N, con una toma de beneficios a 1 N o 2 N de la entrada que cierra toda la posición, y ' +
+                 'con la primera vela de 10 o 15 min en vez de la de 5.',
     Componente:  EstrategiaSegundaVela,
   },
   {

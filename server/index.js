@@ -1376,6 +1376,64 @@ app.get('/api/fotos/archivo', (req, res) => {
   }
 })
 
+// ── Charts (G:\Mi unidad\CHARTS): scripts/subir-charts.mjs los sube cada día a la rama
+// "charts" del repo en GitHub, y de ahí los lee el servidor online. En local, si está la
+// carpeta, se leen directamente de ella. Solo lectura: no hay ruta para borrar ni cambiar.
+const CHARTS_DIR  = process.env.CHARTS_DIR  || 'G:\\Mi unidad\\CHARTS'
+const CHARTS_REPO = process.env.CHARTS_REPO || 'Sergiobit96/Situational-Analysis'
+const CHARTS_RAMA = process.env.CHARTS_RAMA || 'charts'
+const CHART_EXT   = /\.(jpe?g|png|webp|gif)$/i
+
+let _charts = null   // { ts, lista: [{ ruta, bytes }], origen }
+async function getCharts() {
+  if (_charts && Date.now() - _charts.ts < 10 * 60_000) return _charts
+  let lista, origen
+  if (!PRODUCCION && existsSync(CHARTS_DIR)) {
+    lista = walkImages(CHARTS_DIR)
+      .filter(p => CHART_EXT.test(p))
+      .map(p => ({ ruta: relative(CHARTS_DIR, p).split(sep).join('/'), bytes: statSync(p).size }))
+    origen = 'local'
+  } else {
+    // GITHUB_TOKEN es opcional: sin él GitHub deja 60 consultas por hora, que con la caché sobran
+    const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'situational-analysis' }
+    if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
+    const r = await fetch(`https://api.github.com/repos/${CHARTS_REPO}/git/trees/${CHARTS_RAMA}?recursive=1`,
+      { headers, signal: AbortSignal.timeout(30_000) })
+    if (!r.ok) throw new Error(`GitHub HTTP ${r.status}`)
+    const j = await r.json()
+    lista = j.tree.filter(e => e.type === 'blob' && CHART_EXT.test(e.path)).map(e => ({ ruta: e.path, bytes: e.size }))
+    origen = 'github'
+  }
+  lista.sort((a, b) => a.ruta.localeCompare(b.ruta, 'es', { numeric: true }))
+  _charts = { ts: Date.now(), lista, origen }
+  return _charts
+}
+
+app.get('/api/charts/lista', async (_req, res) => {
+  try {
+    const { lista, origen, ts } = await getCharts()
+    res.json({ total: lista.length, origen, actualizado: ts, charts: lista })
+  } catch (err) {
+    console.error('[charts/lista]', err.message)
+    res.status(502).json({ error: `No se pudo leer la lista de charts: ${err.message}` })
+  }
+})
+
+app.get('/api/charts/archivo', async (req, res) => {
+  try {
+    const ruta = String(req.query.ruta ?? '')
+    if (!ruta || !CHART_EXT.test(ruta) || ruta.split('/').some(t => t === '..' || t === '')) return res.status(400).end()
+    const { lista, origen } = await getCharts()
+    if (!lista.some(c => c.ruta === ruta)) return res.status(404).end()
+    if (origen === 'local') return res.sendFile(resolve(join(CHARTS_DIR, ...ruta.split('/'))))
+    const url = `https://raw.githubusercontent.com/${CHARTS_REPO}/${CHARTS_RAMA}/${ruta.split('/').map(encodeURIComponent).join('/')}`
+    res.set('Cache-Control', 'public, max-age=86400').redirect(302, url)
+  } catch (err) {
+    console.error('[charts/archivo]', err.message)
+    res.status(502).end()
+  }
+})
+
 // ── Books de trades (solo local): el Book of Horror de los errores y el Book of Glory
 // de los trades bien hechos. Los dos son la misma carpeta de archivos sueltos y comparten
 // endpoints; ?book= elige cuál, y sin parámetro se entiende el de Horror.

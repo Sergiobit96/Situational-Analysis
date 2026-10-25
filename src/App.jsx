@@ -8,6 +8,7 @@ import Operaciones from './Operaciones'
 import Diario from './Diario'
 import Seguimiento from './Seguimiento'
 import Fotos from './Fotos'
+import Charts from './Charts'
 import Book from './Book'
 import Estrategias from './Estrategias.jsx'
 import Grafico from './Grafico'
@@ -29,6 +30,7 @@ const ICONOS = {
   datos:    'M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4',
   pipeline: 'M6 4l14 8-14 8V4z',
   fotos:    'M3 7h4l2-3h6l2 3h4v13H3zM12 17a4 4 0 100-8 4 4 0 000 8z',
+  charts:   'M4 5h16v14H4zM4 16l4-4 3 3 4-5 5 5M8.5 9h.01',
   horror:   'M12 3l10 18H2L12 3zM12 10v5M12 18v.01',
   glory:    'M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3z',
 }
@@ -45,6 +47,7 @@ const GRUPOS = [
     { id: 'diario', label: 'Diario' },
     { id: 'seg',    label: 'Seguimiento' },
     { id: 'stats',  label: 'Estadísticas' },
+    { id: 'charts', label: 'Charts' },
     // los bots (SRS, Rule of 4 y tortugas) operan en la demo de IG desde el servidor (en la
     // nube, con BOT_OPERA=1); en producción la pestaña pide la clave del bot
     { id: 'bots', label: 'Bots' },
@@ -158,6 +161,7 @@ export default function App() {
           {tab === 'bots'     && <Bots inicial={BOTS_ANTES[pedida] ?? null} />}
           {tab === 'pipeline' && <Pipeline />}
           {tab === 'fotos'    && <Fotos />}
+          {tab === 'charts'   && <Charts />}
           {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}
           {tab === 'glory'    && <Book key="glory"  book="glory"  nombre="Book of Glory"  icono="📗" />}
         </main>

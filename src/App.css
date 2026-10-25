@@ -4115,3 +4115,48 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
 .estr-sensibilidad td.actual { outline: 2px solid var(--text); outline-offset: -2px; font-weight: 600; }
 .estr-mitades-tabla { display: block; overflow-x: auto; }
 @media (min-width: 640px) { .estr-mitades-tabla { display: table; } }
+
+/* ── Pestaña Charts (G:\Mi unidad\CHARTS subidos a GitHub, solo lectura) ── */
+.charts-migas { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; color: var(--muted); }
+.charts-migas span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.charts-migas .clear-eventos:disabled { color: var(--text); cursor: default; opacity: 1; }
+.charts-cuenta { color: var(--muted); font-size: 0.75em; margin-left: 0.25rem; }
+.charts-rejilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.charts-miniatura {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: zoom-in;
+}
+.charts-miniatura:hover { border-color: var(--accent-2); color: var(--text); }
+.charts-miniatura img { width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #fff; border-radius: 4px; }
+.charts-ampliado { margin: 0; max-width: 100%; max-height: 100%; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; cursor: default; }
+.charts-ampliado .fotos-lightbox-img { max-height: calc(100vh - 6rem); }
+.charts-ampliado figcaption { color: #ddd; font-size: 0.85rem; }
+.charts-flecha {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+  width: 48px;
+  height: 48px;
+  cursor: pointer;
+}
+.charts-flecha:hover { background: rgba(255,255,255,0.18); }
+.charts-flecha.izq { left: 1rem; }
+.charts-flecha.der { right: 1rem; }

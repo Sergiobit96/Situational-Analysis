@@ -1,4 +1,7 @@
 {
+  "git": {
+    "deploymentEnabled": { "charts": false }
+  },
   "rewrites": [
     {
       "source": "/api/:path*",

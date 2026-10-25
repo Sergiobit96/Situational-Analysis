@@ -3397,12 +3397,13 @@ async function velasDiariasTortugas(ticker) {
   const m = MERCADOS_TORTUGAS[ticker]
   const ahora = Math.floor(Date.now() / 1000)
   if (m.datos.fuente === 'ig') {
+    const diaria = v => ({ date: fechaEnZona(v.time, 'Europe/Madrid'), open: v.open, high: v.high, low: v.low, close: v.close })
+    const desde = ahora - DIAS_IG_TORTUGAS * 86400
     try {
-      const velas = await ig.velasEntre(ticker, 'd1', ahora - DIAS_IG_TORTUGAS * 86400, ahora - 86400)
-      return velas.map(v => ({ date: fechaEnZona(v.time, 'Europe/Madrid'), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
+      return (await ig.velasEntre(ticker, 'd1', desde, ahora - 86400)).map(diaria).filter(entreSemana)
     } catch (err) {
       if (!m.datos.respaldo?.length) throw err
-      return respaldoTortugas(ticker, m.datos.respaldo, ahora, err)
+      return respaldoTortugas(ticker, m.datos.respaldo, ahora, err, ig.velasEnCache(ticker, 'd1', desde, ahora - 86400).map(diaria).filter(entreSemana))
     }
   }
   // `hasta` a la hora en punto: la caché de memoria acierta dentro de la hora
@@ -3413,16 +3414,34 @@ async function velasDiariasTortugas(ticker) {
 }
 // El oro y la plata sin histórico de IG: las velas de 1 h del contado de su respaldo (ver
 // MERCADOS_TORTUGAS), agrupadas en las sesiones del bot, la primera fuente que las dé enteras.
+// `guardadas`, las diarias de IG que ya están en su caché: si llegan hasta hace poco, al
+// respaldo solo se le piden los días que faltan desde la última (unas pocas descargas, que
+// casi nunca hacen saltar el 429 de Dukascopy), y no los 220 días.
 // Si ninguna, el error lleva el de IG por delante (con el «cupo», el bot reintenta cada hora).
 const SESIONES_QUE_PUEDEN_FALTAR = 6   // Navidad, Año Nuevo y algún festivo sin cotización
-async function respaldoTortugas(ticker, respaldo, ahora, errIg) {
-  const desde = ahora - DIAS_IG_TORTUGAS * 86400
+const DIAS_PARA_COMPLETAR = 14         // las guardadas valen si la última es de hace como mucho esto
+async function respaldoTortugas(ticker, respaldo, ahora, errIg, guardadas = []) {
+  const ultima = guardadas.at(-1)?.date
+  const completar = guardadas.length >= 80 && ultima && ahora - Date.parse(ultima) / 1000 <= DIAS_PARA_COMPLETAR * 86400
+  // desde dos días antes de la última guardada: la primera sesión que se baje puede ir a medias, y se descarta
+  const desde = completar ? Date.parse(ultima) / 1000 - 2 * 86400 : ahora - DIAS_IG_TORTUGAS * 86400
   const fallos = [errIg.message]
   for (const r of respaldo) {
     try {
       const horas = r.fuente === 'Twelve Data' ? await horasTwelveData(r.simbolo, desde, ahora)
         : r.fuente === 'Dukascopy' ? await horasDukascopy(r.instrumento, desde, ahora)
         : []
+      if (completar) {
+        const nuevas = diariasDeSesiones(ticker, horas).filter(d => d.date > ultima)
+        const faltan = sesionesQueFaltan([guardadas.at(-1), ...nuevas])
+        if (faltan > 1) throw new Error(`le faltan ${faltan} sesiones desde el ${ultima}`)
+        // sin nada nuevo, que sea porque no ha habido sesión (un fin de semana), no porque no haya bajado nada
+        const hasta = (nuevas.at(-1) ?? guardadas.at(-1)).date
+        if (ahora - Date.parse(hasta) / 1000 > 4 * 86400) throw new Error(`no da nada después del ${hasta}`)
+        const dias = [...guardadas, ...nuevas]
+        dias.respaldo = nuevas.length ? `IG y, desde el ${nuevas[0].date}, ${r.fuente}` : 'IG (lo guardado)'
+        return dias
+      }
       const dias = diariasDeSesiones(ticker, horas)
       const faltan = sesionesQueFaltan(dias)
       if (dias.length < 80 || faltan > SESIONES_QUE_PUEDEN_FALTAR) throw new Error(`solo ${dias.length} sesiones${Number.isFinite(faltan) ? `, con ${faltan} huecos` : ''}`)

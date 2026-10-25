@@ -397,6 +397,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
       {filas.map((s, i) => {
         const pos = m.posiciones[s]
         const sp = hoy?.sistemas?.[s] ?? null
+        const spViejo = !hoy ? m.salidaAnterior?.sistemas?.[s] ?? null : null
         const c = pos ? cuentasDe(pos, m.precio) : null
         const siguiente = pos ? siguienteAnadido(pos, reglas.pasoN, ocupadosPorOtro(m, s, pos.lado)) : null
         const juega = config.sistemas.includes(s)
@@ -438,7 +439,9 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
             <td className="bot-celda-texto tor-entrada" title={sp ? `Canal de ${sp.k} sesiones${sp.filtro ? ': la ruptura de 20 anterior habría ganado, así que espera a la de 55' : ''}` : ''}>
               {entrada}{sp && !pos && juega ? <small> ({sp.k}{sp.filtro ? ', filtro' : ''})</small> : null}
             </td>
-            <td>{sp && pos ? <>{px(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></> : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>
+            <td>{sp && pos ? <>{px(salidaDe(pos, sp))}<small className="tor-sub">{salidaDe(pos, sp) === pos.stop ? 'stop' : `canal de ${sp.kSalida}`}</small></>
+              : spViejo && pos ? <>{px(salidaDe(pos, spViejo))}<small className="tor-sub" title="Sin plan de hoy, la posición sale por el canal del último plan bueno">{salidaDe(pos, spViejo) === pos.stop ? 'stop' : `canal de ${spViejo.kSalida} del ${m.salidaAnterior.fecha}`}</small></>
+              : sp && juega ? <small>canal de {sp.kSalida}</small> : '—'}</td>
             <td className="bot-celda-texto">
               {pos ? <>{pos.lado === 'largo' ? 'Largo' : 'Corto'} ×{pos.unidades.length} · {num(c.contratos, 2)} c. a {px(c.medio)}<small className="tor-sub">stop {px(pos.stop)} · desde {pos.abierta}{pos.recuperada ? ' · recuperada' : ''}</small></>
                 : m.intentos[s] ? 'mandando la orden…' : '—'}

@@ -174,6 +174,21 @@ test('con posición: añade cada ½ N, sale por el canal y vigila el stop', () =
   assert.equal(paso({ pos, intento: { tipo: 'anadido' }, ahora }).accion, 'reconciliar')
 })
 
+test('sin plan de hoy, una posición sale por el canal del último plan bueno, y sin él solo por el stop', () => {
+  const pos = { lado: 'largo', n0: 300, stop: 24_560, unidades: [{ entrada: 25_160, tamano: 0.6 }] }
+  const ahora = fra(10, 19, 11, 0, 30)
+  const sinPlan = { fecha: '2026-10-19', calculado: fra(10, 19, 9, 0, 5), error: 'IG no da el diario', reintentar: fra(10, 19, 12) }
+  const salidaAnterior = { fecha: '2026-10-16', sistemas: { 1: { kSalida: 10, salida: plan.sistemas[1].salida }, 2: { kSalida: 20, salida: plan.sistemas[2].salida } } }
+  const con = (high, low, x = {}) => paso({ pos, plan: sinPlan, ahora, velas: v1(fra(10, 19, 11), high, low), ...x })
+  assert.equal(con(24_900, 24_850).accion, 'vigilar')
+  assert.deepEqual(con(24_900, 24_850, { salidaAnterior }), { accion: 'salir', motivo: 'canal 10 (niveles del 2026-10-16, sin plan de hoy)' })
+  assert.equal(con(24_900, 24_850, { salidaAnterior, sistema: 2 }).accion, 'vigilar')
+  // sin plan no añade, aunque llegue al nivel
+  assert.equal(con(25_320, 25_200, { salidaAnterior }).accion, 'vigilar')
+  // con el plan de hoy, mandan sus canales
+  assert.equal(paso({ pos, ahora, velas: v1(fra(10, 19, 11), 24_900, 24_860), salidaAnterior: { ...salidaAnterior, sistemas: { 1: { kSalida: 10, salida: { largo: 24_870 } } } } }).accion, 'vigilar')
+})
+
 test('un stop que IG no movió por un fallo suyo se reintenta al rato, en la sesión o fuera de ella', () => {
   const pos = { lado: 'largo', n0: 300, stop: 24_560, stopPendiente: 24_700, esperaStop: fra(10, 19, 11, 0, 40), unidades: [{ entrada: 25_160, tamano: 0.6 }] }
   const velas = v1(fra(10, 19, 11), 25_300, 25_200, 25_250)

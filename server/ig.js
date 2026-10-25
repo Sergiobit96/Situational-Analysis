@@ -655,11 +655,21 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
       c.cubiertos = cubrir(c.cubiertos, a, Math.min(b, cerradoHasta))
     }
     guardarCache(epic, res, c)
+    return deCache(ticker, tf, c, desde, hasta)
+  }
 
+  function deCache(ticker, tf, c, desde, hasta) {
     const velas = c.velas.filter(v => v.time >= desde && v.time < hasta).map(v => escalar(v, estado.epics[ticker]?.escala))
     // la diaria de IG empieza el día a una hora que no es la medianoche de Madrid: se rotula
     // con el día que cubre la mayor parte de la vela, sumándole medio día
     return tf === 'd1' ? velas.map(v => ({ ...v, time: inicioDiaMadrid(v.time + 43200) })) : velas
+  }
+
+  // Lo mismo, solo con lo que ya está en la caché: sin pedir nada ni gastar cupo
+  function velasEnCache(ticker, tf, desde, hasta) {
+    const epic = estado.epics[ticker]?.epic ?? epicDeMercadoIg(ticker)
+    if (!epic) return []
+    return deCache(ticker, tf, leerCache(epic, IG_RESOLUCION[tf].res), desde, hasta)
   }
 
   // Para ver a mano qué mercados da IG con un término (y corregir uno con IG_EPICS)
@@ -879,6 +889,7 @@ export function crearIG({ apiKey, usuario, password, entorno = 'demo', cuentaCfd
   return {
     iniciar,
     velasEntre,
+    velasEnCache,
     seguir,
     actividad,
     buscar,

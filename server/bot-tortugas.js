@@ -240,7 +240,10 @@ export function nivelesSistema(nv, sistema, filtroS1 = false) {
 // Para un índice y un sistema. `ses` es la sesión de hoy del índice (null en fin de semana) y
 // `proxima`, la siguiente que abre; `velas`, las últimas de 1 min en directo; `cfg.encendido`
 // y `cfg.activo` ya dicen si ese índice y ese sistema se juegan y si el bot está encendido.
-export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima, sistema = 1, ocupados = [] }) {
+// `salidaAnterior`, los canales de salida del último plan bueno ({ fecha, sistemas }): sin plan
+// de hoy (IG sin cupo y el respaldo sin responder, p. ej.), una posición sale por ellos. Son
+// los de unos días antes y quedan más lejos o igual que los de hoy: nunca sale antes de tiempo
+export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, ses, proxima, sistema = 1, ocupados = [], salidaAnterior = null }) {
   // una orden mandada cuya confirmación no llegó: antes de nada, ver en IG si entró
   if (intento) return { accion: 'reconciliar' }
   const enSesion = !!ses && ahora >= ses.abre && ahora < ses.cierra
@@ -273,8 +276,11 @@ export function siguientePasoTortugas({ pos, plan, intento, cfg, ahora, velas, s
 
   if (pos) {
     const largo = pos.lado === 'largo'
-    const canal = hoy?.salida?.[pos.lado]
-    if (canal != null && (largo ? bajo <= canal : alto >= canal)) return { accion: 'salir', motivo: `canal ${hoy.kSalida}` }
+    const viejo = hoy ? null : salidaAnterior?.sistemas?.[sistema]
+    const canal = hoy ? hoy.salida?.[pos.lado] : viejo?.salida?.[pos.lado]
+    if (canal != null && (largo ? bajo <= canal : alto >= canal)) {
+      return { accion: 'salir', motivo: hoy ? `canal ${hoy.kSalida}` : `canal ${viejo.kSalida} (niveles del ${salidaAnterior.fecha}, sin plan de hoy)` }
+    }
     // al otro lado del stop: lo cierra IG, y si no lo hace en unos segundos, el bot
     if (pos.stop != null && (largo ? precio <= pos.stop : precio >= pos.stop)) return { accion: 'revisar-ya' }
     if (stopPendiente) return { accion: 'stop' }
@@ -317,7 +323,7 @@ const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 // en orden, con la fecha en la zona de su bolsa). `avisar(texto)` es Telegram. `cartera` y
 // `noticias` frenan las entradas, como en el bot SRS (server/cartera.js, server/noticias.js).
 export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, cartera = null, noticias = null }) {
-  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [] })
+  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, salidas: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [] })
   let datos = vacio()
   try {
     const leido = JSON.parse(readFileSync(archivo, 'utf8'))
@@ -339,6 +345,10 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     for (const [t, p] of Object.entries(datos.planes)) if (!p?.sistemas && !p?.error) delete datos.planes[t]
     // Los planes de cuando riesgoPct era lo que costaba 1 N por unidad (no traen picoN): se rehacen
     for (const [t, p] of Object.entries(datos.planes)) if (p?.sistemas && p.picoN == null) delete datos.planes[t]
+    // los registros de antes de guardar los canales de salida aparte: los de los planes buenos
+    for (const [t, p] of Object.entries(datos.planes)) {
+      if (p?.sistemas && !p.error && !datos.salidas[t]) datos.salidas[t] = { fecha: p.fecha, sistemas: Object.fromEntries(SISTEMAS.map(s => [s, { kSalida: p.sistemas[s].kSalida, salida: p.sistemas[s].salida }])) }
+    }
   } catch { /* primera vez */ }
 
   let guardado = JSON.stringify(datos, null, 2)
@@ -429,6 +439,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       ultimoDia: nv.ultimoDia, cierre: nv.cierre, n: nv.n,
       sistemas: Object.fromEntries(SISTEMAS.map(s => [s, nivelesSistema(nv, s, cfg.filtroS1)])),
     })
+    // los canales de salida, aparte: si mañana no sale el plan, las posiciones siguen saliendo por ellos
+    datos.salidas[ticker] = { fecha: ses.fecha, sistemas: Object.fromEntries(SISTEMAS.map(s => [s, { kSalida: plan.sistemas[s].kSalida, salida: plan.sistemas[s].salida }])) }
 
     // La unidad sale del saldo de la cuenta y de la N: que la pirámide llena pierda como mucho
     // riesgoPct % del capital hasta el stop, en cada entrada (los sistemas no se reparten el capital)
@@ -945,6 +957,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           const pos = datos.posiciones[clave]
           const p = siguientePasoTortugas({
             pos, plan: datos.planes[ticker], intento: datos.intentos[clave], ahora: t, velas, ses, proxima, sistema,
+            salidaAnterior: datos.salidas[ticker] ?? null,
             ocupados: pos ? ocupadosPorOtro(ticker, sistema, pos.lado) : [],
             cfg: { ...cfg, encendido: juega, activo: cfg.activo && juega },
           })
@@ -1074,6 +1087,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
           enSesion: !!ses && t >= ses.abre && t < ses.cierra, proxima: proximaAperturaTortugas(ticker, t),
           precio: ultimasVelas('ig', ticker, 1).at(-1)?.close ?? null,
           plan: datos.planes[ticker] ?? null,
+          salidaAnterior: datos.salidas[ticker] ?? null,
           posiciones: Object.fromEntries(SISTEMAS.map(s => [s, datos.posiciones[claveDe(ticker, s)] ?? null])),
           intentos: Object.fromEntries(SISTEMAS.map(s => [s, datos.intentos[claveDe(ticker, s)] ?? null])),
         }

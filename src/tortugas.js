@@ -33,6 +33,8 @@
 // las adapta. `comision` es la de IG en CFD de acciones americanas (2 centavos por acción y
 // 15 $ como mínimo en cada orden; cada unidad es una orden al entrar y otra al salir), `lote`
 // redondea la unidad a acciones enteras (sin acciones no entra) y `alta`, la fecha en que entró
+// (en futuros, `lote` es lo que vale un punto en un contrato y `contratos` lo marca: la unidad va
+// en contratos enteros, y sin uno entero no entra ni añade)
 // en el índice: con `soloEnIndice` no se abre nada antes. Los dividendos van en `div` de cada
 // vela, el día que cotiza sin él: el largo lo cobra y el corto lo paga, con la financiación.
 // Como los precios de Yahoo están ajustados por los splits, `f` en cada vela dice cuántas
@@ -366,7 +368,8 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
       tamanos: p.unidades.map(u => u.tam), precioEntrada: precioMedio(p), precioSalida: salida, motivo,
       bruto, financiacion: p.financiacion, comision: p.comision, neto, pctCapital: 100 * neto / p.capital,
       // en acciones, cuántas eran de las de entonces (la serie está ajustada por los splits)
-      ...(e.m.info.lote ? { acciones: p.unidades.reduce((s, u) => s + u.tam / (u.f ?? 1), 0) } : {}),
+      ...(e.m.info.contratos ? { contratos: Math.round(tamDe(p) / e.m.info.lote) }
+        : e.m.info.lote ? { acciones: p.unidades.reduce((s, u) => s + u.tam / (u.f ?? 1), 0) } : {}),
     }
   }
 
@@ -390,6 +393,8 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
     const p = e.pos[accion.sis]
     if (accion.tipo === 'entra' || accion.tipo === 'anade') {
       const tam = tamano(e, accion.tipo === 'anade' ? cfg.anadido : 1)
+      // un añadido que en acciones o contratos enteros se queda en nada no se hace
+      if (!(tam > 0)) return
       p.unidades.push({ fecha, ref: precio, precio: precio + p.lado * coste, tam, ...(m.factor ? { f: m.factor[e.i] } : {}) })
       p.stop = precio - p.lado * cfg.stopN * p.n0
       const comision = comisionDe(m, tam, e.i)
@@ -675,6 +680,8 @@ export function ordenesManana(res, capital) {
     const fila = {
       indice: m.info.id, sistema: s, nombre: m.info.nombre, grupo: m.info.grupo, ultimoDia: m.fechas.at(-1), cierre: m.c.at(-1), n,
       unidad: enLotes(unidad), anadido: enLotes(unidad * (cfg.anadido ?? 1)),
+      // en futuros, las mismas en contratos
+      ...(m.info.contratos ? { contratos: Math.round(enLotes(unidad) / m.info.lote), contratosAnadido: Math.round(enLotes(unidad * (cfg.anadido ?? 1)) / m.info.lote) } : {}),
       posicion: null, compra: null, venta: null, salida: null, filtro: false,
     }
     const p = e.pos[s]

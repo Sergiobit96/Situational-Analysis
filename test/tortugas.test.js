@@ -331,3 +331,25 @@ test('la pirámide de 4 unidades pierde el 1 % al stop, añada una unidad o medi
   assert.ok(Math.abs(media.neto + 1000) < 1e-6)
   assert.equal(expedienteBacktest(backtestTortugas([prepararMercado(INFO, velas)], SIN_TIPO, { ...LIMPIO, anadido: 0.5 })).configuracion.anadidoEnUnidades, 0.5)
 })
+
+test('futuros: la unidad va en contratos enteros, y sin uno entero no entra ni añade', () => {
+  // la unidad son 100 €/pt (0,2 % de 100.000 entre N = 2) y cada contrato vale 30 €/pt: 3 contratos
+  const futuro = lote => ({ ...INFO, lote, contratos: true })
+  const velas = conFechas([...base(), RUPTURA, vela(103, 103.5, 99, 99.5)])
+  const op = backtestTortugas([prepararMercado(futuro(30), velas)], SIN_TIPO, LIMPIO).operaciones[0]
+  assert.deepEqual(op.tamanos, [90, 90, 90, 90])
+  assert.equal(op.contratos, 12)
+  const fila = ordenesManana(backtestTortugas([prepararMercado(futuro(30), velas)], SIN_TIPO, LIMPIO), 100_000)[0]
+  // al último cierre, con su N: contratos enteros de lo que daría la unidad
+  assert.equal(fila.contratos, Math.floor(riesgoPorN({ ...CONFIG_TORTUGAS, ...LIMPIO }) * 100_000 / fila.n / 30 + 1e-9))
+  assert.equal(fila.unidad, 30 * fila.contratos)
+  // a 150 €/pt el contrato, la unidad no llega a uno: no opera
+  const nada = backtestTortugas([prepararMercado(futuro(150), velas)], SIN_TIPO, LIMPIO)
+  assert.equal(nada.operaciones.length + nada.abiertas.length, 0)
+  // con añadidos de media unidad y un contrato de ¾ de unidad, entra con uno y los añadidos no llegan
+  const unidadMedia = riesgoPorN({ ...CONFIG_TORTUGAS, ...LIMPIO, anadido: 0.5 }) * 100_000 / 2
+  const conUno = backtestTortugas([prepararMercado(futuro(0.75 * unidadMedia), velas)], SIN_TIPO, { ...LIMPIO, anadido: 0.5 })
+  const sola = [...conUno.operaciones, ...conUno.abiertas][0]   // con una sola unidad, el stop (a 2 N) no salta
+  assert.equal(sola.unidades, 1)
+  assert.equal(sola.contratos, 1)
+})

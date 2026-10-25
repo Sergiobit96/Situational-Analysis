@@ -34,26 +34,29 @@ const TRIMESTRAL = [3, 6, 9, 12]
 const MENSUAL = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 const contratos = (meses, desde, hasta, salto = 2) => ({ meses, desde, hasta, salto })
 
+// `punto`: lo que vale un punto del precio de Yahoo en un contrato, en dólares (el S&P, 50 $; el
+// yen, cotizado en dólares por yen, 12,5 millones de yenes; las letras, el eurodólar: 25 $ por
+// centésima del tipo). El backtest opera contratos enteros con él.
 export const MERCADOS_1983 = [
-  { id: 'ZB',  simbolo: 'ZB=F',  nombre: 'Bono 30 años',    original: 'Bono del Tesoro a 30 años', grupo: 'Tipos de interés', contratos: contratos(TRIMESTRAL, [0, 14], [0, 26]) },
-  { id: 'ZN',  simbolo: 'ZN=F',  nombre: 'Nota 10 años',    original: 'Nota del Tesoro a 10 años', grupo: 'Tipos de interés', contratos: contratos(TRIMESTRAL, [0, 14], [0, 26]) },
-  { id: 'TB',  simbolo: '^IRX',  nombre: 'Letras 90 días',  original: 'Letras del Tesoro a 90 días y eurodólar', grupo: 'Tipos de interés', tipo: true },
-  { id: 'CHF', simbolo: 'CHFUSD=X', nombre: 'Franco suizo', original: 'Franco suizo', grupo: 'Divisas', contado: true },
-  { id: 'EUR', simbolo: 'EURUSD=X', nombre: 'Euro', original: 'Marco alemán y franco francés', grupo: 'Divisas', contado: true },
-  { id: 'GBP', simbolo: 'GBPUSD=X', nombre: 'Libra', original: 'Libra esterlina', grupo: 'Divisas', contado: true },
-  { id: 'JPY', simbolo: 'JPYUSD=X', nombre: 'Yen', original: 'Yen', grupo: 'Divisas', contado: true },
-  { id: 'CAD', simbolo: 'CADUSD=X', nombre: 'Dólar canadiense', original: 'Dólar canadiense', grupo: 'Divisas', contado: true },
-  { id: 'ES',  simbolo: 'ES=F',  nombre: 'S&P 500',         original: 'S&P 500', grupo: 'Índices', contratos: contratos(TRIMESTRAL, [0, 12], [0, 23]) },
-  { id: 'GC',  simbolo: 'GC=F',  nombre: 'Oro',             original: 'Oro', grupo: 'Metales', contratos: contratos([2, 4, 6, 8, 10, 12], [-1, 20], [0, 3]) },
-  { id: 'SI',  simbolo: 'SI=F',  nombre: 'Plata',           original: 'Plata', grupo: 'Metales', contratos: contratos([3, 5, 7, 9, 12], [-1, 20], [0, 3]) },
-  { id: 'HG',  simbolo: 'HG=F',  nombre: 'Cobre',           original: 'Cobre', grupo: 'Metales', contratos: contratos([3, 5, 7, 9, 12], [-1, 20], [0, 3]) },
-  { id: 'CL',  simbolo: 'CL=F',  nombre: 'Crudo',           original: 'Crudo', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 14], [-1, 25], 1.2) },
-  { id: 'HO',  simbolo: 'HO=F',  nombre: 'Gasóleo',         original: 'Gasóleo de calefacción', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 24], [0, 4], 1.2) },
-  { id: 'RB',  simbolo: 'RB=F',  nombre: 'Gasolina',        original: 'Gasolina sin plomo', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 24], [0, 4], 1.2) },
-  { id: 'KC',  simbolo: 'KC=F',  nombre: 'Café',            original: 'Café', grupo: 'Blandas', contratos: contratos([3, 5, 7, 9, 12], [0, 12], [0, 24]) },
-  { id: 'CC',  simbolo: 'CC=F',  nombre: 'Cacao',           original: 'Cacao', grupo: 'Blandas', contratos: contratos([3, 5, 7, 9, 12], [0, 10], [0, 22]) },
-  { id: 'SB',  simbolo: 'SB=F',  nombre: 'Azúcar',          original: 'Azúcar', grupo: 'Blandas', contratos: contratos([3, 5, 7, 10], [-1, 24], [0, 4]) },
-  { id: 'CT',  simbolo: 'CT=F',  nombre: 'Algodón',         original: 'Algodón', grupo: 'Blandas', contratos: contratos([3, 5, 7, 10, 12], [0, 3], [0, 14]) },
+  { id: 'ZB',  punto: 1000, simbolo: 'ZB=F',  nombre: 'Bono 30 años',    original: 'Bono del Tesoro a 30 años', grupo: 'Tipos de interés', contratos: contratos(TRIMESTRAL, [0, 14], [0, 26]) },
+  { id: 'ZN',  punto: 1000, simbolo: 'ZN=F',  nombre: 'Nota 10 años',    original: 'Nota del Tesoro a 10 años', grupo: 'Tipos de interés', contratos: contratos(TRIMESTRAL, [0, 14], [0, 26]) },
+  { id: 'TB',  punto: 2500, simbolo: '^IRX',  nombre: 'Letras 90 días',  original: 'Letras del Tesoro a 90 días y eurodólar', grupo: 'Tipos de interés', tipo: true },
+  { id: 'CHF', punto: 125000, simbolo: 'CHFUSD=X', nombre: 'Franco suizo', original: 'Franco suizo', grupo: 'Divisas', contado: true },
+  { id: 'EUR', punto: 125000, simbolo: 'EURUSD=X', nombre: 'Euro', original: 'Marco alemán y franco francés', grupo: 'Divisas', contado: true },
+  { id: 'GBP', punto: 62500, simbolo: 'GBPUSD=X', nombre: 'Libra', original: 'Libra esterlina', grupo: 'Divisas', contado: true },
+  { id: 'JPY', punto: 12500000, simbolo: 'JPYUSD=X', nombre: 'Yen', original: 'Yen', grupo: 'Divisas', contado: true },
+  { id: 'CAD', punto: 100000, simbolo: 'CADUSD=X', nombre: 'Dólar canadiense', original: 'Dólar canadiense', grupo: 'Divisas', contado: true },
+  { id: 'ES',  punto: 50, simbolo: 'ES=F',  nombre: 'S&P 500',         original: 'S&P 500', grupo: 'Índices', contratos: contratos(TRIMESTRAL, [0, 12], [0, 23]) },
+  { id: 'GC',  punto: 100, simbolo: 'GC=F',  nombre: 'Oro',             original: 'Oro', grupo: 'Metales', contratos: contratos([2, 4, 6, 8, 10, 12], [-1, 20], [0, 3]) },
+  { id: 'SI',  punto: 5000, simbolo: 'SI=F',  nombre: 'Plata',           original: 'Plata', grupo: 'Metales', contratos: contratos([3, 5, 7, 9, 12], [-1, 20], [0, 3]) },
+  { id: 'HG',  punto: 25000, simbolo: 'HG=F',  nombre: 'Cobre',           original: 'Cobre', grupo: 'Metales', contratos: contratos([3, 5, 7, 9, 12], [-1, 20], [0, 3]) },
+  { id: 'CL',  punto: 1000, simbolo: 'CL=F',  nombre: 'Crudo',           original: 'Crudo', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 14], [-1, 25], 1.2) },
+  { id: 'HO',  punto: 42000, simbolo: 'HO=F',  nombre: 'Gasóleo',         original: 'Gasóleo de calefacción', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 24], [0, 4], 1.2) },
+  { id: 'RB',  punto: 42000, simbolo: 'RB=F',  nombre: 'Gasolina',        original: 'Gasolina sin plomo', grupo: 'Energía', contratos: contratos(MENSUAL, [-1, 24], [0, 4], 1.2) },
+  { id: 'KC',  punto: 375, simbolo: 'KC=F',  nombre: 'Café',            original: 'Café', grupo: 'Blandas', contratos: contratos([3, 5, 7, 9, 12], [0, 12], [0, 24]) },
+  { id: 'CC',  punto: 10, simbolo: 'CC=F',  nombre: 'Cacao',           original: 'Cacao', grupo: 'Blandas', contratos: contratos([3, 5, 7, 9, 12], [0, 10], [0, 22]) },
+  { id: 'SB',  punto: 1120, simbolo: 'SB=F',  nombre: 'Azúcar',          original: 'Azúcar', grupo: 'Blandas', contratos: contratos([3, 5, 7, 10], [-1, 24], [0, 4]) },
+  { id: 'CT',  punto: 500, simbolo: 'CT=F',  nombre: 'Algodón',         original: 'Algodón', grupo: 'Blandas', contratos: contratos([3, 5, 7, 10, 12], [0, 3], [0, 14]) },
 ]
 const POR_ID = new Map(MERCADOS_1983.map(m => [m.id, m]))
 
@@ -151,7 +154,7 @@ export function crearFuturosTortugas({ dir, pedirYahoo, ahora, log }) {
     }))
     const orden = new Map(MERCADOS_1983.map((m, k) => [m.id, k]))
     salida.sort((a, b) => orden.get(a.id) - orden.get(b.id))
-    return { mercados: MERCADOS_1983.map(m => ({ id: m.id, simbolo: m.simbolo, nombre: m.nombre, original: m.original, grupo: m.grupo })), series: salida, fallos, avisos }
+    return { mercados: MERCADOS_1983.map(m => ({ id: m.id, simbolo: m.simbolo, nombre: m.nombre, original: m.original, grupo: m.grupo, punto: m.punto })), series: salida, fallos, avisos }
   }
 
   return { series }

@@ -178,7 +178,11 @@ let cacheFuturos = null             // { lista, mercados: { id: serie del motor 
 const futurosEnCache = () => (cacheFuturos && Date.now() - cacheFuturos.cuando < VIGENCIA_MS ? cacheFuturos : null)
 const PRIMER_ANIO_FUTUROS = 2000
 // los futuros no pagan financiación de CFD ni comisión por acción: el coste es el deslizamiento
-const infoFuturo = m => ({ id: m.id, ticker: m.simbolo, nombre: m.nombre, original: m.original, grupo: m.grupo, zona: 'America/New_York', cierre: '17:00', desde: '1900-01-01', spread: 0, dividendo: 0 })
+// en contratos enteros: `lote` es lo que vale un punto en uno (en dólares, que se toman por euros)
+// el tamaño de una unidad para leer: en futuros, contratos (y si no llega a uno, se dice); en
+// acciones, acciones; en índices, € por punto
+const contratosTexto = c => (c > 0 ? `${c.toLocaleString('es-ES')} contrato${c === 1 ? '' : 's'}` : 'no llega a 1 contrato')
+const infoFuturo = m => ({ id: m.id, ticker: m.simbolo, nombre: m.nombre, original: m.original, grupo: m.grupo, zona: 'America/New_York', cierre: '17:00', desde: '1900-01-01', spread: 0, dividendo: 0, ...(m.punto ? { lote: m.punto, contratos: true } : {}) })
 
 async function bajarFuturos(signal) {
   const j = await pedirJson(`${API}/api/tortugas/futuros?desde=${PRIMER_ANIO_FUTUROS}-01-01`, signal)
@@ -1082,8 +1086,8 @@ function NDeHoy({ filas, paso, stopN, acciones, futuros }) {
             <span className="tortugas-n-sub">{nf(100 * f.n / f.cierre, 2)} % del precio</span>
             <span className="tortugas-n-sub">añade cada {fn(paso * f.n)} {pts}</span>
             <span className="tortugas-n-sub">stop a {fn(stopN * f.n)} {pts}</span>
-            <span className="tortugas-n-sub">unidad {acciones ? `${nf(f.unidad)} acciones` : `${nf(f.unidad, 2)} €/pt`}</span>
-            {f.anadido !== f.unidad && <span className="tortugas-n-sub">añadido {acciones ? `${nf(f.anadido)} acciones` : `${nf(f.anadido, 2)} €/pt`}</span>}
+            <span className="tortugas-n-sub">unidad {f.contratos != null ? contratosTexto(f.contratos) : acciones ? `${nf(f.unidad)} acciones` : `${nf(f.unidad, 2)} €/pt`}</span>
+            {f.anadido !== f.unidad && <span className="tortugas-n-sub">añadido {f.contratos != null ? contratosTexto(f.contratosAnadido) : acciones ? `${nf(f.anadido)} acciones` : `${nf(f.anadido, 2)} €/pt`}</span>}
           </div>
         ))}
       </div>
@@ -1454,7 +1458,7 @@ function Ordenes({ filas: todas, juntos, capital, ultimoDato, acciones, futuros 
                 {juntos && <td>S{f.sistema}</td>}
                 <td title={dia(f.ultimoDia)}>{acciones || futuros ? nfp(f.cierre) : nf(f.cierre, 2)}</td>
                 <td>{futuros ? nfp(f.n) : nf(f.n, acciones ? 2 : 1)}</td>
-                <td title={f.anadido !== f.unidad ? `cada añadido: ${acciones ? `${nf(f.anadido)} acc.` : `${nf(f.anadido, 2)} €/pt`}` : undefined}>{acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
+                <td title={f.anadido !== f.unidad ? `cada añadido: ${f.contratos != null ? contratosTexto(f.contratosAnadido) : acciones ? `${nf(f.anadido)} acc.` : `${nf(f.anadido, 2)} €/pt`}` : undefined}>{f.contratos != null ? contratosTexto(f.contratos) : acciones ? `${nf(f.unidad)} acc.` : `${nf(f.unidad, 2)} €/pt`}</td>
                 <td className="tortugas-izq">
                   {f.posicion
                     ? `${f.posicion.lado} · ${f.posicion.unidades} u desde ${dia(f.posicion.desde)} · medio ${acciones || futuros ? nfp(f.posicion.medio) : nf(f.posicion.medio, 1)}`
@@ -1521,6 +1525,7 @@ function Operaciones({ res, mostradas, onMas, acciones, futuros }) {
                 <td>{o.unidades}</td>
                 {acciones
                   ? <td>{nf(o.acciones)} acc.</td>
+                  : o.contratos != null ? <td>{contratosTexto(o.contratos)}</td>
                   : <td title={o.tamanos.length > 1 ? `Unidades: ${o.tamanos.map(t => nf(t, 2)).join(' + ')} €/pt` : undefined}>{nf(o.tamano, 2)} €/pt</td>}
                 <td>{eur(o.nominal)}</td>
                 <td>{precio(o.precioEntrada)}</td>

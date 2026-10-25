@@ -73,8 +73,9 @@ const nombreDias = dias => (dias.size === DIAS.length ? 'todos los días' : DIAS
 const PERIODOS   = [
   { meses: 1, label: '1 mes' }, { meses: 3, label: '3 meses' }, { meses: 6, label: '6 meses' },
   { meses: 12, label: '1 año' }, { meses: 24, label: '2 años' }, { meses: 60, label: '5 años' },
-  // el servidor guarda 10 años de diario por instrumento: más no se puede pedir
-  { meses: 120, label: 'Máx', nombre: '10 años', nota: 'Todo lo que hay: 10 años, el máximo que guarda el servidor' },
+  { meses: 120, label: '10 años' },
+  // el servidor guarda hasta 30 años de diario por instrumento, o lo que tenga el feed si empieza después
+  { meses: 360, label: 'Máx', nombre: 'todo el histórico', nota: 'Todo lo que hay: hasta 30 años, o desde donde empiece el feed de ese instrumento' },
 ]
 
 // Lo que decide qué sesiones se descargan. Si alguno cambia después de analizar, los

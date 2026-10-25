@@ -8,7 +8,7 @@
 //   · los errores sin capturar del proceso: avisan, el mismo como mucho cada 10 min;
 //   · lo que se bloquea el bucle de eventos: la web y los bots comparten proceso, así que una
 //     petición pesada retrasa la vuelta de los bots. Medido el 19-oct-2026 en local, 0,5 s en el
-//     peor caso (un filtro de gaps de 10 años); aquí queda a la vista por si un día crece.
+//     peor caso (un filtro de gaps de 10 años; ahora el histórico llega a 30); aquí queda a la vista por si un día crece.
 
 import { monitorEventLoopDelay } from 'perf_hooks'
 

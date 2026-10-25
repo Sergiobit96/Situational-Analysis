@@ -500,7 +500,27 @@ async function obtenerVelasDiariasYF(yfTicker, from) {
 // Años de histórico diario que se guardan por instrumento. Va dentro de la clave de la
 // caché a propósito: si se cambia, la serie corta que hubiera en disco deja de valer y se
 // reconstruye sola, en vez de quedarse para siempre con la profundidad antigua.
-const ANIOS_DIARIAS = 10
+const ANIOS_DIARIAS = 30
+// Lo que se baja de una vez cuando no hay nada en disco: diez años de H1 caben en el tiempo
+// de una descarga histórica; treinta no. El resto lo va bajando profundizarDiario hacia
+// atrás, año a año y en segundo plano, hasta ANIOS_DIARIAS o hasta donde empiece el feed.
+const ANIOS_PRIMERA_DESCARGA = 10
+
+// Une series diarias por fecha de Londres; en una fecha repetida manda la última serie
+function unirDiarias(...series) {
+  const porFecha = new Map()
+  for (const serie of series) for (const v of serie ?? []) porFecha.set(getLondonDateStr(v.time * 1000), v)
+  return [...porFecha.values()].sort((a, b) => a.time - b.time)
+}
+
+// Guarda la serie en disco (solo sesiones cerradas: la de hoy puede estar a medias) unida a lo
+// que haya en ese momento: la actualización del día y profundizarDiario escriben en la misma
+// clave, y ninguna debe pisar lo que haya añadido la otra mientras descargaba
+function guardarDiario(cacheKey, velas) {
+  const hoy = getLondonDateStr(Date.now())
+  const cerradas = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
+  if (cerradas.length > 0) diskCacheSet(cacheKey, unirDiarias(diskCacheGet(cacheKey), cerradas))
+}
 
 async function obtenerVelasDiariasDesde30m(instrument) {
   const [sessionOpenMin, sessionCloseMin] = DUKA_SESSION_LONDON[instrument] ?? [8*60, 16*60+30]
@@ -508,24 +528,26 @@ async function obtenerVelasDiariasDesde30m(instrument) {
   const cached   = fromCache(cacheKey)
   if (cached) return cached
 
-  const hoy  = getLondonDateStr(Date.now())
   const ayer = getLondonDateStr(Date.now() - 86400_000)
 
-  // Disk cache: arranque rápido tras un reinicio del contenedor
-  const disk        = diskCacheGet(cacheKey)
+  // Disk cache: arranque rápido tras un reinicio del contenedor. Mientras no está la serie
+  // larga, se parte de la de diez años que hubiera, en vez de volver a bajarla entera
+  const disk        = diskCacheGet(cacheKey) ?? diskCacheGet(`h1daily${ANIOS_PRIMERA_DESCARGA}_${instrument}`)
   const ultimaDisco  = disk?.length ? getLondonDateStr(disk[disk.length - 1].time * 1000) : null
 
   // Si el disco ya llega hasta la sesión de ayer, está al día → usarlo tal cual
   if (disk && ultimaDisco >= ayer) {
+    if (!diskCacheGet(cacheKey)) diskCacheSet(cacheKey, disk)
     toCache(cacheKey, disk, 4 * 60 * 60_000)
     console.log(`[Dukascopy H1→Diario] ${instrument}: ${disk.length} días (disco, al día)`)
+    profundizarDiario(instrument, sessionOpenMin, sessionCloseMin)
     return disk
   }
 
   // Sin disco (primera vez) o desactualizado: descargar solo lo que falta desde la base en disco
   const from = ultimaDisco
     ? new Date(new Date(ultimaDisco).getTime() - 2 * 86400_000)  // margen de solape
-    : (() => { const d = new Date(); d.setFullYear(d.getFullYear() - ANIOS_DIARIAS); return d })()
+    : (() => { const d = new Date(); d.setFullYear(d.getFullYear() - ANIOS_PRIMERA_DESCARGA); return d })()
 
   console.log(`[Dukascopy H1→Diario] Descargando ${instrument} desde ${from.toISOString().slice(0, 10)}…`)
   let bars
@@ -542,16 +564,13 @@ async function obtenerVelasDiariasDesde30m(instrument) {
     const yfTicker = DUKA_TO_YF_FALLBACK[instrument]
     if (yfTicker) {
       try {
-        const yfVelas  = await obtenerVelasDiariasYF(yfTicker, from)
-        const porFecha = new Map()
-        for (const v of (disk ?? [])) porFecha.set(getLondonDateStr(v.time * 1000), v)
-        for (const v of yfVelas)      porFecha.set(getLondonDateStr(v.time * 1000), v)
-        const velas = [...porFecha.values()].sort((a, b) => a.time - b.time)
+        const yfVelas = await obtenerVelasDiariasYF(yfTicker, from)
+        // el disco se vuelve a leer: mientras se descargaba, profundizarDiario puede haber añadido años
+        const velas   = unirDiarias(disk, diskCacheGet(cacheKey), yfVelas)
 
         // TTL corto: es un fallback, reintentar Dukascopy pronto en vez de esperar 4h
         toCache(cacheKey, velas, 30 * 60_000)
-        const velasDisco = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
-        if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
+        guardarDiario(cacheKey, velas)
 
         console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días (Yahoo fallback)`)
         return velas
@@ -570,21 +589,73 @@ async function obtenerVelasDiariasDesde30m(instrument) {
     throw err
   }
 
-  // Combinar con la base de disco (si la había) y deduplicar por fecha
-  const nuevas   = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin)
-  const porFecha = new Map()
-  for (const v of (disk ?? [])) porFecha.set(getLondonDateStr(v.time * 1000), v)
-  for (const v of nuevas)       porFecha.set(getLondonDateStr(v.time * 1000), v)
-  const velas = [...porFecha.values()].sort((a, b) => a.time - b.time)
+  // Combinar con la base de disco (si la había, y releída por lo que haya añadido
+  // profundizarDiario mientras tanto) y deduplicar por fecha
+  const velas = unirDiarias(disk, diskCacheGet(cacheKey), agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin))
 
   toCache(cacheKey, velas, 4 * 60 * 60_000)
-
-  // Al disco solo van sesiones cerradas: excluir hoy (candle incompleto si mercado abierto)
-  const velasDisco = velas.filter(v => getLondonDateStr(v.time * 1000) < hoy)
-  if (velasDisco.length > 0) diskCacheSet(cacheKey, velasDisco)
+  guardarDiario(cacheKey, velas)
 
   console.log(`[Dukascopy H1→Diario] ${instrument}: ${velas.length} días`)
+  profundizarDiario(instrument, sessionOpenMin, sessionCloseMin)
   return velas
+}
+
+// Lleva la serie diaria de un instrumento hacia atrás hasta ANIOS_DIARIAS, un año de H1 por
+// descarga (cada uno cabe holgado en el tiempo de una histórica), sin que nadie espere: las
+// peticiones siguen sirviendo lo que hay y cada año que llega se añade al disco y a la
+// memoria. Para en cuanto un año viene vacío, que es donde empieza el feed de ese
+// instrumento, y lo apunta para no volver a intentarlo. Si falla (el feed corta, o una
+// consulta vacía se cuelga hasta el tiempo máximo) lo reintenta al día siguiente, y a los
+// tres fallos seguidos en el mismo punto lo da por el principio.
+const profundizando = new Set()
+async function profundizarDiario(instrument, sessionOpenMin, sessionCloseMin) {
+  if (profundizando.has(instrument)) return
+  const cacheKey = `h1daily${ANIOS_DIARIAS}_${instrument}`
+  const marcaKey = `h1dailyInicio${ANIOS_DIARIAS}_${instrument}`
+  const marca    = diskCacheGet(marcaKey) ?? {}
+  if (marca.fin) return
+  if (marca.fallo && Date.now() - marca.fallo < 24 * 3600_000) return
+
+  profundizando.add(instrument)
+  try {
+    const limite = new Date()
+    limite.setFullYear(limite.getFullYear() - ANIOS_DIARIAS)
+    for (;;) {
+      const disk = diskCacheGet(cacheKey)
+      if (!disk?.length) return
+      const primera = new Date(disk[0].time * 1000)
+      const desde   = getLondonDateStr(disk[0].time * 1000)
+      if (primera <= limite) { diskCacheSet(marcaKey, { fin: true, desde }); return }
+
+      const from = new Date(Math.max(limite.getTime(), primera.getTime() - 365 * 86400_000))
+      let bars
+      try {
+        bars = await dukaFetch({ instrument, dates: { from, to: primera }, timeframe: 'h1' },
+          DUKA_TIMEOUT_HISTORICO_MS, DUKA_OPCIONES_HISTORICO)
+      } catch (err) {
+        const intentos = marca.desde === desde ? (marca.intentos ?? 0) + 1 : 1
+        console.warn(`[Dukascopy H1→Diario] ${instrument}: no se pudo ir más atrás de ${desde} (${errDetalle(err)}, intento ${intentos})`)
+        diskCacheSet(marcaKey, intentos >= 3 ? { fin: true, desde } : { fallo: Date.now(), desde, intentos })
+        return
+      }
+
+      const nuevas = agregarVelasH1ADiarias(bars, sessionOpenMin, sessionCloseMin).filter(v => v.time < disk[0].time)
+      if (nuevas.length === 0) {
+        console.log(`[Dukascopy H1→Diario] ${instrument}: el feed empieza en ${desde}`)
+        diskCacheSet(marcaKey, { fin: true, desde })
+        return
+      }
+      guardarDiario(cacheKey, nuevas)
+      const enMemoria = fromCache(cacheKey)
+      if (enMemoria) toCache(cacheKey, unirDiarias(nuevas, enMemoria), 4 * 60 * 60_000)
+      console.log(`[Dukascopy H1→Diario] ${instrument}: +${nuevas.length} días, desde ${getLondonDateStr(nuevas[0].time * 1000)}`)
+    }
+  } catch (err) {
+    console.warn(`[Dukascopy H1→Diario] ${instrument}: profundizar falló (${err.message})`)
+  } finally {
+    profundizando.delete(instrument)
+  }
 }
 
 // Últimas velas diarias para la cotización del buscador: barra d1 nativa de

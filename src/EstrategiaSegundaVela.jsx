@@ -216,9 +216,11 @@ const VOLUMENES = [
 
 // Las estrategias con pirámide de tortugas comparan su regla con una sola unidad. N es la de
 // las tortugas: el ATR de Wilder de 20 sesiones diarias hasta la anterior.
+// `pasoN`: cada cuántas N se añade.
 const VOLUMENES_TORTUGA = [
-  { id: 'fijo',    label: '1 unidad',     piramide: 0, nota: 'una sola unidad, con el stop fijo al otro lado de la vela' },
-  { id: 'tortuga', label: '+1 cada ½ N',  piramide: 0, nota: 'añade una unidad cada ½ N desde la última y lleva el stop de todas a 2 N de ella' },
+  { id: 'fijo',     label: '1 unidad',     piramide: 0, nota: 'una sola unidad, con el stop fijo al otro lado de la vela' },
+  { id: 'tortuga',  label: '+1 cada ½ N',  piramide: 0, pasoN: 0.5,  nota: 'añade una unidad cada ½ N desde la última y lleva el stop de todas a 2 N de ella' },
+  { id: 'tortuga4', label: '+1 cada ¼ N',  piramide: 0, pasoN: 0.25, nota: 'añade una unidad cada ¼ N desde la última y lleva el stop de todas a 2 N de ella: la pirámide se llena antes y más cerca de la entrada' },
 ]
 
 // Toma de beneficios opcional: se cierra cuando el resultado acumulado de la posición —la
@@ -231,6 +233,12 @@ const OBJETIVOS = [
 ]
 
 const TP_POR_DEFECTO = 3.5
+
+// Con la N de las tortugas, también a tantas N de la entrada: al tocarlo se cierra todo
+const OBJETIVOS_N = [
+  { id: 'n1', label: 'TP en 1 N', tpN: 1, nota: 'cierra toda la posición cuando el precio llega a 1 N de la entrada' },
+  { id: 'n2', label: 'TP en 2 N', tpN: 2, nota: 'cierra toda la posición cuando el precio llega a 2 N de la entrada' },
+]
 
 const STOPS = [
   { id: 'fijo', label: 'Fijo',        beR: null, nota: 'el stop se queda en el extremo contrario del bracket' },
@@ -314,7 +322,11 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const modoEfectivo = stopPct !== 1 ? (SIN_FLIP[modo] ?? modo) : modo
   // el objetivo solo cuenta cuando está activado y el porcentaje es un número utilizable
   const tpValor = tpModo === 'pct' && Number(tpPct) > 0 ? Number(tpPct) : null
+  const objetivos = estr.tortuga ? [...OBJETIVOS, ...OBJETIVOS_N] : OBJETIVOS
+  const objetivoN = estr.tortuga ? OBJETIVOS_N.find(o => o.id === tpModo) ?? null : null
   const volumenes = estr.tortuga ? VOLUMENES_TORTUGA : VOLUMENES
+  // la pirámide de las tortugas de ese chip de volumen, con su paso
+  const piramideNDe = v => (estr.tortuga && v?.pasoN ? { ...estr.tortuga, pasoN: v.pasoN } : null)
   const modos = estr.lado ? modosLado(estr.lado) : MODOS
 
   // Con qué se hizo el último análisis. Los resultados son de esas sesiones: se recalculan con
@@ -353,8 +365,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     colorBracket: estr.colorBracket ?? null,
     beR: STOPS.find(x => x.id === stopModo)?.beR ?? null,
     piramide: volumenes.find(v => v.id === volumen)?.piramide ?? 0,
-    piramideN: estr.tortuga && volumen === 'tortuga' ? estr.tortuga : null,
+    piramideN: piramideNDe(volumenes.find(v => v.id === volumen)),
     tpPct: tpValor,
+    tpN: objetivoN?.tpN ?? null,
     stopPct,
     tamanoAnadido: TAMANOS.find(t => t.id === tamano)?.tamano ?? 1,
     // el tope de posiciones de la pirámide, si la estrategia trae el suyo
@@ -718,7 +731,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
   // recalculo, y son todas valores sueltos
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  })), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, stopPct, tamano, coste])
+  })), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, tpModo, stopPct, tamano, coste])
 
   const dirVela1 = VELAS1.find(v => v.id === vela1)?.dir
   const posApertura = APERTURAS.find(x => x.id === aperturaPos)?.pos
@@ -792,7 +805,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     for (const c of combosRobustez) {
       const a = analizarSesion({
         ...opcionesMotor, ticker: tickerVisto,
-        beR: c.st.beR, piramide: c.v.piramide, piramideN: estr.tortuga && c.v.id === 'tortuga' ? estr.tortuga : null,
+        beR: c.st.beR, piramide: c.v.piramide, piramideN: piramideNDe(c.v),
         velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null, velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
       })
       fila[c.clave] = a.valido && a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0
@@ -904,6 +917,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     tpValor != null && {
       id: 'tp', texto: `Objetivo ${tpValor.toLocaleString('es-ES')}%`, quitar: () => setTpModo(porDefecto.tpModo),
     },
+    objetivoN && {
+      id: 'tp', texto: objetivoN.label, quitar: () => setTpModo(porDefecto.tpModo),
+    },
     Number(coste) > 0 && {
       id: 'coste', texto: `Costes ${Number(coste).toLocaleString('es-ES')} pts`, quitar: () => setCoste(porDefecto.coste),
     },
@@ -927,7 +943,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // volver a esos ajustes sale la que ya se pagó
   const claveRevision = JSON.stringify({
     estrategia: estrategiaId, analizado, modo: modoEfectivo, volumen, tamano, nivelStop, stopModo,
-    tp: tpValor, coste: Number(coste), vela1, aperturaPos,
+    tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos,
   })
   const armarExpediente = () => expedienteIntradia({
     estr, nombre: INSTRUMENTOS.find(i => i.value === tickerVisto)?.label ?? tickerVisto,
@@ -940,7 +956,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
         stop: NIVELES.find(n => n.id === nivelStop)?.nota,
         breakEven: STOPS.find(x => x.id === stopModo)?.nota,
       } : {}),
-      objetivo: tpValor != null ? `cierra al ganar un ${tpValor}% del índice con toda la posición` : 'sin objetivo',
+      objetivo: tpValor != null ? `cierra al ganar un ${tpValor}% del índice con toda la posición` : objetivoN?.nota ?? 'sin objetivo',
       costesPorUnidadPts: Number(coste),
       primeraVela: vela1,
       aperturaRespectoAAyer: aperturaPos,
@@ -1262,7 +1278,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           <div className="filtro-group">
             <label className="filtro-label">Objetivo</label>
             <div className="filtro-presets">
-              {OBJETIVOS.map(o => (
+              {objetivos.map(o => (
                 <button
                   key={o.id}
                   className={`chip ${tpModo === o.id ? 'activo' : ''}`}
@@ -1284,7 +1300,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               )}
             </div>
             <p className="estr-explica">
-              {tpValor == null
+              {objetivoN
+                ? `${objetivoN.nota[0].toUpperCase()}${objetivoN.nota.slice(1)} (la N del día, la de las tortugas)`
+                : tpValor == null
                 ? OBJETIVOS[0].nota
                 : `Cierra cuando la posición entera gana un ${tpValor.toLocaleString('es-ES')}% del índice`}
             </p>
@@ -1851,6 +1869,9 @@ function SesionEstrategia({ sesion: s, analisis: a, velas, velasGrafico, etiquet
               <span>{a.lado === 'largo' ? 'Compra' : 'Venta'} <strong>{fmtPts(a.entrada.precio)}</strong> a las {hora(a.entrada.time)} (+{a.entrada.minutos} min)</span>
               <span>Cierre <strong>{fmtPts(a.salida.precio)}</strong> a las {hora(a.salida.time)}</span>
               <span>Recorrido máx. <strong>{fmtPtsSgn(a.mfePts)}</strong></span>
+              {a.objetivoNivel != null && (
+                <span>Objetivo <strong>{fmtPts(a.objetivoNivel)}</strong> ({a.tpN} N de la entrada)</span>
+              )}
               {a.objetivo != null && (
                 <span>
                   Objetivo <strong>{fmtPtsSgn(a.objetivo)}</strong> sumando todas las unidades

@@ -373,6 +373,45 @@ test('First bar negative llega como mucho a 4 posiciones: la entrada y 3 añadid
   assert.equal(analizarSesion({ ...OPC_FBN, velas: velas5De(...cae) }).anadidos.length, 5)   // sin tope propio, el del motor
 })
 
+test('First bar negative añade cada ¼ N y cierra todo en el objetivo a 1 N de la entrada', () => {
+  // N = 4: añade cada punto (86, 85, 84) y el objetivo está en 83
+  const a = analizarSesion({ ...OPC_FBN, piramideN: { ...FBN.tortuga, pasoN: 0.25 }, tpN: 1, maxUnidades: FBN.maxUnidades, velas: velas5De(
+    PRIMERA_NEGRA,
+    [88, 88, 85.5, 86],       // vende en 87 y añade en 86
+    [86, 86, 84.5, 85],       // añade en 85
+    [85, 85, 82, 82.5],       // añade en 84 y llega al objetivo, 83: fuera todo
+    [82.5, 83, 70, 71],
+  ) })
+  assert.deepEqual(a.anadidos.map(x => x.precio), [86, 85, 84])
+  assert.equal(a.objetivoNivel, 83)
+  assert.equal(a.salida.motivo, 'objetivo')
+  assert.equal(a.salida.precio, 83)
+  assert.equal(a.resultadoPts, 4 + 3 + 2 + 1)
+})
+
+test('el objetivo en N es una orden límite: si la vela abre pasada, se llena a la apertura', () => {
+  const a = analizarSesion({ ...OPC_FBN, piramideN: null, tpN: 1, velas: velas5De(
+    PRIMERA_NEGRA,
+    [88, 88, 86, 86.5],       // vende en 87; objetivo en 83
+    [82, 82.5, 81, 81.5],     // abre en 82, ya pasado el objetivo
+  ) })
+  assert.equal(a.salida.motivo, 'objetivo')
+  assert.equal(a.salida.precio, 82)
+  assert.equal(a.resultadoPts, 5)
+})
+
+test('no se añade en el objetivo: esa unidad se cerraría en el acto', () => {
+  // cada ½ N (2 puntos) con el objetivo a 1 N: el segundo añadido caería justo en 83
+  const a = analizarSesion({ ...OPC_FBN, tpN: 1, velas: velas5De(
+    PRIMERA_NEGRA,
+    [88, 88, 84.5, 85],       // vende en 87 y añade en 85
+    [85, 85, 82, 82.5],       // llega a 83: cierra sin añadir
+  ) })
+  assert.deepEqual(a.anadidos.map(x => x.precio), [85])
+  assert.equal(a.salida.precio, 83)
+  assert.equal(a.resultadoPts, 4 + 2)
+})
+
 test('prepararSesion deja las velas de 5 min tal cual para First bar negative', () => {
   const cinco = velas5De([100, 101, 99, 100], [100, 101, 99, 100])
   const { velas, finas, ventana } = prepararSesion(FBN, '^GDAXI', cinco)

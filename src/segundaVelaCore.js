@@ -90,7 +90,9 @@ export const fmtPts = v =>
 // cada `pasoN` N desde el precio del último relleno y el stop de todas a `stopN` N de él.
 // `n` es la N de esa sesión, la de las tortugas en velas diarias (nDiarioPorFecha); sin ella,
 // la sesión no se puede leer.
-export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, n: nDiario = null }) {
+// `tpN` es una toma de beneficios a tantas N de la entrada (la primera unidad): al tocarla se
+// cierra toda la posición. También necesita la N.
+export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, tpN = null, n: nDiario = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -116,8 +118,8 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
   const rango = high - low
   if (!(rango > 0)) return { valido: false, motivo: 'Rango del bracket nulo' }
 
-  const n = piramideN ? nDiario : null
-  if (piramideN && !(n > 0)) return { valido: false, motivo: 'Sin N: faltan 20 sesiones diarias antes de esta' }
+  const n = piramideN || tpN ? nDiario : null
+  if ((piramideN || tpN) && !(n > 0)) return { valido: false, motivo: 'Sin N: faltan 20 sesiones diarias antes de esta' }
 
   // A partir del bracket se camina sobre las velas finas si las hay
   const finas = velasFinas?.length
@@ -145,7 +147,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
     velasSesion: enSesion.length, parcial, resolucion,
     ventana: ses, minutosVela, nBracket, tamanoAnadido,
     cierreSesion: cierre15.close,
-    modo, n, piramideN,
+    modo, n, piramideN, tpN,
   }
 
   // `sinEntrada` dice por qué: 'color' si la vela no era del color que pide la estrategia,
@@ -186,7 +188,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
   let ladoActual = lado
   while (true) {
     const p = simularPierna({
-      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts, piramideN, n,
+      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts, piramideN, tpN, n,
       // una pierna abierta al saltar el stop de la anterior no puede morir en esa misma
       // vela: dentro de 15 min no se sabe el orden y encadenaría vueltas irreales
       stopDesde: piernas.length ? desde + 1 : desde,
@@ -205,7 +207,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
   const vueltas = piernas.slice(1).map(p => ({
     lado: p.lado, entrada: p.entrada, salida: p.salida,
     resultadoPts: p.resultadoPts, resultadoR: p.resultadoR,
-    unidades: p.unidades, volumen: p.volumen, coste: p.coste, anadidos: p.anadidos, objetivo: p.objetivo,
+    unidades: p.unidades, volumen: p.volumen, coste: p.coste, anadidos: p.anadidos, objetivo: p.objetivo, objetivoNivel: p.objetivoNivel,
   }))
   const resultadoTotalR   = piernas.reduce((n, p) => n + p.resultadoR, 0)
   const resultadoTotalPts = piernas.reduce((n, p) => n + p.resultadoPts, 0)
@@ -221,6 +223,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
     coste: pierna.coste,
     anadidos: pierna.anadidos,
     objetivo: pierna.objetivo,
+    objetivoNivel: pierna.objetivoNivel,
     resultadoPts: pierna.resultadoPts,
     mfePts: pierna.mfePts,
     maePts: pierna.maePts,
@@ -241,7 +244,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
 // Una pierna de la operación: entra al romper su extremo y sale al tocar el contrario
 // (−1R) o, si no lo toca, al cierre de la sesión. 1R es el rango del bracket en los dos
 // sentidos, porque entrada y stop están en los extremos opuestos.
-function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, piramideN = null, n = null }) {
+function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, piramideN = null, tpN = null, n = null }) {
   const paso    = pasoPiramide(piramide)
   const largo   = lado === 'largo'
   const entradaPrecio = largo ? high : low
@@ -252,6 +255,8 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
   // Objetivo opcional en puntos: ese porcentaje del índice en el momento de entrar, que es
   // lo que tiene que sumar el resultado de toda la posición para cerrarla.
   const objetivo = tpPct == null ? null : entradaPrecio * tpPct / 100
+  // Objetivo en N: un precio, a tpN N de la entrada, donde se cierra todo
+  const objetivoNivel = tpN != null && n > 0 ? (largo ? entradaPrecio + tpN * n : entradaPrecio - tpN * n) : null
   const v0 = resto[desde]
 
   const entrada = {
@@ -327,7 +332,9 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
       const cubo5  = Math.floor(v.time / 300)
       const ultimo = unidades[unidades.length - 1]
       const nivel  = largo ? ultimo + piramideN.pasoN * n : ultimo - piramideN.pasoN * n
-      if (unidades.length < maxUnidades && cubo5 !== ultimoCubo5 && (largo ? v.high >= nivel : v.low <= nivel)) {
+      // un añadido en el objetivo o más allá no llegaría a contar: se cerraría en el acto
+      const antesDelObjetivo = objetivoNivel == null || (largo ? nivel < objetivoNivel : nivel > objetivoNivel)
+      if (unidades.length < maxUnidades && cubo5 !== ultimoCubo5 && antesDelObjetivo && (largo ? v.high >= nivel : v.low <= nivel)) {
         const precio = largo ? Math.max(nivel, v.open) : Math.min(nivel, v.open)
         unidades.push(precio)
         pesos.push(tamanoAnadido)
@@ -357,6 +364,16 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
       }
     }
 
+    // Objetivo en N: se mira después de añadir, porque yendo hacia él el precio pasa antes por
+    // los niveles de los añadidos (que quedan antes del objetivo). Es una orden límite: si la
+    // vela abre ya pasada, se llena a la apertura.
+    if (objetivoNivel != null && (largo ? v.high >= objetivoNivel : v.low <= objetivoNivel)) {
+      const precio = largo ? Math.max(objetivoNivel, v.open) : Math.min(objetivoNivel, v.open)
+      salida  = { time: v.time, min: v.min, precio, motivo: 'objetivo' }
+      iSalida = i
+      break
+    }
+
     // El stop se mueve a la entrada cuando el recorrido a favor llega al disparador, pero
     // solo a partir de la vela siguiente, por el mismo motivo.
     if (beR != null && beDesde == null && favor >= beR * riesgo) {
@@ -376,7 +393,7 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
 
   return {
     lado, entrada, salida, iSalida,
-    objetivo,
+    objetivo, objetivoNivel,
     unidades: unidades.length,
     volumen,
     coste,

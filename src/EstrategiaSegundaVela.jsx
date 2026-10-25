@@ -73,7 +73,8 @@ const nombreDias = dias => (dias.size === DIAS.length ? 'todos los días' : DIAS
 const PERIODOS   = [
   { meses: 1, label: '1 mes' }, { meses: 3, label: '3 meses' }, { meses: 6, label: '6 meses' },
   { meses: 12, label: '1 año' }, { meses: 24, label: '2 años' }, { meses: 60, label: '5 años' },
-  { meses: 120, label: '10 años' },
+  // el servidor guarda 10 años de diario por instrumento: más no se puede pedir
+  { meses: 120, label: 'Máx', nombre: '10 años', nota: 'Todo lo que hay: 10 años, el máximo que guarda el servidor' },
 ]
 
 // Lo que decide qué sesiones se descargan. Si alguno cambia después de analizar, los
@@ -997,7 +998,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     if (estr.soloFomc) return `${nombre} · reuniones del FOMC de ${desde} a ${hasta} · ${diasTxt}`
     if (analizado.fuente === 'csv') return `DAX cash (CSV) · de ${desde} a ${hasta} · ${diasTxt}`
     if (analizado.fuente === 'yahoo') return `${nombre} · todas las sesiones del CSV de Yahoo (Documentos) · ${diasTxt}`
-    const periodo = PERIODOS.find(p => p.meses === analizado.meses)?.label ?? `${analizado.meses} meses`
+    const p = PERIODOS.find(x => x.meses === analizado.meses)
+    const periodo = p?.nombre ?? p?.label ?? `${analizado.meses} meses`
     return `${nombre} · todas las sesiones de ${periodo} · ${diasTxt}`
   })()
 
@@ -1113,6 +1115,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 <button
                   key={p.meses}
                   className={`chip ${meses === p.meses ? 'activo' : ''}`}
+                  title={p.nota}
                   onClick={() => setMeses(p.meses)}
                 >{p.label}</button>
               ))}

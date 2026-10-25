@@ -4,7 +4,8 @@
 // de histórico, y la pestaña Estrategias para analizar con ellas. Va
 // como último paso de la tarea "Recoger Yahoo 1min", detrás de las dos de Python.
 //
-// También sube las diarias de Stooq de Documents\Stooq, para comparar con ellas las tortugas.
+// También sube las diarias de Stooq de Documents\Stooq, para comparar con ellas las tortugas,
+// después de añadirles los días que les falten (scripts/actualizar-stooq.mjs).
 //
 // Uso: node scripts/subir-yahoo.mjs
 // La clave es BOT_TOKEN de server/.env. YAHOO_DIR, STOOQ_DIR y SERVIDOR cambian las carpetas y el destino.
@@ -13,6 +14,7 @@
 import { appendFileSync, existsSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
+import { actualizarStooq } from './actualizar-stooq.mjs'
 
 const RAIZ     = join(dirname(fileURLToPath(import.meta.url)), '..')
 const DIR      = process.env.YAHOO_DIR || 'C:\\Users\\Sergio\\Documents\\Yahoo'
@@ -40,6 +42,7 @@ async function main() {
   const token = claveBot()
   if (!token) { apuntar('falta BOT_TOKEN en server/.env'); process.exit(1) }
   let fallos = 0
+  try { await actualizarStooq({ apuntar }) } catch (err) { apuntar(`stooq: ${err.message}`) }
   // [nombre en el log, ruta en el PC, ruta en el servidor]
   const ficheros = [
     ...INDICES.flatMap(indice => ['1min', '5min'].map(intervalo => `${indice}_${intervalo}.csv`)),

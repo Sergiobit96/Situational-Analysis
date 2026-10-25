@@ -83,15 +83,10 @@ const CAMPOS_DESCARGA = [
   { campo: 'ticker',   nombre: 'el instrumento' },
   { campo: 'dias',     nombre: 'los días' },
   { campo: 'meses',    nombre: 'el periodo' },
-  { campo: 'cantidad', nombre: 'las sesiones a analizar' },
   { campo: 'anios',    nombre: 'los años' },
 ]
 // «el instrumento, los días y el periodo»
 const enumerar = xs => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} y ${xs.at(-1)}`)
-// El tope real lo pone la paciencia: el feed se descarga sesión a sesión y en serie, porque
-// Dukascopy corta por IP si se le piden muchos ficheros a la vez. Lo ya descargado se queda
-// en la caché de disco del servidor, así que la segunda pasada sobre las mismas fechas vuela.
-const CANTIDADES = [20, 60, 120, 250, 500]
 
 // Cómo acabó cada pierna de la sesión, no solo la primera: con flip una sesión puede saltar
 // el stop, darse la vuelta y cerrar en el objetivo, y las tres cosas cuentan para filtrar.
@@ -289,7 +284,6 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const estr = estrategiaDe(estrategiaId)
   const [ticker,     setTicker]     = useState('^GDAXI')
   const [meses,      setMeses]      = useState(3)
-  const [cantidad,   setCantidad]   = useState(20)
   const [dias,       setDias]       = useState(new Set([1, 2, 3, 4, 5]))
   const [resultados, setResultados] = useState([])
   const [cargando,   setCargando]   = useState(false)
@@ -341,12 +335,12 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // su instrumento aunque luego se marque otro chip, y lo que cambie se avisa como pendiente.
   const [analizado, setAnalizado] = useState(null)
   const descargaActual = {
-    fuente, ticker, dias: [...dias].sort().join(','), meses, cantidad, anios: `${anioDesde}-${anioHasta}`,
+    fuente, ticker, dias: [...dias].sort().join(','), meses, anios: `${anioDesde}-${anioHasta}`,
   }
   const camposQueCuentan = estr.soloFomc ? ['ticker', 'dias', 'anios']
     : fuente === 'csv' ? ['fuente', 'dias', 'anios']
     : fuente === 'yahoo' ? ['fuente', 'ticker', 'dias']
-    : ['fuente', 'ticker', 'dias', 'meses', 'cantidad']
+    : ['fuente', 'ticker', 'dias', 'meses']
   const cambiosPendientes = analizado && resultados.length > 0
     ? CAMPOS_DESCARGA
       .filter(c => camposQueCuentan.includes(c.campo) && analizado[c.campo] !== descargaActual[c.campo])
@@ -683,7 +677,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error ?? 'No se pudo obtener el calendario de sesiones')
 
-      const lista = (d.sesiones ?? []).slice(-cantidad).reverse()
+      // todas las del periodo: el feed se descarga sesión a sesión y en serie (Dukascopy corta por IP
+      // si se le piden muchos ficheros a la vez), pero lo ya bajado se queda en la caché del servidor
+      const lista = (d.sesiones ?? []).slice().reverse()
       if (lista.length === 0) throw new Error('Ningún día cumple el filtro en ese periodo')
       // la N de las tortugas sale del diario del índice, desde la sesión más antigua
       const nDe = estr.tortuga ? nDiarioPorFecha(await bajarDiario(ticker, Date.parse(lista.at(-1).date) / 1000, ctrl.signal)) : null
@@ -999,7 +995,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     if (analizado.fuente === 'csv') return `DAX cash (CSV) · de ${desde} a ${hasta} · ${diasTxt}`
     if (analizado.fuente === 'yahoo') return `${nombre} · todas las sesiones del CSV de Yahoo (Documentos) · ${diasTxt}`
     const periodo = PERIODOS.find(p => p.meses === analizado.meses)?.label ?? `${analizado.meses} meses`
-    return `${nombre} · las ${analizado.cantidad} sesiones más recientes de ${periodo} · ${diasTxt}`
+    return `${nombre} · todas las sesiones de ${periodo} · ${diasTxt}`
   })()
 
   return (
@@ -1107,37 +1103,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 >{p.label}</button>
               ))}
             </div>
-          </div>}
-
-          {fuente === 'feed' && !estr.soloFomc && <div className="filtro-group">
-            <label className="filtro-label">Sesiones a analizar</label>
-            <div className="filtro-presets">
-              {CANTIDADES.map(c => (
-                <button
-                  key={c}
-                  className={`chip ${cantidad === c ? 'activo' : ''}`}
-                  onClick={() => setCantidad(c)}
-                >{c}</button>
-              ))}
-              {/* la `key` reinicia el campo cuando la cantidad cambia desde los botones */}
-              <input
-                key={cantidad}
-                className="pag-input"
-                type="number"
-                min={1}
-                max={2000}
-                defaultValue={cantidad}
-                title="Escribe cuántas sesiones quieres analizar y pulsa Enter"
-                onFocus={e => e.target.select()}
-                onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
-                onBlur={e => {
-                  const n = Math.round(Number(e.target.value))
-                  if (!Number.isFinite(n) || n < 1) { e.target.value = cantidad; return }
-                  setCantidad(Math.min(n, 2000))
-                }}
-              />
-            </div>
-            <p className="estr-explica">Las {cantidad} más recientes del periodo, una descarga por sesión</p>
+            <p className="estr-explica">Todas las sesiones del periodo, una descarga por sesión: la primera vez, un periodo largo tarda; después sale de la caché</p>
           </div>}
 
           {cambiosPendientes.length > 0 && !cargando && (

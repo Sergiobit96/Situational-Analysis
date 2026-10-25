@@ -92,7 +92,9 @@ export const fmtPts = v =>
 // la sesión no se puede leer.
 // `tpN` es una toma de beneficios a tantas N de la entrada (la primera unidad): al tocarla se
 // cierra toda la posición. También necesita la N.
-export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, tpN = null, n: nDiario = null }) {
+// `beAnadidos`, con la pirámide de las tortugas: a partir de tantos añadidos el stop de toda la
+// posición pasa a su precio medio (break even del conjunto) si así se aprieta más que a 2 N.
+export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 'flip', beR = null, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, velasFinas = null, finasEtiqueta = '5m', ventana = null, colorBracket = null, piramideN = null, tpN = null, beAnadidos = null, n: nDiario = null }) {
   const ses = ventana ?? SESIONES[ticker]
   if (!ses)           return { valido: false, motivo: 'Instrumento sin apertura definida' }
   if (!velas?.length) return { valido: false, motivo: 'Sin velas' }
@@ -188,7 +190,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
   let ladoActual = lado
   while (true) {
     const p = simularPierna({
-      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts, piramideN, tpN, n,
+      resto, desde, lado: ladoActual, high, low, rango, ultima, ses, beR, piramide, tpPct, stopPct, tamanoAnadido, maxUnidades, costePts, piramideN, tpN, beAnadidos, n,
       // una pierna abierta al saltar el stop de la anterior no puede morir en esa misma
       // vela: dentro de 15 min no se sabe el orden y encadenaría vueltas irreales
       stopDesde: piernas.length ? desde + 1 : desde,
@@ -244,7 +246,7 @@ export function analizarSesion({ velas, ticker, modo = 'largo', flip = modo === 
 // Una pierna de la operación: entra al romper su extremo y sale al tocar el contrario
 // (−1R) o, si no lo toca, al cierre de la sesión. 1R es el rango del bracket en los dos
 // sentidos, porque entrada y stop están en los extremos opuestos.
-function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, piramideN = null, tpN = null, n = null }) {
+function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR = null, stopDesde = desde, piramide = false, tpPct = null, stopPct = 1, tamanoAnadido = 1, maxUnidades = MAX_ANADIDOS + 1, costePts = 0, piramideN = null, tpN = null, beAnadidos = null, n = null }) {
   const paso    = pasoPiramide(piramide)
   const largo   = lado === 'largo'
   const entradaPrecio = largo ? high : low
@@ -281,13 +283,14 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
   let ultimoCubo5 = null     // tramo de 5 min en el que se añadió la última unidad
   const tortuga = piramideN != null && n > 0
   let stopMovido = false     // el stop ya está a 2 N de un añadido, no en el bracket
+  let enBE = false           // el stop está en el precio medio, tras beAnadidos añadidos
 
   for (let i = stopDesde; i < resto.length; i++) {
     const v = resto[i]
     if (largo ? v.low <= stop : v.high >= stop) {
       salida  = {
         time: v.time, min: v.min, precio: stop,
-        motivo: stopMovido ? 'stopN' : beDesde != null ? 'breakeven' : 'bracket',
+        motivo: enBE ? 'breakeven' : stopMovido ? 'stopN' : beDesde != null ? 'breakeven' : 'bracket',
       }
       iSalida = i
       mae     = Math.max(mae, Math.abs(entradaPrecio - stop))
@@ -340,10 +343,17 @@ function simularPierna({ resto, desde, lado, high, low, rango, ultima, ses, beR 
         pesos.push(tamanoAnadido)
         anadidos.push({ time: v.time, min: v.min, precio, unidad: unidades.length, tamano: tamanoAnadido })
         ultimoCubo5 = cubo5
-        const nuevo = largo ? precio - piramideN.stopN * n : precio + piramideN.stopN * n
+        let nuevo = largo ? precio - piramideN.stopN * n : precio + piramideN.stopN * n
+        // con bastantes añadidos, el precio medio si aprieta más: el conjunto ya no pierde
+        let esBE = false
+        if (beAnadidos != null && anadidos.length >= beAnadidos) {
+          const medio = unidades.reduce((t, u, k) => t + u * pesos[k], 0) / pesos.reduce((a, b) => a + b, 0)
+          if (largo ? medio > nuevo : medio < nuevo) { nuevo = medio; esBE = true }
+        }
         if (largo ? nuevo > stop : nuevo < stop) {
-          stop       = nuevo
-          stopMovido = true
+          stop = nuevo
+          if (esBE) enBE = true
+          else stopMovido = true
         }
       }
     } else if (paso > 0 && unidades.length < maxUnidades) {

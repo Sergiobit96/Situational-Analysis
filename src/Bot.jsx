@@ -73,7 +73,7 @@ function backtestDe(d, maxUnidades) {
   const a = analizarSesion({
     velas, ticker: d.ticker, modo: c.modo, stopPct: c.stopPct, beR: c.beR, piramide: piramideN ? 0 : c.piramide ?? 0,
     tamanoAnadido: c.tamanoAnadido ?? 1, maxUnidades: c.maxUnidades ?? maxUnidades, tpPct: null, ventana: d.ventana,
-    colorBracket: c.colorBracket ?? null, piramideN, tpN: c.tpN ?? null, n: d.n ?? null,
+    colorBracket: c.colorBracket ?? null, piramideN, tpN: c.tpN ?? null, beAnadidos: c.beAnadidos ?? null, n: d.n ?? null,
   })
   if (!a.valido) return { valido: false, motivo: a.motivo }
   if (!a.entrada) return { valido: true, resultadoPts: null }
@@ -410,6 +410,14 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             </select>
           </label>
           {tortuga && (
+            <label>Break even
+              <select value={editando.beAnadidos ?? ''} disabled={editando.piramide == null} onChange={e => cambiar('beAnadidos', e.target.value === '' ? null : Number(e.target.value))}>
+                <option value="">No: el stop a 2 N de la última</option>
+                <option value={2}>Con 2 añadidos, el stop al precio medio</option>
+              </select>
+            </label>
+          )}
+          {tortuga && (
             <label>Objetivo
               <select value={editando.tpN ?? ''} onChange={e => cambiar('tpN', e.target.value === '' ? null : Number(e.target.value))}>
                 <option value="">Sin objetivo: hasta el stop o el cierre</option>
@@ -449,6 +457,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
             El tamaño sale del riesgo, que es lo que se pierde si salta ese stop: ese % del saldo de la cuenta entre el rango de la vela (por lo que vale el punto del contrato). Si el mínimo de IG obliga a arriesgar más del doble, esa sesión no entra.
             La entrada va a mercado, pero solo si el precio no se ha ido del mínimo más de lo que digas.
             La pirámide añade otra posición cada {editando.piramide === 0.25 ? '¼' : '½'} N desde el precio de la última, aunque el precio ya lo haya pasado, como mucho una cada 5 min y hasta {datos.maxUnidades ?? 4} con la entrada; con cada una, el stop de todas baja a 2 N de ella si así se aprieta.
+            {editando.beAnadidos ? `Con el ${editando.beAnadidos}º añadido, el stop de todas pasa al precio medio de la posición (donde el conjunto sale a cero) si así se aprieta más; si salta ahí, no se pierde. ` : ''}
             {editando.tpN ? `Con el precio a ${editando.tpN} N del mínimo de la vela (donde entra), cierra todas las posiciones; un añadido que caería ahí o más allá no se pone. ` : ''}
             N es la de las tortugas: el ATR de Wilder de 20 sesiones del diario del índice, hasta la anterior.
             Junto a una noticia de alto impacto (ForexFactory) de la divisa del mercado o del dólar no entra: espera a que pase. Y ninguna entrada se manda si, con ella, lo que se perdería al saltar a la vez todos los stops de los mercados que se mueven juntos (los índices de EE. UU., los europeos, el dólar…) en ese sentido, contando todos los bots, pasa del {datos.riesgoGrupoPct ?? 6}% del saldo.
@@ -466,7 +475,7 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
         )}
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
           const { modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias } = form
-          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias: margenNoticias ?? null, ...(tortuga ? { tpN: form.tpN ?? null } : {}) }).then(() => setForm(null))
+          guardarConfig({ modo, stopPct, beR, piramide, tamanoAnadido, riesgoPct, deslizamientoMaxR, rangoMaxPct, margenNoticias: margenNoticias ?? null, ...(tortuga ? { tpN: form.tpN ?? null, beAnadidos: form.beAnadidos ?? null } : {}) }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
 

@@ -215,6 +215,7 @@ export const FIRST_BAR_NEGATIVE = {
     piramide: 0.5, tamanoAnadido: 1,
     colorBracket: 'bajista', piramideN: true, stopN: 2,
     tpN: null,   // toma de beneficios a 1 o 2 N de la rotura; null, sin objetivo
+    beAnadidos: null,   // con tantos añadidos, el stop de todas al precio medio (si aprieta más que a 2 N); null, nunca
     // 4 posiciones en total, la entrada y 3 añadidos (lo pidió el usuario el 20-oct-2026), aunque el
     // SRS cambie su MAX_UNIDADES
     maxUnidades: 4,
@@ -222,6 +223,7 @@ export const FIRST_BAR_NEGATIVE = {
   describir: {
     piramide: v => `Pirámide: ${v == null ? 'no' : `una posición más cada ${String(v).replace('.', ',')} N desde la última, con el stop de todas a 2 N de ella, hasta 3 añadidos`}`,
     tpN: v => `Objetivo: ${v == null ? 'ninguno' : `cierra todo a ${v} N de la entrada`}`,
+    beAnadidos: v => `Break even: ${v == null ? 'no' : `con ${v} añadidos, el stop de todas al precio medio`}`,
   },
   sesionDe: sesionFirstBar, proximaApertura,
 }
@@ -852,17 +854,31 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
     return op.lado === 'largo' ? Math.max(op.stop, nuevo) : Math.min(op.stop, nuevo)
   }
 
+  // El de la pirámide de las tortugas: a 2 N de la última y, con `beAnadidos` añadidos o más, el
+  // precio medio si aprieta más (el conjunto ya no pierde). `extra`, { tamano, entrada } de una que
+  // va a entrar. Devuelve el stop y si es el del break even
+  function stopTortuga(dia, extra = null) {
+    const op = dia.operacion
+    const aDosN = stopN(dia, extra?.entrada ?? null)
+    const anadidos = op.unidades.filter(u => !u.salida).length + (extra ? 1 : 0) - 1
+    if (!(dia.config.beAnadidos > 0 && anadidos >= dia.config.beAnadidos)) return { stop: aDosN, be: false }
+    const conMedio = stopMedio({ ...op, stop: aDosN }, extra)
+    return { stop: conMedio, be: conMedio !== aDosN }
+  }
+
   async function ajustarStops(dia) {
     const op = dia.operacion
     if (dia.config.piramideN) {
-      const stop = stopN(dia)
+      const { stop, be } = stopTortuga(dia)
       if (stop === op.stop && op.unidades.every(u => u.salida || u.stop === stop)) return
       const movido = stop !== op.stop
       const fallos = await moverStops(dia, stop)
       if (fallos.length) { apuntar(dia, `IG no deja mover el stop a ${stop}: ${fallos[0]}`); return }
-      // de aquí en adelante, si salta, es el stop a 2 N y no el del bracket
-      if (movido) op.stopMovido = true
-      apuntar(dia, `Stop de las ${op.unidades.length} posiciones a ${stop}${movido ? `, a ${dia.config.stopN} N de la última` : ''}`)
+      // de aquí en adelante, si salta, es el stop a 2 N (o el break even) y no el del bracket; y
+      // de un break even no se da la vuelta
+      if (movido && be) op.be = true
+      else if (movido) op.stopMovido = true
+      apuntar(dia, `Stop de las ${op.unidades.length} posiciones a ${stop}${movido ? (be ? ', al precio medio (break even)' : `, a ${dia.config.stopN} N de la última`) : ''}`)
       return
     }
     const stop = stopMedio(op)
@@ -933,7 +949,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
         tamano = cabe
       }
     }
-    const stop = cfg.piramideN ? stopN(dia, precio) : stopMedio(op, { tamano, entrada: precio })
+    const stop = cfg.piramideN ? stopTortuga(dia, { tamano, entrada: precio }).stop : stopMedio(op, { tamano, entrada: precio })
     // donde IG no admite órdenes a mercado, el límite va a un tope del nivel (o del precio de
     // ahora, si la de las tortugas ya lo ha pasado)
     const desdeNivel = cfg.piramideN ? precio : nivel
@@ -1110,7 +1126,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       apuntar(dia, `Salió ${idas.length} de ${pendientes.length} posiciones por el stop: se cierran las demás`)
       if ((await cerrarUnidades(dia, vivas)).length) return
     }
-    terminarPierna(dia, op.stopMovido ? 'stopN' : op.be ? 'breakeven' : 'stop', ses)
+    terminarPierna(dia, op.be ? 'breakeven' : op.stopMovido ? 'stopN' : 'stop', ses)
   }
 
   // Salidas apuntadas al precio del stop porque IG aún no las tenía en la actividad: se
@@ -1320,6 +1336,12 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const v = cambios.tpN === null || cambios.tpN === '' ? null : Number(cambios.tpN)
       if (![null, 1, 2].includes(v)) throw new Error('Objetivo no válido: ninguno, 1 N o 2 N')
       c.tpN = v
+    }
+    if ('beAnadidos' in cambios) {
+      if (!c.piramideN) throw new Error('El break even por añadidos solo está en First bar negative')
+      const v = cambios.beAnadidos === null || cambios.beAnadidos === '' ? null : Number(cambios.beAnadidos)
+      if (![null, 2].includes(v)) throw new Error('Break even no válido: ninguno o con 2 añadidos')
+      c.beAnadidos = v
     }
     if ('tamanoAnadido' in cambios) {
       if (![1, 0.5].includes(Number(cambios.tamanoAnadido))) throw new Error('Cada añadido es de 1 o de 0,5 unidades')

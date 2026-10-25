@@ -246,6 +246,12 @@ const STOPS = [
   { id: 'be2',  label: 'BE en +2R',   beR: 2,    nota: 'el stop pasa a la entrada al recorrer 2R a favor' },
 ]
 
+// Con la pirámide de las tortugas, el break even va por añadidos: el stop al precio medio
+const STOPS_TORTUGA = [
+  { id: 'fijo', label: 'Sin break even',     beAnadidos: null, nota: 'el stop va a 2 N del último añadido' },
+  { id: 'bea2', label: 'BE tras 2 añadidos', beAnadidos: 2,    nota: 'con el segundo añadido, el stop de todas pasa al precio medio de la posición, donde el conjunto sale a cero (o a 2 N del último, si aprieta más)' },
+]
+
 // Años que cubre el CSV de DAX cash de 5 min
 const ANIOS_CSV = Array.from({ length: 2026 - 2009 + 1 }, (_, i) => 2009 + i)
 
@@ -364,6 +370,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     flip: modoEfectivo === 'flip',
     colorBracket: estr.colorBracket ?? null,
     beR: STOPS.find(x => x.id === stopModo)?.beR ?? null,
+    beAnadidos: estr.tortuga ? STOPS_TORTUGA.find(x => x.id === stopModo)?.beAnadidos ?? null : null,
     piramide: volumenes.find(v => v.id === volumen)?.piramide ?? 0,
     piramideN: piramideNDe(volumenes.find(v => v.id === volumen)),
     tpPct: tpValor,
@@ -799,13 +806,13 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const serieRobustez = useMemo(() => validasEnOrden.map(({ sesion, analisis: a }) => ({
     fecha: sesion.date, r: a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0, medida: a.rangoPct,
   })), [validasEnOrden])
-  const combosRobustez = STOPS.flatMap(st => volumenes.map(v => ({ clave: `${st.id}|${v.id}`, fila: st.label, columna: v.label, st, v })))
+  const combosRobustez = (estr.tortuga ? STOPS_TORTUGA : STOPS).flatMap(st => volumenes.map(v => ({ clave: `${st.id}|${v.id}`, fila: st.label, columna: v.label, st, v })))
   const matrizRobustez = () => validasEnOrden.map(r => {
     const fila = { fecha: r.sesion.date }
     for (const c of combosRobustez) {
       const a = analizarSesion({
         ...opcionesMotor, ticker: tickerVisto,
-        beR: c.st.beR, piramide: c.v.piramide, piramideN: piramideNDe(c.v),
+        beR: c.st.beR ?? null, beAnadidos: c.st.beAnadidos ?? null, piramide: c.v.piramide, piramideN: piramideNDe(c.v),
         velas: r.velas, ventana: r.ventana ?? null, n: r.nDiario ?? null, velasFinas: r.finas, finasEtiqueta: r.finasEtiqueta ?? '5m',
       })
       fila[c.clave] = a.valido && a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0
@@ -911,8 +918,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     !estr.tortuga && nivelStop !== porDefecto.nivelStop && {
       id: 'nivel', texto: `Stop ${NIVELES.find(n => n.id === nivelStop)?.label.toLowerCase()}`, quitar: () => setNivelStop(porDefecto.nivelStop),
     },
-    !estr.tortuga && stopModo !== porDefecto.stopModo && {
-      id: 'be', texto: STOPS.find(s => s.id === stopModo)?.label, quitar: () => setStopModo(porDefecto.stopModo),
+    stopModo !== porDefecto.stopModo && {
+      id: 'be', texto: (estr.tortuga ? STOPS_TORTUGA : STOPS).find(s => s.id === stopModo)?.label, quitar: () => setStopModo(porDefecto.stopModo),
     },
     tpValor != null && {
       id: 'tp', texto: `Objetivo ${tpValor.toLocaleString('es-ES')}%`, quitar: () => setTpModo(porDefecto.tpModo),
@@ -955,7 +962,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       ...(!estr.tortuga ? {
         stop: NIVELES.find(n => n.id === nivelStop)?.nota,
         breakEven: STOPS.find(x => x.id === stopModo)?.nota,
-      } : {}),
+      } : { breakEven: STOPS_TORTUGA.find(x => x.id === stopModo)?.nota }),
       objetivo: tpValor != null ? `cierra al ganar un ${tpValor}% del índice con toda la posición` : objetivoN?.nota ?? 'sin objetivo',
       costesPorUnidadPts: Number(coste),
       primeraVela: vela1,
@@ -1260,10 +1267,10 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             <p className="estr-explica">{NIVELES.find(n => n.id === nivelStop)?.nota}</p>
           </div>}
 
-          {!estr.tortuga && <div className="filtro-group">
+          <div className="filtro-group">
             <label className="filtro-label">Break even</label>
             <div className="filtro-presets">
-              {STOPS.map(s => (
+              {(estr.tortuga ? STOPS_TORTUGA : STOPS).map(s => (
                 <button
                   key={s.id}
                   className={`chip ${stopModo === s.id ? 'activo' : ''}`}
@@ -1272,8 +1279,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 >{s.label}</button>
               ))}
             </div>
-            <p className="estr-explica">{STOPS.find(s => s.id === stopModo)?.nota}</p>
-          </div>}
+            <p className="estr-explica">{(estr.tortuga ? STOPS_TORTUGA : STOPS).find(s => s.id === stopModo)?.nota}</p>
+          </div>
 
           <div className="filtro-group">
             <label className="filtro-label">Objetivo</label>

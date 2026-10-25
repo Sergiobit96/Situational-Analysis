@@ -291,3 +291,38 @@ test('la configuración admite la pirámide cada ¼ N y el objetivo a 1 o 2 N', 
     assert.throws(() => bot.cambiarConfig({ tpN: 3 }), /Objetivo no válido/)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('con BE tras 2 añadidos, el segundo lleva el stop de todas al precio medio y sale a cero', async () => {
+  const precios = { '^GDAXI': [25500, 25501] }
+  const ig = igFalso({ precios })
+  // al final y otro día que las demás: el directo de velas es de todo el proceso. Sin la vela
+  // grande del 5-nov en el diario, N sigue siendo 4
+  const { bot, dir, enHora } = botDePrueba(ig, { velasDiarias: async () => DIARIO_DAX.slice(0, -1) })
+  const bajar = async (m, bid) => {
+    precios['^GDAXI'] = [bid, bid + 1]
+    vela1m(utc(19, 8, m), bid + 2, bid + 3, bid, bid)
+    enHora(utc(19, 8, m, 10)); await bot._paso()
+    return apunte(bot)
+  }
+  try {
+    bot.cambiarConfig({ beAnadidos: 2 })
+    mananaNegra(19)
+    enHora(utc(19, 8, 5, 4)); await bot._paso()
+    let d = await bajar(6, 25478)                          // venta a 25478
+    d = await bajar(7, 25475)                              // un añadido: stop a 2 N, 25483
+    assert.equal(d.operacion.stop, 25483)
+    assert.ok(!d.operacion.be)
+    d = await bajar(10, 25472)                             // el segundo: el medio (25475) aprieta más que 2 N (25480)
+    assert.equal(d.operacion.unidades.length, 3)
+    assert.equal(d.operacion.stop, 25475)
+    assert.equal(d.operacion.be, true)
+    assert.match(d.eventos.map(e => e.texto).join('\n'), /al precio medio \(break even\)/)
+
+    ig.quitarPosiciones()
+    ig.nivelCierre = 25475
+    enHora(utc(19, 8, 20, 5)); await bot._paso()
+    d = apunte(bot)
+    assert.equal(d.salida.motivo, 'breakeven')
+    assert.equal(d.resultadoPts, 3 + 0 - 3)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})

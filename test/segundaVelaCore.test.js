@@ -412,6 +412,23 @@ test('no se añade en el objetivo: esa unidad se cerraría en el acto', () => {
   assert.equal(a.resultadoPts, 4 + 2)
 })
 
+test('con BE tras 2 añadidos el stop pasa al precio medio y sale a cero', () => {
+  const velas = velas5De(
+    PRIMERA_NEGRA,
+    [88, 89, 86, 86.5],       // vende en 87
+    [86.5, 87, 84, 84.5],     // añade en 85 → stop a 93
+    [84.5, 85, 82.5, 83],     // añade en 83: el medio, 85, aprieta más que 2 N (91)
+    [83, 85.5, 82.8, 85.2],   // vuelve a 85: fuera a cero
+  )
+  const a = analizarSesion({ ...OPC_FBN, beAnadidos: 2, velas })
+  assert.deepEqual(a.anadidos.map(x => x.precio), [85, 83])
+  assert.equal(a.salida.motivo, 'breakeven')
+  assert.equal(a.salida.precio, 85)
+  assert.equal(a.resultadoPts, 0)
+  // sin la regla, el stop sigue a 2 N (91) y cierra con la sesión
+  assert.equal(analizarSesion({ ...OPC_FBN, velas }).salida.motivo, 'cierre')
+})
+
 test('prepararSesion deja las velas de 5 min tal cual para First bar negative', () => {
   const cinco = velas5De([100, 101, 99, 100], [100, 101, 99, 100])
   const { velas, finas, ventana } = prepararSesion(FBN, '^GDAXI', cinco)

@@ -25,7 +25,7 @@ import { crearNoticias } from './noticias.js'
 import { crearConciliacion } from './conciliacion.js'
 import { crearResumenDiario } from './resumen-diario.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
-import { INDICE_YAHOO, INDICE_YAHOO_CSV, DIARIOS_YAHOO, parsearCsvYahoo, parsearDiarioYahoo, velasYahooDeOperacion } from './velas-yahoo.js'
+import { INDICE_YAHOO, INDICE_YAHOO_CSV, DIARIOS_YAHOO, DIARIOS_STOOQ, parsearCsvYahoo, parsearDiarioYahoo, parsearDiarioStooq, velasYahooDeOperacion } from './velas-yahoo.js'
 import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
 import { crearFuturosTortugas } from './futuros-tortugas.js'
 import { crearColaFeed } from './cola-feed.js'
@@ -1886,6 +1886,40 @@ app.get('/api/yahoo-csv/diario/:id', (req, res) => {
   res.json({ id, primera: velas[0].date, ultima: velas.at(-1).date, velas })
 })
 
+// Las diarias de Stooq de Documents\Stooq (ver DIARIOS_STOOQ), para comparar las tortugas con
+// las de Yahoo. En el servidor online, en el volumen, adonde las sube scripts/subir-yahoo.mjs.
+const STOOQ_DIR = process.env.STOOQ_DIR
+  || (process.env.NODE_ENV === 'production' ? (existsSync('/data') ? '/data/stooq' : join(DISK_CACHE_DIR, 'stooq')) : 'C:\\Users\\Sergio\\Documents\\Stooq')
+const diariosStooqCache = new Map()   // id → { mtime, velas }
+function diarioStooqLocal(id) {
+  const file = join(STOOQ_DIR, `${DIARIOS_STOOQ[id]}_d.csv`)
+  try {
+    const mtime = statSync(file).mtimeMs
+    const visto = diariosStooqCache.get(id)
+    if (visto?.mtime === mtime) return visto.velas
+    const velas = parsearDiarioStooq(readFileSync(file, 'utf8'))
+    diariosStooqCache.set(id, { mtime, velas })
+    return velas
+  } catch {
+    return null
+  }
+}
+app.get('/api/stooq/diario/:id', (req, res) => {
+  const { id } = req.params
+  if (!DIARIOS_STOOQ[id]) return res.status(400).json({ error: `No hay diario de Stooq de ${id}` })
+  const velas = diarioStooqLocal(id)
+  const fichero = `${DIARIOS_STOOQ[id]}_d.csv`
+  if (!velas?.length) {
+    return res.status(404).json({
+      falta: true,
+      error: process.env.NODE_ENV === 'production'
+        ? `El servidor online no tiene ${fichero} de Stooq: súbelo con node scripts/subir-yahoo.mjs desde tu PC`
+        : `No está ${fichero} en ${STOOQ_DIR}`,
+    })
+  }
+  res.json({ id, primera: velas[0].date, ultima: velas.at(-1).date, velas })
+})
+
 // Si el fichero de 1 min de Dukascopy de ese día ya está en la caché de disco, se lee de ahí
 // aunque el feed esté cortado. Es el nombre que le pone dukascopy-node (el mes en base 0).
 function diaEnCacheDukascopy(instrument, ts) {
@@ -3137,6 +3171,25 @@ app.put(['/api/yahoo/:fichero', '/api/yahoo/diario/:diario'], claveBot.middlewar
     writeFileSync(`${destino}.tmp`, texto)
     renameSync(`${destino}.tmp`, destino)
     res.json({ ok: true, fichero: diario ? `diario/${diario}` : fichero, velas })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Las diarias de Stooq, igual: PUT /api/stooq/<fichero>_d.csv (ver DIARIOS_STOOQ)
+app.put('/api/stooq/:fichero', claveBot.middleware, express.text({ type: () => true, limit: '20mb' }), (req, res) => {
+  if (process.env.NODE_ENV !== 'production') return res.status(404).json({ error: 'Solo en el servidor online' })
+  const { fichero } = req.params
+  if (!Object.values(DIARIOS_STOOQ).some(f => fichero === `${f}_d.csv`)) return res.status(400).json({ error: `Fichero desconocido: ${fichero}` })
+  const texto = typeof req.body === 'string' ? req.body : ''
+  const velas = parsearDiarioStooq(texto).length
+  if (!velas) return res.status(400).json({ error: 'El fichero no trae velas' })
+  try {
+    mkdirSync(STOOQ_DIR, { recursive: true })
+    const destino = join(STOOQ_DIR, fichero)
+    writeFileSync(`${destino}.tmp`, texto)
+    renameSync(`${destino}.tmp`, destino)
+    res.json({ ok: true, fichero: `stooq/${fichero}`, velas })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }

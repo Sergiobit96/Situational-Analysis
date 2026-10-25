@@ -26,6 +26,11 @@ export const INDICE_YAHOO_CSV = { ...INDICE_YAHOO, '^N225': 'N225' }
 // el tipo a 3 meses), para el backtest de las tortugas
 export const DIARIOS_YAHOO = ['N225', 'HSI', 'DAX', 'FTSE', 'SPX', 'NDX', 'DJI', 'RUT', 'IRX']
 
+// Las diarias de Stooq de Documents\Stooq (<fichero>_d.csv), por id de INDICES_TORTUGAS. El
+// "nasdaq" es el NDX de contado, igual que Yahoo; los demás, desde 2013, son cotizaciones de
+// casi 24 h tipo CFD, con la apertura distinta del cierre anterior (el hueco de la noche se ve)
+export const DIARIOS_STOOQ = { N225: '^jp', DAX: '^dax', FTSE: '^uklc', SPX: '^sp', DJI: '^dow', NDX: 'nasdaq' }
+
 // Índices cuyo CFD no va pegado al contado: se corrigen con el desfase del día
 export const CALIBRAR = new Set(['^GSPC', '^NDX', '^DJI', '^RUT'])
 
@@ -58,6 +63,9 @@ export function parsearDiarioYahoo(texto) {
   }
   return velas.sort((a, b) => a.date.localeCompare(b.date))
 }
+
+// "Date,Open,High,Low,Close[,Volume]" de Stooq → lo mismo que parsearDiarioYahoo
+export const parsearDiarioStooq = texto => parsearDiarioYahoo(texto.replace(/,/g, ';'))
 
 // Primera posición con time >= t (búsqueda binaria)
 function desde(velas, t) {

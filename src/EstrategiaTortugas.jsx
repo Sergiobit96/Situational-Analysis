@@ -107,6 +107,32 @@ const csvEnCache = () => Object.fromEntries(
   [...cacheDiarioCsv].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
 )
 
+// Los diarios de Stooq de Documents\Stooq (/api/stooq/diario): seis índices. El Nasdaq es el NDX
+// de contado desde 1986, como el de Yahoo; los otros cinco, desde 2013, son cotizaciones de casi
+// 24 h tipo CFD, con el hueco de la noche entre el cierre y la apertura. Stooq no trae el tipo: el
+// IRX sale de Yahoo en línea.
+const IDS_STOOQ = ['N225', 'DAX', 'FTSE', 'SPX', 'DJI', 'NDX']
+const ANIO_STOOQ = 2014   // el primer año entero con los seis, con margen para los canales de 55
+const cacheDiarioStooq = new Map()  // ticker → { velas, cuando }
+async function bajarDiarioStooq(ticker, signal) {
+  if (ticker === TICKER_TIPO) return bajarDiario(ticker, signal)
+  const visto = cacheDiarioStooq.get(ticker)
+  if (visto && Date.now() - visto.cuando < VIGENCIA_MS) return visto.velas
+  let j
+  try {
+    j = await pedirJson(`${API}/api/stooq/diario/${ID_CSV[ticker]}`, signal)
+  } catch (e) {
+    if (e.name === 'AbortError') throw e
+    throw new Error(`${ticker}: ${e.message}`, { cause: e })
+  }
+  cacheDiarioStooq.set(ticker, { velas: j.velas, cuando: Date.now() })
+  return j.velas
+}
+const stooqEnCache = () => Object.fromEntries([
+  ...[...cacheDiarioStooq].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
+  ...(cacheDiario.has(TICKER_TIPO) && Date.now() - cacheDiario.get(TICKER_TIPO).cuando < VIGENCIA_MS ? [[TICKER_TIPO, cacheDiario.get(TICKER_TIPO).velas]] : []),
+])
+
 const datosEnCache = () => Object.fromEntries(
   [...cacheDiario].filter(([, v]) => Date.now() - v.cuando < VIGENCIA_MS).map(([t, v]) => [t, v.velas]),
 )
@@ -167,7 +193,7 @@ async function bajarFuturos(signal) {
 
 const AJUSTES_INICIALES = {
   indices: INDICES_TORTUGAS.map(i => i.id),
-  fuenteDiario: 'yahoo',   // de dónde salen los diarios de los índices: 'yahoo' (en línea) o 'csv' (Documentos)
+  fuenteDiario: 'yahoo',   // de dónde salen los diarios de los índices: 'yahoo' (en línea), 'csv' (Documentos) o 'stooq'
   lados: CONFIG_TORTUGAS.lados,
   riesgo: 100 * CONFIG_TORTUGAS.riesgo,
   anadido: CONFIG_TORTUGAS.anadido,
@@ -308,6 +334,9 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const setAjustes = f => setTodosAjustes(t => ({ ...t, [universo]: f(t[universo]) }))
   const [datos, setDatos] = useState(datosEnCache)
   const [datosCsv, setDatosCsv] = useState(csvEnCache)
+  const [datosStooq, setDatosStooq] = useState(stooqEnCache)
+  const [fuentes, setFuentes] = useState(null)          // Yahoo frente a Stooq: { clave, filas, desde, indices }
+  const [comparandoFuentes, setComparandoFuentes] = useState(false)
   const [datosAcciones, setDatosAcciones] = useState(accionesEnCache)
   const [datosFuturos, setDatosFuturos] = useState(futurosEnCache)
   const [cargando, setCargando] = useState(false)
@@ -382,8 +411,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   }), [ajustes, sistema, universo])
   // en índices, los diarios pueden salir de los CSV de Documentos en vez de Yahoo en línea
   const deCsv = universo === 'indices' && ajustes.fuenteDiario === 'csv'
-  const diarios = deCsv ? datosCsv : datos
-  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera, ajustes.mercadosFuera, deCsv])
+  const deStooq = universo === 'indices' && ajustes.fuenteDiario === 'stooq'
+  const diarios = deStooq ? datosStooq : deCsv ? datosCsv : datos
+  // Stooq no tiene el Hang Seng ni el Russell: con Stooq se prueba con los otros que estén elegidos
+  const indicesUsados = useMemo(() => (deStooq ? ajustes.indices.filter(id => IDS_STOOQ.includes(id)) : ajustes.indices), [deStooq, ajustes.indices])
+  const claveCfg = JSON.stringify([universo, cfg, ajustes.indices, ajustes.sectoresFuera, ajustes.mercadosFuera, ajustes.fuenteDiario])
 
   // los indicadores solo dependen de los datos: se calculan una vez por índice
   const preparados = useMemo(() => {
@@ -402,14 +434,14 @@ export default function EstrategiaTortugas({ estrategiaId }) {
       const fuera = new Set(ajustes.mercadosFuera)
       return listaFuturos.filter(x => !fuera.has(x.id)).map(x => datosFuturos.mercados[x.id]).filter(Boolean)
     }
-    if (!acciones) return ajustes.indices.map(id => preparados[id]).filter(Boolean)
+    if (!acciones) return indicesUsados.map(id => preparados[id]).filter(Boolean)
     const fuera = new Set(ajustes.sectoresFuera)
     return accionesPreparadas.filter(x => !fuera.has(x.info.grupo))
-  }, [futuros, listaFuturos, datosFuturos, ajustes.mercadosFuera, acciones, preparados, ajustes.indices, accionesPreparadas, ajustes.sectoresFuera])
+  }, [futuros, listaFuturos, datosFuturos, ajustes.mercadosFuera, acciones, preparados, indicesUsados, accionesPreparadas, ajustes.sectoresFuera])
   // con «solo desde que entró», el servidor manda cada acción desde un año antes de entrar en
   // el índice: sin esa casilla hace falta su historia entera
   const faltan = futuros ? (datosFuturos ? [] : ['los mercados de las tortugas'])
-    : !acciones ? ajustes.indices.filter(id => !preparados[id])
+    : !acciones ? indicesUsados.filter(id => !preparados[id])
     : !datosAcciones || (!cfg.soloEnIndice && !datosAcciones.completas) ? ['las acciones'] : []
 
   // en índices se prueba con los que haya (y se avisa de los que faltan); en lo demás, con todo
@@ -469,8 +501,8 @@ export default function EstrategiaTortugas({ estrategiaId }) {
       setMostradas(25)
       return
     }
-    const tickers = [...INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.ticker), TICKER_TIPO]
-    const bajar = deCsv ? bajarDiarioCsv : bajarDiario
+    const tickers = [...INDICES_TORTUGAS.filter(i => indicesUsados.includes(i.id)).map(i => i.ticker), TICKER_TIPO]
+    const bajar = deStooq ? bajarDiarioStooq : deCsv ? bajarDiarioCsv : bajarDiario
     setProgreso({ hechos: 0, total: tickers.length })
     const nuevos = {}
     const fallos = []
@@ -489,11 +521,58 @@ export default function EstrategiaTortugas({ estrategiaId }) {
     }
     await Promise.all([trabajador(), trabajador(), trabajador()])
     if (ctrl.signal.aborted) return
-    ;(deCsv ? setDatosCsv : setDatos)(d => ({ ...d, ...nuevos }))
-    if (fallos.length) setError(`No se pudieron ${deCsv ? 'leer' : 'bajar'}: ${fallos.join(' · ')}`)
+    ;(deStooq ? setDatosStooq : deCsv ? setDatosCsv : setDatos)(d => ({ ...d, ...nuevos }))
+    if (fallos.length) setError(`No se pudieron ${deCsv || deStooq ? 'leer' : 'bajar'}: ${fallos.join(' · ')}`)
     setCargando(false)
     setProgreso(null)
     setMostradas(25)
+  }
+
+  // Los mismos ajustes con los diarios de Yahoo (en línea, o los CSV si es la fuente elegida) y con
+  // los de Stooq, en los índices que tienen los dos y desde que hay los seis en Stooq (2014). Baja
+  // lo que falte de cada fuente.
+  const yahooCsv = ajustes.fuenteDiario === 'csv'
+  const indicesFuentes = useMemo(() => ajustes.indices.filter(id => IDS_STOOQ.includes(id)), [ajustes.indices])
+  const desdeFuentes = Math.max(ajustes.desde, ANIO_STOOQ)
+  const claveFuentes = JSON.stringify([claveCfg, yahooCsv])
+  async function compararFuentes() {
+    abortRef.current?.abort()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    setComparandoFuentes(true)
+    setError(null)
+    const tickers = [...INDICES_TORTUGAS.filter(i => indicesFuentes.includes(i.id)).map(i => i.ticker), TICKER_TIPO]
+    const deYahoo = { ...(yahooCsv ? datosCsv : datos) }, deStooqYa = { ...datosStooq }, fallos = []
+    const pedir = async (destino, bajar, t) => {
+      if (destino[t]) return
+      try { destino[t] = await bajar(t, ctrl.signal) } catch (e) { if (e.name === 'AbortError') throw e; fallos.push(e.message) }
+    }
+    try {
+      for (const t of tickers) {
+        await Promise.all([pedir(deYahoo, yahooCsv ? bajarDiarioCsv : bajarDiario, t), pedir(deStooqYa, bajarDiarioStooq, t)])
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') throw e
+    }
+    if (ctrl.signal.aborted) { setComparandoFuentes(false); return }
+    ;(yahooCsv ? setDatosCsv : setDatos)(deYahoo)
+    setDatosStooq(deStooqYa)
+    if (fallos.length) setError(`No se pudieron bajar: ${fallos.join(' · ')}`)
+    // un respiro para que se pinte el aviso antes de los backtests
+    await new Promise(listo => setTimeout(listo, 30))
+    const preparar = d => INDICES_TORTUGAS.filter(i => indicesFuentes.includes(i.id) && d[i.ticker]).map(i => prepararMercado(i, sinSesionEnCurso(i, d[i.ticker])))
+    const lados = { yahoo: preparar(deYahoo), stooq: preparar(deStooqYa) }
+    const tiposDe = { yahoo: deYahoo[TICKER_TIPO] ?? null, stooq: deStooqYa[TICKER_TIPO] ?? deYahoo[TICKER_TIPO] ?? null }
+    const base = { ...cfg, desde: `${desdeFuentes}-01-01` }
+    const unidades = [...new Set([1, 4, cfg.maxUnidades])].sort((a, b) => a - b)
+    const filas = []
+    for (const s of [1, 2, '1+2']) for (const l of ['largos', 'ambos']) for (const u of unidades) {
+      const c = { ...base, sistema: s, lados: l, maxUnidades: u }
+      const m = Object.fromEntries(Object.entries(lados).map(([f, ms]) => [f, ms.length ? metricasTortugas(backtestTortugas(ms, tiposDe[f], c)) : null]))
+      filas.push({ sistema: s, lados: l, unidades: u, actual: s === cfg.sistema && l === cfg.lados && u === cfg.maxUnidades, m })
+    }
+    setFuentes({ clave: claveFuentes, filas, desde: desdeFuentes, indices: lados.stooq.map(x => x.info.nombre), yahooCsv })
+    setComparandoFuentes(false)
   }
 
   function comparar() {
@@ -522,7 +601,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
       ? gruposDe(listaFuturos.filter(x => !ajustes.mercadosFuera.includes(x.id)).map(x => x.grupo))
       : acciones
         ? gruposDe(lista.filter(a => !ajustes.sectoresFuera.includes(a.sector)).map(a => a.sector))
-        : gruposDe(INDICES_TORTUGAS.filter(i => ajustes.indices.includes(i.id)).map(i => i.grupo)),
+        : gruposDe(INDICES_TORTUGAS.filter(i => indicesUsados.includes(i.id)).map(i => i.grupo)),
     maxUnidades: ajustes.maxUnidades, maxGrupo: ajustes.maxGrupo, maxSentido: ajustes.maxSentido,
     sistemas: sistemasDe(sistema).length, anadido: ajustes.anadido,
   })
@@ -571,7 +650,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const camposAjuste = ['lados', 'riesgo', 'anadido', 'maxUnidades', 'maxGrupo', 'maxSentido', 'media', 'reduccionDD', 'financiacion',
     'recargo', 'deslizN', 'desde', 'capital', ...(acciones ? ['soloEnIndice', 'comisiones'] : [])]
   const baseAjustes = `${futuros ? 'Mercados de las tortugas' : acciones ? 'Acciones del S&P 500' : 'Índices'} · ${nf(mercados.length)} ${
-    futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}${deCsv ? ' · CSV de Documentos' : ''}`
+    futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}${deCsv ? ' · CSV de Documentos' : deStooq ? ' · Stooq' : ''}`
 
   return (
     <div className="estrategia-panel tortugas">
@@ -637,18 +716,22 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             <div className="filtro-group">
               <label className="filtro-label">
                 Datos
-                {deCsv && Object.keys(datosCsv).length > 0 && (
-                  <span className="filtro-valor">hasta el {dia(Object.values(datosCsv).map(v => v.at(-1)?.date ?? '').sort()[0])}</span>
+                {(deCsv || deStooq) && Object.keys(diarios).length > 0 && (
+                  <span className="filtro-valor">hasta el {dia(Object.values(diarios).map(v => v.at(-1)?.date ?? '').sort()[0])}</span>
                 )}
               </label>
               <div className="filtro-presets">
                 <Chips opciones={[
                   { v: 'yahoo', label: 'Yahoo en línea', nota: 'El servidor baja de Yahoo el diario de cada índice, al día' },
                   { v: 'csv', label: 'CSV de Documentos', nota: 'Los CSV diarios de Documents\\Yahoo\\diario que deja recoger_yahoo.py' },
+                  { v: 'stooq', label: 'Stooq', nota: 'Los diarios de Documents\\Stooq: seis índices, cinco de ellos cotizaciones de casi 24 h desde 2013' },
                 ]} valor={ajustes.fuenteDiario ?? 'yahoo'} onCambio={v => poner('fuenteDiario', v)} />
               </div>
               <p className="estr-explica">
-                {deCsv
+                {deStooq
+                  ? <>Los diarios de Stooq de Documents\Stooq, sin Hang Seng ni Russell. El Nasdaq es el contado desde 1986; los otros cinco, cotizaciones de casi 24 h desde 2013, en las que se ve el hueco de la noche (en Yahoo la apertura es muchas veces el cierre anterior y el stop se llena en su nivel). Para probar con los seis, desde {ANIO_STOOQ}.
+                      {ajustes.desde < ANIO_STOOQ && indicesUsados.length > 1 && <strong> Desde {ajustes.desde}, hasta 2013 solo opera el Nasdaq.</strong>}</>
+                  : deCsv
                   ? 'Los CSV diarios de Yahoo de Documents\\Yahoo\\diario (y el del tipo a 3 meses, IRX): llegan hasta el día que se grabaron'
                   : 'Del servidor, que los baja de Yahoo al día'}
               </p>
@@ -705,7 +788,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
                 ? 'Futuros de las tortugas (Yahoo)…'
                 : acciones
                   ? progreso.total ? `Diario de Yahoo de las acciones… ${progreso.hechos}/${progreso.total}` : 'Lista del S&P 500…'
-                  : `${deCsv ? 'CSV diarios de Documentos' : 'Diario de Yahoo'}… ${progreso.hechos}/${progreso.total}`}
+                  : `${deStooq ? 'Diarios de Stooq' : deCsv ? 'CSV diarios de Documentos' : 'Diario de Yahoo'}… ${progreso.hechos}/${progreso.total}`}
             </div>
           )}
           {error && <div className="error-global">{error}</div>}
@@ -887,6 +970,10 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           <Piramide res={res} />
           <Robustez serie={serieRobustez} unidad="%" titulo="Robustez de las operaciones (en % del capital)" />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
+          {universo === 'indices' && (
+            <YahooFrenteStooq fuentes={fuentes} vigente={fuentes?.clave === claveFuentes} comparando={comparandoFuentes}
+              onComparar={compararFuentes} desde={desdeFuentes} hayIndices={indicesFuentes.length > 0} />
+          )}
           <RevisionBacktest
             clave={claveCfg}
             armar={() => expedienteBacktest(res, { universo, variantes: variantes?.clave === claveCfg ? variantes.filas : null })}
@@ -1273,6 +1360,52 @@ function Variantes({ variantes, vigente, comparando, onComparar, acciones }) {
         Los dos sistemas, por separado y juntos (el 2 con las rupturas que el 1 se salta), con y sin cortos{acciones ? ' (con la pirámide de ahora: con cientos de acciones cada backtest tarda unos segundos)' : ' y con distintas pirámides'}, con el resto de ajustes como están.
         La fila resaltada es la que se ve arriba. Fíjate más en el MAR (rentabilidad anual entre el peor drawdown)
         que en la rentabilidad: subir el riesgo sube las dos cosas a la vez.
+      </p>
+    </div>
+  )
+}
+
+// Las mismas variantes con los diarios de Yahoo y con los de Stooq, lado a lado
+function YahooFrenteStooq({ fuentes, vigente, comparando, onComparar, desde, hayIndices }) {
+  const celdas = m => m
+    ? <><td className={tono(m.cagr)}>{pct(m.cagr)}</td><td>{pct(m.maxDD, 0)}</td><td>{nf(m.mar, 2)}</td><td>{nf(m.profitFactor, 2)}</td></>
+    : <td colSpan={4}>sin datos</td>
+  return (
+    <div className="estr-resumen">
+      <div className="tortugas-cabecera">
+        <strong>Yahoo frente a Stooq</strong>
+        <button className="chip" onClick={onComparar} disabled={comparando || !hayIndices}>
+          {comparando ? 'Calculando…' : fuentes ? 'Volver a comparar' : 'Comparar Yahoo y Stooq'}
+        </button>
+      </div>
+      {fuentes && (
+        <div className={`tortugas-tabla-wrap ${vigente ? '' : 'tortugas-caducada'}`}>
+          <table className="estr-mitades-tabla tortugas-tabla">
+            <thead>
+              <tr><th rowSpan={2}>Variante</th><th colSpan={4} style={{ textAlign: 'center' }}>Yahoo{fuentes.yahooCsv ? ' (CSV)' : ''}</th><th colSpan={4} style={{ textAlign: 'center' }}>Stooq</th></tr>
+              <tr><th>Anual</th><th>Máx. DD</th><th>MAR</th><th>PF</th><th>Anual</th><th>Máx. DD</th><th>MAR</th><th>PF</th></tr>
+            </thead>
+            <tbody>
+              {fuentes.filas.map(f => (
+                <tr key={`${f.sistema}-${f.lados}-${f.unidades}`} className={f.actual ? 'tortugas-actual' : ''}>
+                  <th>{nombreSistema(f.sistema)} · {LADO_CORTO[f.lados]} · {f.unidades === 1 ? 'sin pirámide' : `${f.unidades} u`}</th>
+                  {celdas(f.m.yahoo)}
+                  {celdas(f.m.stooq)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="estr-nota">
+        {fuentes && !vigente ? <strong>Los ajustes han cambiado desde la comparación: vuelve a calcularla. </strong> : null}
+        {!hayIndices
+          ? 'Elige alguno de los índices que tiene Stooq (todos menos el Hang Seng y el Russell). '
+          : fuentes ? `${fuentes.indices.join(', ')}, desde ${fuentes.desde}. ` : `Los índices elegidos que tiene Stooq, desde ${desde}. `}
+        Los mismos ajustes con las dos fuentes. Stooq trae cotizaciones de casi 24 h, en las que el stop que salta
+        de noche se llena a la apertura; en el diario de Yahoo la apertura es muchas veces el cierre anterior y el stop
+        se llena en su nivel, así que lo que gana de más con Yahoo es en buena parte optimismo de los datos.
+        El tipo de la financiación sale de Yahoo en los dos.
       </p>
     </div>
   )

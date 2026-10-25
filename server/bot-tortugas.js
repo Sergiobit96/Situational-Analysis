@@ -20,7 +20,7 @@
 //   · pirámide: una unidad más cada ½ N a favor desde el último relleno, hasta `maxUnidades`
 //     (o media, con `anadido` = 0,5: la peor pirámide pierde entonces 2,75 N y la unidad crece),
 //     con los límites de cartera del backtest dentro de cada sistema (unidades por grupo y por
-//     sentido) y, entre los dos, el nominal total como mucho 10 veces el saldo.
+//     sentido) y, entre los dos, el nominal total como mucho 20 veces el saldo.
 // Las entradas, los añadidos y la salida por el canal los decide el bot con el precio en
 // directo de IG, solo dentro de la sesión de contado de cada índice (que es lo que ve el
 // backtest), y van a mercado. No deja órdenes pendientes en IG. El stop de 2 N sí puede saltar
@@ -164,7 +164,7 @@ export const nHastaStop = (k, anadido = 1) =>
   (k > 0 ? STOP_N - (k - 1) * PASO_N + anadido * ((k - 1) * STOP_N - PASO_N * (k - 1) * (k - 2) / 2) : 0)
 export const picoPiramide = (maxUnidades, anadido = 1) =>
   Math.max(...Array.from({ length: Math.max(1, maxUnidades) }, (_, i) => nHastaStop(i + 1, anadido)))
-export const APALANCAMIENTO = 10   // nominal total de las posiciones (de los dos sistemas) / saldo, como mucho
+export const APALANCAMIENTO = 20   // nominal total de las posiciones (de los dos sistemas) / saldo, como mucho
 const MARGEN_MAX = 0.4             // una orden no puede pedir más margen que esta parte del disponible
 const PREFIJO = 'TOR'              // + el sistema: TOR1-…, TOR2-…
 const RECIENTE_S = 120             // las velas de 1 min que cuentan como el precio de ahora

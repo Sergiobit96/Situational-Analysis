@@ -78,7 +78,7 @@ export const CONFIG_TORTUGAS = {
   reduccionDD: true,
   soloEnIndice: true,   // acciones: no abrir antes de la fecha en que entró en el índice (`alta`)
   comisiones: true,     // acciones: la comisión de cada orden (`comision` del mercado)
-  apalancamiento: 10,   // nominal total máximo / capital (0 = sin tope)
+  apalancamiento: 20,   // nominal total máximo / capital (0 = sin tope)
   capital: 100_000,
   desde: '1990-01-01',
   hasta: '',

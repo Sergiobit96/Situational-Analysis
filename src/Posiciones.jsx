@@ -83,8 +83,10 @@ export default function Posiciones() {
   const sinStop = posiciones.filter(p => p.stop == null).length
   // en % del saldo (la cuenta va en €)
   const delSaldo = eur => (eur != null && cuenta?.saldo > 0 && cuenta.moneda === 'EUR' ? `${eur > 0 ? '+' : ''}${num(100 * eur / cuenta.saldo, 2)}% del saldo` : null)
-  // en otra moneda, lo mismo en €
-  const enEur = (eur, moneda) => (moneda !== 'EUR' && eur != null ? `≈ ${dinero(eur, '€')}` : null)
+  // En €, con el cambio de IG; si falta el cambio, en la moneda del instrumento. `enMoneda`, lo
+  // mismo en su moneda, debajo, cuando no es el euro.
+  const enEur = (eur, valor, moneda) => (eur != null ? dinero(eur, '€') : dinero(valor, moneda))
+  const enMoneda = (eur, valor, moneda) => (eur != null && moneda && moneda !== 'EUR' ? dinero(valor, moneda) : null)
 
   return (
     <div className="bot-page">
@@ -112,7 +114,7 @@ export default function Posiciones() {
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla tor-todas pos-tabla">
               <thead>
-                <tr><th>Bot</th><th>Instrumento</th><th>Lado</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Ahora</th><th className="tor-num">Puntos</th><th className="tor-num">Resultado</th><th className="tor-num" title="Lo que daría si saltara el stop, desde la entrada: negativo si pierde, positivo si el stop ya asegura ganancia (sin contar el deslizamiento)">Si salta el stop</th><th>Abierta</th></tr>
+                <tr><th>Bot</th><th>Instrumento</th><th>Lado</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Ahora</th><th className="tor-num">Puntos</th><th className="tor-num" title="En €, con el cambio de IG; debajo, en la moneda del instrumento si no es el euro">Resultado (€)</th><th className="tor-num" title="Lo que daría si saltara el stop, desde la entrada: negativo si pierde, positivo si el stop ya asegura ganancia (sin contar el deslizamiento)">Si salta el stop</th><th>Abierta</th></tr>
               </thead>
               <tbody>
                 {posiciones.map(p => (
@@ -126,14 +128,14 @@ export default function Posiciones() {
                     <td className="tor-num">{precio(p.precio)}</td>
                     <td className={`tor-num ${tono(p.puntos)}`}>{pts(p.puntos, p.nivel)}</td>
                     <td className={`tor-num ${tono(p.resultado)}`}>
-                      {dinero(p.resultado, p.moneda)}
-                      {enEur(p.resultadoEur, p.moneda) && <small className="tor-sub">{enEur(p.resultadoEur, p.moneda)}</small>}
+                      {enEur(p.resultadoEur, p.resultado, p.moneda)}
+                      {enMoneda(p.resultadoEur, p.resultado, p.moneda) && <small className="tor-sub">{enMoneda(p.resultadoEur, p.resultado, p.moneda)}</small>}
                     </td>
                     <td className={`tor-num ${p.stop == null ? 'bot-neg' : tono(p.alStop)}`}>
-                      {p.stop == null ? 'sin stop' : dinero(p.alStop, p.moneda)}
+                      {p.stop == null ? 'sin stop' : enEur(p.alStopEur, p.alStop, p.moneda)}
                       {p.stop != null && (
                         <small className="tor-sub">
-                          {[enEur(p.alStopEur, p.moneda), delSaldo(p.alStopEur), `${pts(p.stop - p.nivel, p.nivel)} pts`].filter(Boolean).join(' · ')}
+                          {[enMoneda(p.alStopEur, p.alStop, p.moneda), delSaldo(p.alStopEur), `${pts(p.stop - p.nivel, p.nivel)} pts`].filter(Boolean).join(' · ')}
                         </small>
                       )}
                     </td>

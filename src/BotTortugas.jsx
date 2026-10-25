@@ -53,6 +53,7 @@ export default function BotTortugas() {
   const [form, setForm] = useState(null)
   const [ocupado, setOcupado] = useState(false)
   const [orden, setOrden] = useState('grupo')   // 'grupo' o 'cercania' (a la ruptura más cercana)
+  const [soloAbiertas, setSoloAbiertas] = useState(false)   // la tabla, solo con los mercados con posición
 
   const cargar = useCallback(async () => {
     try {
@@ -137,9 +138,12 @@ export default function BotTortugas() {
 
   // La tabla, por grupos (con su cabecera) o de la ruptura más cercana a la más lejana
   const cercania = m => rupturaMasCercana(m, config)?.n ?? Infinity
-  const bloques = orden === 'cercania'
-    ? [{ grupo: null, lista: [...mercados].sort((a, b) => cercania(a) - cercania(b)) }]
-    : grupos.map(g => ({ grupo: g, lista: mercados.filter(m => m.grupo === g) }))
+  const conPosicion = m => reglas.sistemas.some(s => m.posiciones[s])
+  const enTabla = soloAbiertas ? mercados.filter(conPosicion) : mercados
+  const bloques = (orden === 'cercania'
+    ? [{ grupo: null, lista: [...enTabla].sort((a, b) => cercania(a) - cercania(b)) }]
+    : grupos.map(g => ({ grupo: g, lista: enTabla.filter(m => m.grupo === g) }))
+  ).filter(b => b.lista.length)
   const curva = acumulado([...operaciones].reverse().map(o => ({ etiqueta: `${o.cerrada} · ${nombre(o.ticker)}`, valor: o.resultadoEur ?? 0 })))
   const maxEur = Math.max(0, ...operaciones.map(o => Math.abs(o.resultadoEur ?? 0)))
 
@@ -200,6 +204,8 @@ export default function BotTortugas() {
           <div className="estrategias-nav tor-orden">
             <button className={`estrategia-chip ${orden === 'grupo' ? 'activo' : ''}`} onClick={() => setOrden('grupo')}>Por grupo</button>
             <button className={`estrategia-chip ${orden === 'cercania' ? 'activo' : ''}`} onClick={() => setOrden('cercania')}>Más cerca de romper</button>
+            <button className={`estrategia-chip ${soloAbiertas ? 'activo' : ''}`} onClick={() => setSoloAbiertas(v => !v)}
+              title="Enseña solo los mercados con alguna posición abierta">Solo posiciones abiertas{abiertas.length ? ` (${new Set(abiertas.map(p => p.ticker)).size})` : ''}</button>
           </div>
         </div>
         <div className="velas-tabla-wrap tor-tabla-wrap">
@@ -219,6 +225,9 @@ export default function BotTortugas() {
               ...b.lista.map(m => <FilasIndice key={m.ticker} m={m} config={config} ocupado={ocupado} reglas={reglas}
                 alternar={si => guardarConfig({ instrumentos: { [m.ticker]: si } })} />),
             ])}
+            {bloques.length === 0 && (
+              <tbody><tr><td colSpan={11} className="bot-nota">No hay ninguna posición abierta.</td></tr></tbody>
+            )}
           </table>
         </div>
         <p className="bot-nota">

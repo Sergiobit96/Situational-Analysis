@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
-// Los charts de G:\Mi unidad\CHARTS, que scripts/subir-charts.mjs sube cada día a GitHub.
-// Se navega por las mismas carpetas que en Drive (instrumento / año / mes). Solo para mirar:
+// Los charts de G:\Mi unidad\CHARTS y las capturas de Trading <año>\Trades, que
+// scripts/subir-charts.mjs sube cada día a GitHub. Se navega por las mismas carpetas que en
+// Drive (instrumento / año / mes, o Trading <año> / Trades / ...). Solo para mirar:
 // desde aquí no se puede borrar ni cambiar ninguno.
 
 const urlChart = ruta => `${API}/api/charts/archivo?ruta=${encodeURIComponent(ruta)}`

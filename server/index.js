@@ -1447,22 +1447,36 @@ app.get('/api/fotos/archivo', (req, res) => {
   }
 })
 
-// ── Charts (G:\Mi unidad\CHARTS): scripts/subir-charts.mjs los sube cada día a la rama
-// "charts" del repo en GitHub, y de ahí los lee el servidor online. En local, si está la
-// carpeta, se leen directamente de ella. Solo lectura: no hay ruta para borrar ni cambiar.
+// ── Charts (G:\Mi unidad\CHARTS y las Trading <año>\Trades): scripts/subir-charts.mjs los
+// sube cada día a la rama "charts" del repo en GitHub, y de ahí los lee el servidor online.
+// En local, si está la carpeta, se leen directamente de Drive con las mismas rutas que en la
+// rama (CHARTS en la raíz, cada Trades en "Trading <año>/Trades"). Solo lectura: no hay ruta
+// para borrar ni cambiar.
 const CHARTS_DIR  = process.env.CHARTS_DIR  || 'G:\\Mi unidad\\CHARTS'
 const CHARTS_REPO = process.env.CHARTS_REPO || 'Sergiobit96/Situational-Analysis'
 const CHARTS_RAMA = process.env.CHARTS_RAMA || 'charts'
 const CHART_EXT   = /\.(jpe?g|png|webp|gif)$/i
+const TRADES_RUTA = /^Trading \d{4}\/Trades\//
+
+// en local, dónde está en Drive un chart de la lista
+const chartEnDisco = ruta => TRADES_RUTA.test(ruta)
+  ? join(PHOTOS_ROOT, ...ruta.split('/'))
+  : join(CHARTS_DIR, ...ruta.split('/'))
 
 let _charts = null   // { ts, lista: [{ ruta, bytes }], origen }
 async function getCharts() {
   if (_charts && Date.now() - _charts.ts < 10 * 60_000) return _charts
   let lista, origen
   if (!PRODUCCION && existsSync(CHARTS_DIR)) {
-    lista = walkImages(CHARTS_DIR)
-      .filter(p => CHART_EXT.test(p))
-      .map(p => ({ ruta: relative(CHARTS_DIR, p).split(sep).join('/'), bytes: statSync(p).size }))
+    const trades = readdirSync(PHOTOS_ROOT, { withFileTypes: true })
+      .filter(e => e.isDirectory() && /^Trading \d{4}$/.test(e.name))
+      .map(e => join(PHOTOS_ROOT, e.name, 'Trades'))
+    lista = [
+      ...walkImages(CHARTS_DIR).map(p => [CHARTS_DIR, p]),
+      ...trades.flatMap(dir => walkImages(dir).map(p => [PHOTOS_ROOT, p])),
+    ]
+      .filter(([, p]) => CHART_EXT.test(p))
+      .map(([base, p]) => ({ ruta: relative(base, p).split(sep).join('/'), bytes: statSync(p).size }))
     origen = 'local'
   } else {
     // GITHUB_TOKEN es opcional: sin él GitHub deja 60 consultas por hora, que con la caché sobran
@@ -1496,7 +1510,7 @@ app.get('/api/charts/archivo', async (req, res) => {
     if (!ruta || !CHART_EXT.test(ruta) || ruta.split('/').some(t => t === '..' || t === '')) return res.status(400).end()
     const { lista, origen } = await getCharts()
     if (!lista.some(c => c.ruta === ruta)) return res.status(404).end()
-    if (origen === 'local') return res.sendFile(resolve(join(CHARTS_DIR, ...ruta.split('/'))))
+    if (origen === 'local') return res.sendFile(resolve(chartEnDisco(ruta)))
     const url = `https://raw.githubusercontent.com/${CHARTS_REPO}/${CHARTS_RAMA}/${ruta.split('/').map(encodeURIComponent).join('/')}`
     res.set('Cache-Control', 'public, max-age=86400').redirect(302, url)
   } catch (err) {

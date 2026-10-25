@@ -1,15 +1,18 @@
-// Sube a GitHub los charts de G:\Mi unidad\CHARTS, a la rama "charts" del repo (no a main,
-// para que Railway no se redespliegue cada día). La pestaña Charts de la app los lee de ahí.
+// Sube a GitHub los charts de G:\Mi unidad\CHARTS y las capturas de G:\Mi unidad\Trading
+// <año>\Trades, a la rama "charts" del repo (no a main, para que Railway no se redespliegue
+// cada día). La pestaña Charts de la app los lee de ahí. Lo de CHARTS va a la raíz de la rama
+// y cada Trades a "Trading <año>/Trades".
 //
-// Usa un repo git propio fuera de Drive (CHARTS_GIT) cuya carpeta de trabajo es CHARTS, así
-// no se copia nada ni se escribe nada dentro de Drive. Solo sube lo nuevo o cambiado: lo que
-// se borre en Drive se queda en GitHub (nunca se sube un borrado). Hace un commit por carpeta
-// de primer nivel (NASDAQ, DAX, Weekly...) y empuja después de cada uno, para que la primera
-// subida, de cientos de MB, vaya por partes.
+// Usa un repo git propio fuera de Drive (CHARTS_GIT) cuyas carpetas de trabajo son las de Drive,
+// así no se copia nada ni se escribe nada dentro de Drive. Solo sube lo nuevo o cambiado: lo
+// que se borre en Drive se queda en GitHub (nunca se sube un borrado). Hace un commit por
+// carpeta (NASDAQ, DAX, Weekly, Trading 2026/Trades...) y empuja después de cada uno, para
+// que las subidas grandes vayan por partes.
 //
 // Uso: node scripts/subir-charts.mjs
-// Lo lanza cada día la tarea programada "Subir charts". CHARTS_DIR, CHARTS_GIT y CHARTS_RAMA
-// cambian la carpeta, el repo local y la rama (y CHARTS_REMOTO el repo de GitHub). Apunta lo que hace en subir-charts.log, en CHARTS_GIT.
+// Lo lanza cada día la tarea programada "Subir charts". CHARTS_DIR, TRADES_DIR, CHARTS_GIT y
+// CHARTS_RAMA cambian las carpetas, el repo local y la rama (y CHARTS_REMOTO el repo de
+// GitHub). Apunta lo que hace en subir-charts.log, en CHARTS_GIT.
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
@@ -19,6 +22,8 @@ import { execFileSync } from 'child_process'
 const RAIZ    = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const DIR     = process.env.CHARTS_DIR  || 'G:\\Mi unidad\\CHARTS'
+// donde están las carpetas Trading <año>, cada una con su Trades
+const DRIVE   = process.env.TRADES_DIR  || dirname(DIR)
 const GIT_DIR = process.env.CHARTS_GIT  || 'C:\\Users\\Sergio\\Documents\\charts-git'
 const RAMA    = process.env.CHARTS_RAMA || 'charts'
 const REMOTO  = process.env.CHARTS_REMOTO || 'https://github.com/Sergiobit96/Situational-Analysis.git'
@@ -34,8 +39,11 @@ function apuntar(texto) {
   try { appendFileSync(join(GIT_DIR, 'subir-charts.log'), `${linea}\n`) } catch { /* sin log */ }
 }
 
-function git(args, opciones = {}) {
-  return execFileSync('git', ['--git-dir', GIT_DIR, '--work-tree', DIR, ...args], {
+// `arbol` es la carpeta de trabajo de ese comando: CHARTS para sus carpetas, y la raíz de
+// Drive para las Trading <año>/Trades. Las dos van al mismo índice; como solo se añade (nunca
+// se sube un borrado), que a cada árbol le falten los archivos del otro no importa.
+function git(args, { arbol = DIR, ...opciones } = {}) {
+  return execFileSync('git', ['--git-dir', GIT_DIR, '--work-tree', arbol, ...args], {
     encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...opciones,
   }).trim()
 }
@@ -91,16 +99,21 @@ function main() {
   const sueltos = entradas.filter(e => e.isFile()).map(e => e.name)
   let ignorados = []
   try { ignorados = git(['check-ignore', '--', ...sueltos]).split('\n') } catch { /* ninguno */ }
+  // las capturas de los trades de cada año, en la rama como "Trading <año>/Trades/..."
+  const trades = readdirSync(DRIVE, { withFileTypes: true })
+    .filter(e => e.isDirectory() && /^Trading \d{4}$/.test(e.name) && existsSync(join(DRIVE, e.name, 'Trades')))
+    .map(e => [`${e.name}/Trades`, [`${e.name}/Trades`], DRIVE])
   const grupos = [
-    ['raíz', sueltos.filter(n => !ignorados.includes(n))],
-    ...entradas.filter(e => e.isDirectory()).map(e => [e.name, [e.name]]),
+    ['raíz', sueltos.filter(n => !ignorados.includes(n)), DIR],
+    ...entradas.filter(e => e.isDirectory()).map(e => [e.name, [e.name], DIR]),
+    ...trades,
   ].filter(([, rutas]) => rutas.length)
 
   let subidos = 0
   let fallos  = 0
-  for (const [nombre, rutas] of grupos) {
+  for (const [nombre, rutas, arbol] of grupos) {
     try {
-      git(['add', '--ignore-removal', '--', ...rutas])
+      git(['add', '--ignore-removal', '--', ...rutas], { arbol })
       const cambiados = git(['diff', '--cached', '--name-only']).split('\n').filter(Boolean)
       if (cambiados.length === 0) continue
       const hoy = new Date().toISOString().slice(0, 10)

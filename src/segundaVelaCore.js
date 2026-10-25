@@ -459,6 +459,30 @@ const media = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 
 
 // Estadísticas del conjunto. Todo lo que describe la operación (aciertos,
 // resultado, salidas) se mide solo sobre los días en los que hubo compra.
+// La rentabilidad con interés compuesto si cada operación arriesga `riesgoPct` % del capital
+// hasta su stop, como el bot: una sesión que hace `r` R mueve el capital un r × riesgoPct %.
+// `sesiones` son todas las válidas, { date, r } con r null si no operó: el periodo va de la
+// primera a la última. CAGR, peor caída de esa curva y total, en %; null con menos de dos días.
+export function rentabilidadCompuesta(sesiones, riesgoPct) {
+  const xs = sesiones.filter(s => s.date).sort((a, b) => a.date.localeCompare(b.date))
+  if (xs.length < 2 || !(riesgoPct > 0)) return null
+  let capital = 1, pico = 1, peor = 0
+  for (const s of xs) {
+    if (s.r == null) continue
+    capital = Math.max(0, capital * (1 + s.r * riesgoPct / 100))
+    pico = Math.max(pico, capital)
+    peor = Math.min(peor, capital / pico - 1)
+  }
+  const anios = (Date.parse(xs.at(-1).date) - Date.parse(xs[0].date)) / (365.25 * 86400_000)
+  if (!(anios > 0)) return null
+  return {
+    cagr: 100 * (capital > 0 ? capital ** (1 / anios) - 1 : -1),
+    maxDD: 100 * peor,
+    total: 100 * (capital - 1),
+    anios,
+  }
+}
+
 export function resumir(analisis) {
   const val   = analisis.filter(a => a.valido)
   const ops   = val.filter(a => a.entrada)

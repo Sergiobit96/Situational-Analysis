@@ -5,7 +5,7 @@ import { curvaEquity } from './equity'
 import { INSTRUMENTOS, intradayUrl, velasDeSesiones } from './intradayApi'
 import { useTrades } from './useTrades'
 import { fmtFechaTS } from './parseTrades'
-import { SESIONES, analizarSesion, resumir, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
+import { SESIONES, analizarSesion, resumir, rentabilidadCompuesta, fmtMin, fmtPts, nDiarioPorFecha } from './segundaVelaCore'
 import Robustez from './Robustez'
 import RevisionBacktest from './RevisionBacktest'
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4 } from './estrategias'
@@ -304,6 +304,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [nivelStop,  setNivelStop]  = useState('extremo')
   const [tamano,     setTamano]     = useState('uno')
   const [coste,      setCoste]      = useState(0)
+  const [riesgoOp,   setRiesgoOp]   = useState(1)   // % del capital hasta el stop en cada operación, para el CAGR (el del bot)
   const [stopModo,   setStopModo]   = useState('fijo')
   const [volumen,    setVolumen]    = useState(estr.tortuga ? 'tortuga' : 'fijo')
   const [tpModo,     setTpModo]     = useState('no')
@@ -757,6 +758,13 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   ])), [conModo, dirVela1])
 
   const resumen = useMemo(() => resumir(analizadas.map(r => r.analisis)), [analizadas])
+  // con interés compuesto, arriesgando riesgoOp % del capital en cada operación
+  const compuesta = useMemo(() => rentabilidadCompuesta(
+    analizadas.filter(x => x.analisis.valido).map(x => ({
+      date: x.sesion.date, r: x.analisis.entrada ? (x.analisis.resultadoTotalR ?? x.analisis.resultadoR) : null,
+    })),
+    Number(riesgoOp),
+  ), [analizadas, riesgoOp])
 
   // Para la curva hace falta el resultado de cada sesión con su fecha, del conjunto que
   // esté filtrado en ese momento
@@ -1351,6 +1359,34 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 : 'Resultados en bruto, sin horquilla ni comisión'}
             </p>
           </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">Riesgo por operación</label>
+            <div className="filtro-presets">
+              {[0.5, 1, 2].map(x => (
+                <button key={x} className={`chip ${Number(riesgoOp) === x ? 'activo' : ''}`} onClick={() => setRiesgoOp(x)}
+                  title={x === 1 ? 'El que usa el bot' : undefined}>{x.toLocaleString('es-ES')}%</button>
+              ))}
+              <input
+                key={riesgoOp}
+                className="pag-input filtro-pct"
+                type="number" min={0.1} max={10} step={0.1}
+                defaultValue={riesgoOp}
+                title="% del capital que se pierde si salta el stop de la entrada"
+                onFocus={e => e.target.select()}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                onBlur={e => {
+                  const n = Number(e.target.value)
+                  if (!Number.isFinite(n) || n <= 0 || n > 10) { e.target.value = riesgoOp; return }
+                  setRiesgoOp(n)
+                }}
+              />
+            </div>
+            <p className="estr-explica">
+              Para el CAGR: cada operación se dimensiona para perder un {Number(riesgoOp).toLocaleString('es-ES')}% del capital si salta el stop de la entrada (1R), como el bot,
+              y el capital se rehace con cada resultado (interés compuesto)
+            </p>
+          </div>
         </Bloque>
       </div>
 
@@ -1376,7 +1412,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             </div>
           )}
 
-          <Resumen r={resumen} />
+          <Resumen r={resumen} compuesta={compuesta} riesgoOp={Number(riesgoOp)} />
 
           <CurvaEquity sesiones={sesionesCurva} />
 
@@ -1584,7 +1620,7 @@ function expedienteIntradia({ estr, nombre, base, configuracion, analizadas, res
 
 // Fila de cifras del conjunto. El valor va siempre en tinta normal: el color lo
 // lleva la marca que acompaña a la etiqueta, para que nunca sea el único indicio.
-function Resumen({ r }) {
+function Resumen({ r, compuesta, riesgoOp }) {
   if (r.n === 0) return null
   const sobreOps = `sobre ${r.nOps} operaci${r.nOps === 1 ? 'ón' : 'ones'}`
   // El lado ya no es siempre comprador: los textos hablan de operaciones y de roturas
@@ -1596,6 +1632,14 @@ function Resumen({ r }) {
     { label: 'Días con operación',    valor: fmtPct(r.pctEntrada), sub: lados },
     { label: 'Operaciones ganadoras', valor: fmtPct(r.pctGanadas), sub: sobreOps, marca: '▲', tono: 'verde' },
     { label: 'Resultado medio',       valor: fmtPtsSgn(r.resultadoMedPts), sub: 'por sesión operada' },
+    ...(compuesta ? [{
+      label: 'CAGR',
+      valor: `${compuesta.cagr > 0 ? '+' : ''}${compuesta.cagr.toLocaleString('es-ES', { maximumFractionDigits: 1 })}%`,
+      sub: `arriesgando un ${riesgoOp.toLocaleString('es-ES')}% por operación · peor caída ${compuesta.maxDD.toLocaleString('es-ES', { maximumFractionDigits: 1 })}%`
+        + (compuesta.anios < 1 ? ` · anualizado de ${Math.max(1, Math.round(compuesta.anios * 12))} meses (${compuesta.total > 0 ? '+' : ''}${compuesta.total.toLocaleString('es-ES', { maximumFractionDigits: 1 })}% en total)` : ''),
+      marca: compuesta.cagr < 0 ? '▼' : '▲',
+      tono: compuesta.cagr < 0 ? 'rojo' : 'verde',
+    }] : []),
     {
       label: 'Acumulado',
       valor: fmtPtsSgn(r.totalPts),

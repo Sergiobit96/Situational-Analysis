@@ -8,7 +8,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { analizarSesion, resumir, SESIONES, nDiarioPorFecha } from '../src/segundaVelaCore.js'
+import { analizarSesion, resumir, rentabilidadCompuesta, SESIONES, nDiarioPorFecha } from '../src/segundaVelaCore.js'
 import { agruparVelas, ventanaRuleOf4, prepararSesion, estrategiaDe } from '../src/estrategias.js'
 import { madridOffsetAt, nuevaYorkOffsetAt } from '../src/timezone.js'
 
@@ -436,4 +436,19 @@ test('prepararSesion deja las velas de 5 min tal cual para First bar negative', 
   assert.equal(finas, null)
   assert.equal(ventana.minutosVela, 5)
   assert.equal(ventana.nBracket, 1)
+})
+
+test('el CAGR compone cada sesión en R por el riesgo de cada operación', () => {
+  // un año: +2R y −1R arriesgando un 1 %: 1,02 × 0,99
+  const c = rentabilidadCompuesta([
+    { date: '2025-01-01', r: null },
+    { date: '2025-07-02', r: 2 },
+    { date: '2026-01-01', r: -1 },
+  ], 1)
+  assert.ok(Math.abs(c.total - 0.98) < 1e-9)
+  assert.ok(Math.abs(c.cagr - 0.98) < 0.01)
+  assert.ok(Math.abs(c.maxDD - (100 * (1.0098 / 1.02 - 1))) < 1e-9)
+  // con el doble de riesgo, todo pesa el doble: 1,04 × 0,98
+  assert.ok(Math.abs(rentabilidadCompuesta([{ date: '2025-01-01', r: 2 }, { date: '2026-01-01', r: -1 }], 2).total - 1.92) < 1e-9)
+  assert.equal(rentabilidadCompuesta([{ date: '2025-01-01', r: 1 }], 1), null)
 })

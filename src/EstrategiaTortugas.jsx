@@ -7,7 +7,7 @@ import {
   picoPiramide, riesgoPorN, expedienteBacktest,
 } from './tortugas'
 import { prepararAccion, decodificarColumnas, COMISION_ACCIONES_EEUU } from './accionesEeuu'
-import { Bloque, AjustesPuestos } from './AjustesEstrategia'
+import { Bloque, AjustesPuestos, BarraAnalizar } from './AjustesEstrategia'
 import RevisionBacktest from './RevisionBacktest'
 import './Tortugas.css'
 import Robustez from './Robustez'
@@ -350,6 +350,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const [comparando, setComparando] = useState(false)
   const [mostradas, setMostradas] = useState(25)
   const abortRef = useRef(null)
+  const filtrosRef = useRef(null)
 
   useEffect(() => () => abortRef.current?.abort(), [])
   useEffect(() => {
@@ -656,9 +657,11 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const baseAjustes = `${futuros ? 'Mercados de las tortugas' : acciones ? 'Acciones del S&P 500' : 'Índices'} · ${nf(mercados.length)} ${
     futuros ? 'mercados' : acciones ? 'acciones' : `de ${INDICES_TORTUGAS.length}`} · sistema ${nombreSistema(sistema)}${deCsv ? ' · CSV de Documentos' : deStooq ? ' · Stooq' : ''}`
 
+  const textoCargar = cargando ? 'Descargando…' : res && !faltan.length ? 'Actualizar datos' : faltan.length && res ? 'Cargar lo que falta' : 'Cargar datos y probar'
+
   return (
     <div className="estrategia-panel tortugas">
-      <div className="filtro-controls">
+      <div className="filtro-controls" ref={filtrosRef}>
         <Bloque n={1} titulo="Mercados" nota="Se bajan al pulsar el botón. Después, cada ajuste se recalcula al momento">
           <div className="filtro-group">
             <label className="filtro-label">Qué se prueba</label>
@@ -782,9 +785,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           {faltan.length > 0 && res && !cargando && (
             <p className="estr-pendiente">Faltan los datos de {faltan.join(', ')}: pulsa el botón para incluirlos.</p>
           )}
-          <button className="btn-filtrar" onClick={cargar} disabled={cargando}>
-            {cargando ? 'Descargando…' : res && !faltan.length ? 'Actualizar datos' : faltan.length && res ? 'Cargar lo que falta' : 'Cargar datos y probar'}
-          </button>
+          <button className="btn-filtrar" onClick={cargar} disabled={cargando}>{textoCargar}</button>
           {cargando && progreso && (
             <div className="velas-cargando">
               <span className="spinner" />
@@ -927,6 +928,12 @@ export default function EstrategiaTortugas({ estrategiaId }) {
               <select className="filtro-otros" value={ajustes.desde} onChange={e => poner('desde', Number(e.target.value))}>
                 {ANIOS.map(a => <option key={a} value={a}>desde {a}</option>)}
               </select>
+              {/* todo el histórico: desde el primer año que se puede pedir */}
+              <button
+                className={`chip ${ajustes.desde === ANIOS[0] ? 'activo' : ''}`}
+                title={`Todo el histórico, desde ${ANIOS[0]}`}
+                onClick={() => poner('desde', ANIOS[0])}
+              >Máx</button>
             </div>
           </div>
 
@@ -1027,6 +1034,14 @@ export default function EstrategiaTortugas({ estrategiaId }) {
           )}
         </div>
       )}
+
+      <BarraAnalizar
+        filtrosRef={filtrosRef}
+        resumen={res ? baseAjustes : 'Sin datos todavía'}
+        texto={textoCargar}
+        onAnalizar={cargar}
+        disabled={cargando}
+      />
     </div>
   )
 }

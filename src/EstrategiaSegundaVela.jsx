@@ -11,7 +11,7 @@ import RevisionBacktest from './RevisionBacktest'
 import { estrategiaDe, agruparVelas, prepararSesion, ventanaRuleOf4, conVelaDeSetup } from './estrategias'
 import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
-import { Bloque, AjustesPuestos } from './AjustesEstrategia'
+import { Bloque, AjustesPuestos, BarraAnalizar } from './AjustesEstrategia'
 import { conClaveBot, leerClaveBot } from './claveBot'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
@@ -309,11 +309,14 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // la Rule of 4 arranca en los últimos años: cada reunión es una descarga del feed
   const [anioDesde,  setAnioDesde]  = useState(estr.soloFomc ? 2024 : 2009)
   const [anioHasta,  setAnioHasta]  = useState(2026)
+  const aniosHistorico = estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV
+  const historicoEntero = anioDesde === aniosHistorico[0] && anioHasta === aniosHistorico.at(-1)
   const [mostradas,  setMostradas]  = useState(POR_PAGINA)
   const [finas5m,    setFinas5m]    = useState({})   // fecha -> velas de 5 min, solo para dibujar
   const pedidas5mRef = useRef(new Set())
   const centinelaRef = useRef(null)
   const abortRef = useRef(null)
+  const filtrosRef = useRef(null)
   const [trades] = useTrades()
 
   const sesion = SESIONES[ticker]
@@ -998,9 +1001,14 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     return `${nombre} · todas las sesiones de ${periodo} · ${diasTxt}`
   })()
 
+  const textoAnalizar = cargando ? 'Analizando…'
+    : dias.size === 0 ? 'Marca al menos un día'
+    : cambiosPendientes.length > 0 ? 'Analizar con los cambios'
+    : 'Analizar sesiones'
+
   return (
     <div className="estrategia-panel">
-      <div className="filtro-controls">
+      <div className="filtro-controls" ref={filtrosRef}>
         <Bloque n={1} titulo="Qué se analiza" nota="Se descarga al pulsar Analizar">
           {!estr.soloFomc && <div className="filtro-group">
             <label className="filtro-label">Datos</label>
@@ -1042,11 +1050,17 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               </label>
               <div className="filtro-presets">
                 <select className="filtro-otros" value={anioDesde} onChange={e => setAnioDesde(Number(e.target.value))}>
-                  {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>desde {a}</option>)}
+                  {aniosHistorico.map(a => <option key={a} value={a}>desde {a}</option>)}
                 </select>
                 <select className="filtro-otros" value={anioHasta} onChange={e => setAnioHasta(Number(e.target.value))}>
-                  {(estr.soloFomc ? ANIOS_FOMC : ANIOS_CSV).map(a => <option key={a} value={a}>hasta {a}</option>)}
+                  {aniosHistorico.map(a => <option key={a} value={a}>hasta {a}</option>)}
                 </select>
+                {/* todo el histórico de una vez: del primer año al último */}
+                <button
+                  className={`chip ${historicoEntero ? 'activo' : ''}`}
+                  title={`Todo el histórico: de ${aniosHistorico[0]} a ${aniosHistorico.at(-1)}`}
+                  onClick={() => { setAnioDesde(aniosHistorico[0]); setAnioHasta(aniosHistorico.at(-1)) }}
+                >Máx</button>
               </div>
               {!estr.soloFomc && <p className="estr-explica">DAX cash, sesión 09:00-17:30</p>}
             </div>
@@ -1111,12 +1125,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
               Has cambiado {enumerar(cambiosPendientes)}: los resultados siguen siendo los de antes hasta que vuelvas a analizar.
             </p>
           )}
-          <button className="btn-filtrar" onClick={analizar} disabled={cargando || dias.size === 0}>
-            {cargando ? 'Analizando…'
-              : dias.size === 0 ? 'Marca al menos un día'
-              : cambiosPendientes.length > 0 ? 'Analizar con los cambios'
-              : 'Analizar sesiones'}
-          </button>
+          <button className="btn-filtrar" onClick={analizar} disabled={cargando || dias.size === 0}>{textoAnalizar}</button>
 
           {cargando && (
             <div className="velas-cargando">
@@ -1485,6 +1494,15 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           )}
         </div>
       )}
+
+      <BarraAnalizar
+        filtrosRef={filtrosRef}
+        resumen={baseAnalisis || 'Sin analizar todavía'}
+        aviso={cambiosPendientes.length > 0 && !cargando ? `Has cambiado ${enumerar(cambiosPendientes)}: sin analizar` : null}
+        texto={progreso?.total && cargando ? `Analizando… ${progreso.done}/${progreso.total}` : textoAnalizar}
+        onAnalizar={analizar}
+        disabled={cargando || dias.size === 0}
+      />
     </div>
   )
 }

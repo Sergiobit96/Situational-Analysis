@@ -520,6 +520,11 @@ export function resumir(analisis) {
     totalPts:        puntos.length ? puntos.reduce((a, b) => a + b, 0) : null,
     mfeMedPts:       mediana(ops.map(a => a.mfePts)),
     mfeMed:       mediana(ops.map(a => a.mfeR)),
+    // Lo que corrió a favor la primera pierna antes de volver a la entrada y cerrar en break
+    // even: dice cuánto se deja sobre la mesa al mover el stop
+    nBE:          ops.filter(a => a.salida.motivo === 'breakeven').length,
+    mfeBEMedPts:  mediana(ops.filter(a => a.salida.motivo === 'breakeven').map(a => a.mfePts)),
+    mfeBEMed:     mediana(ops.filter(a => a.salida.motivo === 'breakeven').map(a => a.mfeR)),
     pct1R:        pct(ops.filter(a => a.mfeR >= 1).length, ops.length),
     pct2R:        pct(ops.filter(a => a.mfeR >= 2).length, ops.length),
     pctTocaAntes: pct(ops.filter(a => a.tocaAbajoAntes).length, ops.length),

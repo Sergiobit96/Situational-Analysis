@@ -98,6 +98,12 @@ test('el break even saca la operación a cero en vez de a −1R', () => {
   assert.equal(a.salida.motivo, 'breakeven')
   assert.equal(a.salida.precio, 110)
   assert.equal(a.resultadoPts, 0)
+
+  // recorrió 11 pts (1,1 R) a favor antes de volver a la entrada
+  const r = resumir([a])
+  assert.equal(r.nBE, 1)
+  assert.equal(r.mfeBEMedPts, 11)
+  assert.ok(Math.abs(r.mfeBEMed - 1.1) < 1e-9)
 })
 
 test('el stop al 50% arriesga la mitad, y esa mitad es la nueva R', () => {

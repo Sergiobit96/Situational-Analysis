@@ -1595,6 +1595,8 @@ function expedienteIntradia({ estr, nombre, base, configuracion, analizadas, res
       stopA2NPct: r2(r.pctStopN),
       objetivoPct: r2(r.pctObjetivo),
       recorridoMaximoMedianoR: r2(r.mfeMed),
+      aFavorAntesDelBreakEvenMedianoPts: r2(r.mfeBEMedPts),
+      aFavorAntesDelBreakEvenMedianoR: r2(r.mfeBEMed),
       llegaA1RPct: r2(r.pct1R),
       llegaA2RPct: r2(r.pct2R),
       bracketMedianoPts: r2(r.rangoMedPts),
@@ -1671,6 +1673,10 @@ function Resumen({ r, compuesta, riesgoOp }) {
     { label: 'Recorrido máximo',      valor: fmtPtsSgn(r.mfeMedPts), sub: 'mediana a favor antes de cerrar' },
     { label: 'Doblan el bracket',     valor: fmtPct(r.pct2R),      sub: 'recorren 2 veces su rango' },
   ]
+  if (r.nBE) tiles.push({
+    label: 'A favor antes del BE', valor: fmtPtsSgn(r.mfeBEMedPts),
+    sub: `mediana${r.mfeBEMed != null ? ` (${r.mfeBEMed.toFixed(2)} R)` : ''} de las ${r.nBE} que salen en break even`,
+  })
   if (r.pctObjetivo) tiles.push({
     label: 'Cierran en el objetivo', valor: fmtPct(r.pctObjetivo),
     sub: sobreOps, marca: '▲', tono: 'verde',

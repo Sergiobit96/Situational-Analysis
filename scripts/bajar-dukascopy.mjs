@@ -1,13 +1,15 @@
 // Baja velas de Dukascopy a un CSV en Documents\Dukascopy, con las mismas columnas que
-// duka_deuidxeur_2014-04-30_m5.csv: time (unix en segundos), datetime_utc, open, high, low, close,
-// volume (en millones, como lo da Dukascopy). Va mes a mes para que los rangos largos no se
+// duka_deuidxeur_2014-04-30_m5.csv salvo la fecha, que va en hora de Madrid: time (unix en
+// segundos), datetime_madrid (con su desfase, +01:00 o +02:00), open, high, low, close, volume (en
+// millones, como lo da Dukascopy). Va mes a mes para que los rangos largos no se
 // queden colgados en una sola petición; si Dukascopy limita (429) o falla, para y lo dice.
 //
 //   node scripts/bajar-dukascopy.mjs <instrumento> <desde> [hasta] [timeframe] [bid|ask]
 //   node scripts/bajar-dukascopy.mjs deuidxeur 2014-04-30
 //   node scripts/bajar-dukascopy.mjs eurusd 2020-01-01 2020-12-31 m1 ask
 //
-// hasta incluido (por defecto, el mismo día que desde); timeframe por defecto m5.
+// desde y hasta son días de Madrid, hasta incluido (por defecto, el mismo día que desde);
+// timeframe por defecto m5.
 // DUKASCOPY_DIR cambia la carpeta.
 
 import { mkdirSync, renameSync, writeFileSync } from 'fs'
@@ -18,6 +20,23 @@ import { instalarTransporteDukascopy, dukascopyLimitando } from '../server/dukas
 const DIR = process.env.DUKASCOPY_DIR || 'C:\\Users\\Sergio\\Documents\\Dukascopy'
 const TIMEFRAMES = ['tick', 's1', 'm1', 'm5', 'm15', 'm30', 'h1', 'h4', 'd1', 'mn1']
 const esFecha = s => /^\d{4}-\d{2}-\d{2}$/.test(s ?? '')
+
+const enMadrid = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
+// minutos que Madrid va por delante de UTC en ese instante (60 en invierno, 120 en verano)
+const desfaseMadrid = ms => (Date.parse(enMadrid.format(ms).replace(' ', 'T') + 'Z') - Math.floor(ms / 1000) * 1000) / 60_000
+// "2014-04-30T02:20:00+02:00"
+function fechaMadrid(ms) {
+  const min = desfaseMadrid(ms)
+  return `${enMadrid.format(ms).replace(' ', 'T')}+${String(min / 60).padStart(2, '0')}:00`
+}
+// las 00:00 de Madrid de ese día, en ms UTC
+function medianocheMadrid(fecha) {
+  const utc = Date.parse(`${fecha}T00:00:00Z`)
+  return utc - desfaseMadrid(utc - desfaseMadrid(utc) * 60_000) * 60_000
+}
 
 const [instrumento, desde, hastaArg, timeframe = 'm5', precio = 'bid'] = process.argv.slice(2)
 const hasta = hastaArg ?? desde
@@ -40,16 +59,24 @@ function tramos(desdeMs, finMs) {
 }
 
 instalarTransporteDukascopy()
-const desdeMs = Date.parse(`${desde}T00:00:00Z`)
-const finMs = Date.parse(`${hasta}T00:00:00Z`) + 86400_000
+const desdeMs = medianocheMadrid(desde)
+const finMs = medianocheMadrid(new Date(Date.parse(`${hasta}T12:00:00Z`) + 86400_000).toISOString().slice(0, 10))
 const velas = []
 for (const [ini, fin] of tramos(desdeMs, finMs)) {
   const inicio = Date.now()
-  const parte = await getHistoricalRates({
-    instrument: instrumento.toLowerCase(), timeframe, format: 'json', priceType: precio,
-    dates: { from: new Date(ini), to: new Date(fin) },
-    volumes: true, ignoreFlats: true, retryCount: 3, pauseBetweenRetriesMs: 2000,
-  })
+  let parte
+  try {
+    parte = await getHistoricalRates({
+      instrument: instrumento.toLowerCase(), timeframe, format: 'json', priceType: precio,
+      dates: { from: new Date(ini), to: new Date(fin) },
+      volumes: true, ignoreFlats: true, retryCount: 3, pauseBetweenRetriesMs: 2000,
+    })
+  } catch (err) {
+    if (!dukascopyLimitando(Date.now() - inicio + 1000)) {
+      console.error(`Dukascopy falla: ${err.message}`)
+      process.exit(1)
+    }
+  }
   if (dukascopyLimitando(Date.now() - inicio + 1000)) {
     console.error('Dukascopy limita las peticiones (429): prueba otra vez dentro de un rato')
     process.exit(1)
@@ -64,11 +91,11 @@ if (!velas.length) {
 
 const comillas = v => `"${v}"`
 const cabecera = timeframe === 'tick'
-  ? ['time', 'datetime_utc', 'ask', 'bid', 'ask_volume', 'bid_volume']
-  : ['time', 'datetime_utc', 'open', 'high', 'low', 'close', 'volume']
+  ? ['time', 'datetime_madrid', 'ask', 'bid', 'ask_volume', 'bid_volume']
+  : ['time', 'datetime_madrid', 'open', 'high', 'low', 'close', 'volume']
 const filas = velas.map(v => {
   const t = Math.floor(v.timestamp / 1000)
-  const fecha = new Date(v.timestamp).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const fecha = fechaMadrid(v.timestamp)
   const valores = timeframe === 'tick'
     ? [v.askPrice, v.bidPrice, v.askVolume, v.bidVolume]
     : [v.open, v.high, v.low, v.close, v.volume]
@@ -82,4 +109,3 @@ const ruta = join(DIR, nombre)
 writeFileSync(`${ruta}.tmp`, '\uFEFF' + [cabecera.map(comillas).join(','), ...filas].join('\r\n') + '\r\n')
 renameSync(`${ruta}.tmp`, ruta)
 console.log(`${velas.length} velas → ${ruta}`)
-process.exit(0)

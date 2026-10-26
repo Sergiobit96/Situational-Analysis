@@ -68,17 +68,9 @@ export function crearCartera({ grupos = {}, maxPct = MAX_RIESGO_GRUPO_PCT } = {}
       + ` más del ${String(maxPct).replace('.', ',')}% del saldo (${Math.round(tope)} €)`
   }
 
-  // Los euros de riesgo que aún caben en el grupo de `ticker` y en `lado` (Infinity sin límite)
-  function hueco({ ticker, lado, saldo }) {
-    if (!(saldo > 0) || !(maxPct > 0)) return Infinity
-    return Math.max(0, saldo * maxPct / 100 - mismasQue(ticker, lado).abierto)
-  }
-
   return {
     registrar(bot, abiertas) { bots.set(bot, abiertas) },
     noCabe,
-    hueco,
-    grupoDe: ticker => exposicionDe(ticker, 'largo', grupos).grupo,
     estado: () => ({ maxPct, posiciones: posiciones() }),
   }
 }

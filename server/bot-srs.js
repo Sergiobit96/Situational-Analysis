@@ -242,6 +242,8 @@ const enJuego = d => posicionAbierta(d) || d?.estado === 'entrando' || d?.estado
 const puedeDarLaVuelta = (dia, cfg) => cfg.modo === 'flip' && cfg.stopPct === 1 && (dia.anteriores?.length ?? 0) + 1 < MAX_PIERNAS
 const nivelDe = (bracket, lado) => (lado === 'largo' ? bracket.high : bracket.low)
 const contrario = lado => (lado === 'largo' ? 'corto' : 'largo')
+// «A», «A y B», «A, B y C»
+const listaY = xs => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} y ${xs.at(-1)}`)
 // Dónde entra la posición n+1 de la pirámide: n tramos de `piramide` R desde el nivel de la
 // rotura, que es desde donde cuenta el backtest
 const nivelAnadido = (op, cfg, n) => op.nivelOrden + (op.lado === 'largo' ? 1 : -1) * n * cfg.piramide * op.riesgo
@@ -499,7 +501,37 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   // vuelta). Con plan, lo que pedirá su entrada; sin él, lo que suele pedir según sus últimos
   // brackets (margenTipico). Así la pirámide de un instrumento no deja sin entrada a otro: el
   // DAX, p. ej., no se come el margen que necesitan a las 15:30 el Nasdaq y el Dow.
+  // Con `cartera`, de las de un mismo grupo de mercados solo se guarda lo de las que su límite
+  // de riesgo dejaría entrar: el Nasdaq, el S&P y el Dow en el mismo sentido no entran todos
+  // si ya no cabe su riesgo, así que reservarles a los tres dejaría sin margen a la pirámide.
+  // Como el sentido no se sabe hasta la rotura, se guarda el del sentido que más pediría.
   function margenReservado(dia, saldo) {
+    const candidatas = entradasPendientes(dia, saldo)
+    if (!cartera) return candidatas
+    const porGrupo = new Map()
+    for (const c of candidatas) {
+      const g = cartera.grupoDe(c.ticker)
+      porGrupo.set(g, [...(porGrupo.get(g) ?? []), c])
+    }
+    return [...porGrupo.values()].flatMap(cs => {
+      let mejor = []
+      for (const lado of ['largo', 'corto']) {
+        let cabe = cartera.hueco({ ticker: cs[0].ticker, lado, saldo })
+        const entran = []
+        for (const c of cs.filter(c => c.lados.includes(lado)).sort((a, b) => b.eur - a.eur)) {
+          if (c.riesgoEur > cabe + 1e-9) continue
+          cabe -= c.riesgoEur
+          entran.push(c)
+        }
+        if (entran.reduce((s, c) => s + c.eur, 0) > mejor.reduce((s, c) => s + c.eur, 0)) mejor = entran
+      }
+      return mejor
+    })
+  }
+
+  // Las entradas que aún pueden llegar mientras siga abierta la sesión de `dia`: su margen
+  // (`eur`), su riesgo hasta el stop y los sentidos en los que pueden entrar
+  function entradasPendientes(dia, saldo) {
     const cfg = datos.config
     const t = ahora()
     const reservas = []
@@ -510,10 +542,15 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       for (const ses of new Map(cruzan.map(s => [clave(s), s])).values()) {
         const otro = datos.dias[clave(ses)]
         if (otro && !['esperando-bracket', 'esperando-rotura', 'esperando-vuelta'].includes(otro.estado)) continue
+        const cfgOtro = otro?.config ?? cfg
         const eur = otro?.plan
           ? otro.plan.tamano * margenPorContrato(otro.cierreBracket ?? otro.bracket.high, otro.plan)
-          : saldo * margenTipicoDe(ticker, otro?.config ?? cfg)
-        reservas.push({ ticker, eur })
+          : saldo * margenTipicoDe(ticker, cfgOtro)
+        const riesgoEur = otro?.plan?.riesgoEur ?? riesgoDeCuenta(saldo, cfgOtro.riesgoPct) ?? 0
+        const lados = otro?.estado === 'esperando-vuelta' && otro.anteriores?.length ? [contrario(otro.anteriores.at(-1).lado)]
+          : cfgOtro.modo === 'largo' || cfgOtro.modo === 'corto' ? [cfgOtro.modo]
+          : ['largo', 'corto']
+        reservas.push({ ticker, eur, riesgoEur, lados })
       }
     }
     return reservas
@@ -935,7 +972,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const reservado = reservas.reduce((s, r) => s + r.eur, 0)
       const cabe = Math.floor((cuenta.disponible - reservado - COLCHON_MARGEN * saldo) / margenPorContrato(precio, plan) * 10 + 1e-9) / 10
       const cuentas = `${euros(cuenta.disponible)} disponibles`
-        + (reservas.length ? `, de los que ${euros(reservado)} se guardan para la entrada de ${reservas.map(r => SESIONES_BOT[r.ticker].nombre).join(' y ')}` : '')
+        + (reservas.length ? `, de los que ${euros(reservado)} se guardan para la entrada de ${listaY(reservas.map(r => SESIONES_BOT[r.ticker].nombre))}` : '')
       if (cabe < (plan.tamanoMin ?? 0.1)) {
         op.esperaAnadir = ahora() + ESPERA_MARGEN_S
         if (op.avisoMargen !== n) {

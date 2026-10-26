@@ -948,6 +948,37 @@ test('la pirámide deja el margen de la entrada que aún espera otro instrumento
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('de los índices de EE. UU. que esperan solo se guarda el margen de los que el límite de riesgo de la cartera dejaría entrar', async () => {
+  const daxYEeuu = { ...daxYNasdaq, instrumentos: { '^N225': false, '^GDAXI': true, '^NDX': true, '^GSPC': true, '^DJI': true } }
+  const prueba = async cartera => {
+    const precios = { '^GDAXI': [25500, 25501] }
+    const ig = igFalso({ velas: { '^GDAXI': [vela15(madridNov(10, 9, 15), 25480, 25500, 25460, 25490)] }, precios, disponible: disponibleMenos(20000) })
+    const { bot, dir, enHora } = botDePrueba(ig, daxYEeuu, { cartera })
+    try {
+      enHora(madridNov(10, 9, 30, 4)); await bot._paso()
+      vela1m('^GDAXI', madridNov(10, 9, 41), 25502, 25495, 25501)
+      enHora(madridNov(10, 9, 41, 10)); await bot._paso()
+      precios['^GDAXI'] = [25541, 25542]
+      vela1m('^GDAXI', madridNov(10, 9, 45), 25542, 25530, 25541)
+      enHora(madridNov(10, 9, 45, 5)); await bot._paso()
+      return apunte(bot, '^GDAXI')
+    } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+  }
+
+  // sin cartera, a los tres se les guarda el 40% del saldo (24.000 €): el añadido no cabe
+  let hoy = await prueba(null)
+  assert.deepEqual(hoy.operacion.unidades.map(u => u.tamano), [5])
+  assert.match(hoy.eventos.at(-1).texto, /de los que 24\.000 € se guardan para la entrada de Nasdaq 100, S&P 500 y Dow Jones\)/)
+
+  // con 1.000 € ya en riesgo en EE. UU. en cada sentido, del tope de 1.200 € quedan 200: entra
+  // una sola entrada de 200 €, compre o venda, y se le guardan 8.000 €; como en la otra prueba, caben 3,6
+  const cartera = crearCartera({ grupos: GRUPOS_TORTUGAS, maxPct: 6 })
+  cartera.registrar('Tortugas', () => [{ ticker: '^GSPC', lado: 'largo', riesgoEur: 1000 }, { ticker: '^DJI', lado: 'corto', riesgoEur: 1000 }])
+  hoy = await prueba(cartera)
+  assert.deepEqual(hoy.operacion.unidades.map(u => u.tamano), [5, 3.6])
+  assert.ok(hoy.eventos.some(e => /de los que 8000 € se guardan para la entrada de Nasdaq 100\)/.test(e.texto)))
+})
+
 test('sin plan, a la entrada que espera se le guarda lo que suele pedir según sus últimos brackets', async () => {
   const precios = { '^GDAXI': [25500, 25501] }
   // tres días del Nasdaq con brackets del 0,1%, el 0,15% y el 0,2% del precio, y uno del 1%

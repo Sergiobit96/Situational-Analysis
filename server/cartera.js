@@ -47,15 +47,20 @@ export function crearCartera({ grupos = {}, maxPct = MAX_RIESGO_GRUPO_PCT } = {}
     })
   }
 
-  // null si la entrada cabe; si no, por qué no
-  function noCabe({ ticker, lado, riesgoEur, saldo }) {
-    if (!(saldo > 0) || !(maxPct > 0)) return null
+  // Las posiciones abiertas que cuentan con una entrada de `ticker` en `lado`
+  function mismasQue(ticker, lado) {
     const e = exposicionDe(ticker, lado, grupos)
     const mismas = posiciones().filter(p => {
       const x = exposicionDe(p.ticker, p.lado, grupos)
       return x.grupo === e.grupo && x.lado === e.lado && p.riesgoEur > 0
     })
-    const abierto = mismas.reduce((s, p) => s + p.riesgoEur, 0)
+    return { e, mismas, abierto: mismas.reduce((s, p) => s + p.riesgoEur, 0) }
+  }
+
+  // null si la entrada cabe; si no, por qué no
+  function noCabe({ ticker, lado, riesgoEur, saldo }) {
+    if (!(saldo > 0) || !(maxPct > 0)) return null
+    const { e, mismas, abierto } = mismasQue(ticker, lado)
     const tope = saldo * maxPct / 100
     if (abierto + riesgoEur <= tope) return null
     const quien = [...new Set(mismas.map(p => p.bot))].join(', ')
@@ -63,9 +68,17 @@ export function crearCartera({ grupos = {}, maxPct = MAX_RIESGO_GRUPO_PCT } = {}
       + ` más del ${String(maxPct).replace('.', ',')}% del saldo (${Math.round(tope)} €)`
   }
 
+  // Los euros de riesgo que aún caben en el grupo de `ticker` y en `lado` (Infinity sin límite)
+  function hueco({ ticker, lado, saldo }) {
+    if (!(saldo > 0) || !(maxPct > 0)) return Infinity
+    return Math.max(0, saldo * maxPct / 100 - mismasQue(ticker, lado).abierto)
+  }
+
   return {
     registrar(bot, abiertas) { bots.set(bot, abiertas) },
     noCabe,
+    hueco,
+    grupoDe: ticker => exposicionDe(ticker, 'largo', grupos).grupo,
     estado: () => ({ maxPct, posiciones: posiciones() }),
   }
 }

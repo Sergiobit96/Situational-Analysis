@@ -40,3 +40,4 @@ __pycache__/
 
 .vercel
 .env*
+scripts/.vigilante.json

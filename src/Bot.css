@@ -297,3 +297,7 @@
 .tor-tabla small.tor-cercana { color: var(--muted); font-family: var(--font-sans); white-space: nowrap; }
 .tor-tabla .bv-canal { width: 170px; height: 29px; }
 .tor-tabla small.tor-cercana.cerca { color: var(--text); font-weight: 600; }
+
+/* Vista Salud de la pestaña Bots (src/Salud.jsx) */
+.salud-avisos { margin: 0.4rem 0 0; padding-left: 1.2rem; line-height: 1.6; }
+.salud-ojo { color: #f59e0b; }

@@ -39,6 +39,7 @@ import { spawn } from 'child_process'
 import PptxGenJS from 'pptxgenjs'
 import multer from 'multer'
 import { GoogleAuth } from 'google-auth-library'
+import { avisosDeSalud } from './salud.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -3709,6 +3710,32 @@ const bucle = medirBucle()
 app.get('/healthz/bots', (_req, res) => {
   const e = vigilancia.estado()
   res.status(e.ok ? 200 : 503).json({ ...e, opera: BOT_OPERA, bucle: bucle() })
+})
+
+// Todo lo que dice si el servidor está sano, junto (server/salud.js), para la vista Salud de la
+// pestaña Bots. Va bajo /api/bot, con su clave: enseña el estado de IG y de la cuenta.
+const ARRANCADO = new Date().toISOString()
+app.get('/api/bot/salud', (_req, res) => {
+  const e = ig?.estado()
+  const s = {
+    servidor: {
+      arrancado: ARRANCADO, opera: BOT_OPERA, produccion: PRODUCCION,
+      commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null, mensaje: process.env.RAILWAY_GIT_COMMIT_MESSAGE ?? null,
+    },
+    bots: vigilancia.estado(),
+    bucle: bucle(),
+    ig: e ? { sesion: e.sesion, streaming: e.streaming, cuenta: e.cuenta, error: e.error, cupo: e.cupo } : null,
+    fuentes: {
+      dukascopy: { limitando: dukascopyLimitando(10 * 60_000), ...estadoTransporteDukascopy() },
+      twelveData: { clave: !!process.env.TWELVEDATA_API_KEY },
+    },
+    grabacion: grabacion ? { error: grabacion.resumen().error } : null,
+    calendarioFomc: calendarioFomc.estado(),
+    noticias: noticias.estado(),
+    telegram: telegram.estado(),
+    conciliacion: conciliacion?.estado() ?? null,
+  }
+  res.json({ ...s, avisos: avisosDeSalud(s) })
 })
 
 app.get('/api/bot/tortugas', (req, res) => {

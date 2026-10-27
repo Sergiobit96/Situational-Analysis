@@ -4,14 +4,15 @@
 // close, volume).
 //
 // Es para dejarlo horas o días: se puede cortar y volver a lanzar, y sigue por donde iba (un
-// mes con su CSV ya está hecho; el mes en curso se rehace siempre). Cuando Dukascopy limita
+// mes con su CSV escrito después de cerrarse ya está hecho; el mes en curso se rehace siempre),
+// y lanzado a diario lo mantiene al día (tarea «Actualizar Dukascopy»). Cuando Dukascopy limita
 // (429) no se para: tira ese mes, que puede venir incompleto, espera y lo repite.
 //
 //   node scripts/bajar-dukascopy-todo.mjs                  los 15 de la lista
 //   node scripts/bajar-dukascopy-todo.mjs deuidxeur xauusd solo esos
 //
 // DUKASCOPY_DIR cambia la carpeta base. El progreso queda también en historico\progreso.log.
-import { appendFileSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getHistoricalRates, instrumentMetaData } from 'dukascopy-node'
 import { instalarTransporteDukascopy, dukascopyLimitando } from '../server/dukascopy-transport.js'
@@ -82,6 +83,13 @@ function guardarMes(ruta, velas) {
   renameSync(`${ruta}.tmp`, ruta)
 }
 
+// Un mes está hecho si su CSV se escribió después de que el mes acabara; si no (el mes en
+// curso, o el anterior bajado antes de cerrarse), se rehace. Así, lanzado cada día, se
+// pone al día solo.
+function mesHecho(ruta, fin) {
+  try { return statSync(ruta).mtimeMs > fin + 60 * 60_000 } catch { return false }
+}
+
 const pedidos = process.argv.slice(2).map(s => s.toLowerCase())
 const lista = pedidos.length ? pedidos : INSTRUMENTOS
 for (const i of lista) {
@@ -89,12 +97,22 @@ for (const i of lista) {
 }
 
 mkdirSync(BASE, { recursive: true })
+
+// Si ya hay otra descarga en marcha (testigo renovado hace menos de 3 min), esta no hace nada:
+// la tarea diaria no se pisa con una descarga larga lanzada a mano.
+const TESTIGO = join(BASE, '.descargando')
+try {
+  if (Date.now() - statSync(TESTIGO).mtimeMs < 3 * 60_000) {
+    console.log(`Ya hay una descarga en marcha (PID ${readFileSync(TESTIGO, 'utf8')}); no hago nada`)
+    process.exit(0)
+  }
+} catch { /* no hay testigo: adelante */ }
+
 instalarTransporteDukascopy()
 
 // El testigo de que la descarga está en marcha: el servidor local, mientras lo ve renovado
 // (cada minuto), no le pide nada a Dukascopy. Se borra al acabar; si el proceso muere sin
 // borrarlo, a los 3 min sin renovar deja de contar.
-const TESTIGO = join(BASE, '.descargando')
 const renovarTestigo = () => { try { writeFileSync(TESTIGO, String(process.pid)) } catch { /* no es crítico */ } }
 renovarTestigo()
 const relojTestigo = setInterval(renovarTestigo, 60_000)
@@ -109,7 +127,7 @@ for (const instrumento of lista) {
   mkdirSync(dir, { recursive: true })
   const primera = Date.parse(instrumentMetaData[instrumento].startDayForMinuteCandles)
   const todos = meses(primera, ahora)
-  const pendientes = todos.filter(([, , mes]) => mes === mesEnCurso || !existsSync(join(dir, `${mes}.csv`)))
+  const pendientes = todos.filter(([, fin, mes]) => !mesHecho(join(dir, `${mes}.csv`), fin))
   anotar(`${instrumento}: ${todos.length} meses desde ${todos[0][2]}, faltan ${pendientes.length}`)
   for (const [ini, fin, mes] of pendientes) {
     for (let intento = 0; ; intento++) {

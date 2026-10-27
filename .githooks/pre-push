@@ -1,0 +1,3 @@
+#!/bin/sh
+# Para el push a main si los bots están en plena sesión (scripts/antes-de-push.mjs)
+exec node "$(git rev-parse --show-toplevel)/scripts/antes-de-push.mjs"

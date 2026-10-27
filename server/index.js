@@ -44,8 +44,25 @@ import { avisosDeSalud } from './salud.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Debe ejecutarse antes de la primera descarga: elige HTTPS o HTTP para el datafeed
-// según lo que deje pasar la red (ver server/dukascopy-transport.js)
-instalarTransporteDukascopy()
+// según lo que deje pasar la red (ver server/dukascopy-transport.js). En local, mientras
+// scripts/bajar-dukascopy-todo.mjs baja el histórico (renueva su testigo cada minuto), el
+// servidor no le pide nada al feed: así no le gasta el cupo de peticiones de la IP. El
+// testigo viejo (la descarga acabó o se cortó) deja de contar a los 3 min.
+const TESTIGO_HISTORICO = join(process.env.DUKASCOPY_DIR || 'C:\\Users\\Sergio\\Documents\\Dukascopy', 'historico', '.descargando')
+let avisadoHistorico = false
+function bajandoHistorico() {
+  if (process.env.NODE_ENV === 'production') return false
+  let enMarcha = false
+  try { enMarcha = Date.now() - statSync(TESTIGO_HISTORICO).mtimeMs < 3 * 60_000 } catch { /* sin testigo */ }
+  if (enMarcha !== avisadoHistorico) {
+    avisadoHistorico = enMarcha
+    console.log(enMarcha
+      ? '[Dukascopy] El histórico completo se está bajando: el servidor no pide nada al feed hasta que acabe'
+      : '[Dukascopy] La descarga del histórico ya no está en marcha: el servidor vuelve a pedir al feed')
+  }
+  return enMarcha
+}
+instalarTransporteDukascopy({ bloqueado: bajandoHistorico })
 
 // Cache en disco para datos Dukascopy. En Railway va al volumen de /data: en /tmp se
 // borraba con cada despliegue, y con ella todo lo descargado, así que tras cada push las

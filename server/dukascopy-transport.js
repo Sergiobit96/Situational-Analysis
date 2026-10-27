@@ -57,7 +57,11 @@ async function resolverModo(fetchOriginal) {
   return determinando
 }
 
-export function instalarTransporteDukascopy() {
+// `bloqueado`: si devuelve true, no sale nada al feed y cada petición contesta como un 429
+// (el servidor local lo usa mientras scripts/bajar-dukascopy-todo.mjs baja el histórico,
+// para no gastarle el cupo de peticiones de la IP). Quien pide ve lo mismo que con el feed
+// limitando: tira de la caché o de la reserva, y la cola de descargas espera.
+export function instalarTransporteDukascopy({ bloqueado = null } = {}) {
   const fetchOriginal = globalThis.fetch
 
   // Resolver el transporte ya, al arrancar: si la sonda se dejara para la primera
@@ -69,6 +73,10 @@ export function instalarTransporteDukascopy() {
     const url = typeof input === 'string' ? input : input?.url
     // Todo lo que no sea el datafeed de Dukascopy pasa de largo sin tocarse
     if (typeof url !== 'string' || !url.startsWith(HTTPS_PREFIX)) return fetchOriginal(input, init)
+    if (bloqueado?.()) {
+      ultimo429 = Date.now()
+      return new Response('', { status: 429 })
+    }
 
     const porHttp = HTTP_PREFIX + url.slice(HTTPS_PREFIX.length)
     if ((await resolverModo(fetchOriginal)) === 'http') return descargarConEsperaSi429(fetchOriginal, porHttp, init)

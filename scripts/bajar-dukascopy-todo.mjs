@@ -11,7 +11,7 @@
 //   node scripts/bajar-dukascopy-todo.mjs deuidxeur xauusd solo esos
 //
 // DUKASCOPY_DIR cambia la carpeta base. El progreso queda también en historico\progreso.log.
-import { appendFileSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getHistoricalRates, instrumentMetaData } from 'dukascopy-node'
 import { instalarTransporteDukascopy, dukascopyLimitando } from '../server/dukascopy-transport.js'
@@ -90,6 +90,16 @@ for (const i of lista) {
 
 mkdirSync(BASE, { recursive: true })
 instalarTransporteDukascopy()
+
+// El testigo de que la descarga está en marcha: el servidor local, mientras lo ve renovado
+// (cada minuto), no le pide nada a Dukascopy. Se borra al acabar; si el proceso muere sin
+// borrarlo, a los 3 min sin renovar deja de contar.
+const TESTIGO = join(BASE, '.descargando')
+const renovarTestigo = () => { try { writeFileSync(TESTIGO, String(process.pid)) } catch { /* no es crítico */ } }
+renovarTestigo()
+const relojTestigo = setInterval(renovarTestigo, 60_000)
+process.on('exit', () => { try { unlinkSync(TESTIGO) } catch { /* ya no está */ } })
+process.on('SIGINT', () => process.exit(130))
 anotar(`Empiezo: ${lista.join(', ')} → ${BASE}`)
 
 const ahora = Date.now()
@@ -120,3 +130,4 @@ for (const instrumento of lista) {
   anotar(`${instrumento}: hecho`)
 }
 anotar('Todo bajado')
+clearInterval(relojTestigo)

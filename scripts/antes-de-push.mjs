@@ -52,6 +52,8 @@ for (const [nombre, ruta] of BOTS) {
   for (const d of j.hoy ?? []) {
     if (TERMINADOS.has(d.estado)) continue
     if (vistos.has(d.ticker)) continue
+    // una sesión que aún no ha abierto (el Nikkei de mañana, esperando su bracket) no tiene nada que perder
+    if (d.abre != null && ahora < d.abre && !/posicion/.test(d.estado)) continue
     motivos.push(`${nombre}: ${d.ticker} sigue ${d.estado}`)
     libre = Math.max(libre, d.cierra ?? 0)
   }
@@ -61,5 +63,5 @@ if (!motivos.length) process.exit(0)
 console.error('\nNo subo a main: el push reinicia los bots en Railway.')
 for (const m of motivos) console.error(`  · ${m}`)
 if (libre > ahora) console.error(`Hasta las ${hora(libre)} de Madrid no hay hueco.`)
-console.error('Si hay que subir igualmente: PUSH_FORZAR=1 git push …\n')
+console.error("Si hay que subir igualmente: PUSH_FORZAR=1 git push … (en PowerShell: $env:PUSH_FORZAR='1'; git push …)\n")
 process.exit(1)

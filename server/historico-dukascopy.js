@@ -5,12 +5,17 @@
 // con sus opciones por defecto), así que un día que esté aquí no hace falta pedírselo: se
 // lee del CSV y se agrupa en local al timeframe pedido, como hace dukascopy-node.
 //
+// Los meses salen de una carpeta con los CSV (en local) o de los zips del release
+// «historico» de Sergiobit96/dukascopy-historico, uno por instrumento, sin descomprimirlos
+// (en el servidor online, que los mantiene al día con server/historico-github.js).
+//
 // Un día solo vale si el CSV se escribió después de que acabara (el mes en curso, o uno
 // bajado antes de cerrarse, trae los días hasta donde llegó y nada más). Si el día no está,
 // o el CSV es de un mes sin velas, se devuelve null y quien pide sigue con el feed.
 
-import { readFileSync, statSync } from 'fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'fs'
 import { join } from 'path'
+import { inflateRawSync } from 'zlib'
 
 const MINUTOS_TF = { m1: 1, m5: 5, m15: 15, m30: 30, h1: 60 }
 // margen tras el final del día para dar el fichero por completo (Dukascopy publica con retraso)
@@ -54,17 +59,111 @@ export function agruparMinutos(velas, minutos) {
   return out
 }
 
-export function crearHistoricoDukascopy(dir) {
-  const meses = new Map()   // ruta → { mtime, velas }
+// ── De dónde salen los meses ──
+// Una fuente da, para un instrumento y un mes (AAAA-MM), { id, mtimeMs, size, leer() } o null
 
-  function leerMes(ruta, mtime) {
-    const visto = meses.get(ruta)
-    if (visto?.mtime === mtime) {
-      meses.delete(ruta); meses.set(ruta, visto)   // al final: el más reciente
-      return visto.velas
+// historico\<instrumento>\<AAAA-MM>.csv
+export function fuenteCarpeta(dir) {
+  return (instrument, mes) => {
+    const ruta = join(dir, instrument, `${mes}.csv`)
+    try {
+      const st = statSync(ruta)
+      return { id: ruta, mtimeMs: st.mtimeMs, size: st.size, leer: () => readFileSync(ruta, 'utf8') }
+    } catch {
+      return null
     }
-    const velas = parsearMes(readFileSync(ruta, 'utf8'))
-    meses.set(ruta, { mtime, velas })
+  }
+}
+
+// El índice de un .zip (su directorio central): nombre → dónde está y cómo va comprimido.
+// Solo lo que hace falta para los zips de `zip -r` (sin zip64: ni ficheros de 4 GB ni 65.535
+// entradas). La fecha es la del campo extendido de Info-ZIP (segundos unix); si no viene,
+// la de MS-DOS leída como UTC, que es la hora de los runners de Actions donde se hacen.
+export function leerIndiceZip(ruta) {
+  const fd = openSync(ruta, 'r')
+  try {
+    const tam = statSync(ruta).size
+    const cola = Buffer.alloc(Math.min(tam, 65_557))
+    readSync(fd, cola, 0, cola.length, tam - cola.length)
+    let eocd = -1
+    for (let i = cola.length - 22; i >= 0; i--) if (cola.readUInt32LE(i) === 0x06054b50) { eocd = i; break }
+    if (eocd < 0) throw new Error('no es un zip')
+    const n = cola.readUInt16LE(eocd + 10), tamDir = cola.readUInt32LE(eocd + 12), iniDir = cola.readUInt32LE(eocd + 16)
+    const dir = Buffer.alloc(tamDir)
+    readSync(fd, dir, 0, tamDir, iniDir)
+    const indice = new Map()
+    for (let p = 0, k = 0; k < n; k++) {
+      if (dir.readUInt32LE(p) !== 0x02014b50) throw new Error('directorio del zip roto')
+      const metodo = dir.readUInt16LE(p + 10), hora = dir.readUInt16LE(p + 12), fecha = dir.readUInt16LE(p + 14)
+      const comprimido = dir.readUInt32LE(p + 20), tamano = dir.readUInt32LE(p + 24)
+      const lNombre = dir.readUInt16LE(p + 28), lExtra = dir.readUInt16LE(p + 30), lComent = dir.readUInt16LE(p + 32)
+      const offset = dir.readUInt32LE(p + 42)
+      const nombre = dir.toString('utf8', p + 46, p + 46 + lNombre)
+      let mtimeMs = Date.UTC(1980 + (fecha >> 9), ((fecha >> 5) & 15) - 1, fecha & 31, hora >> 11, (hora >> 5) & 63, (hora & 31) * 2)
+      for (let e = p + 46 + lNombre, fin = e + lExtra; e + 4 <= fin;) {
+        const id = dir.readUInt16LE(e), l = dir.readUInt16LE(e + 2)
+        if (id === 0x5455 && l >= 5 && (dir[e + 4] & 1)) mtimeMs = dir.readUInt32LE(e + 5) * 1000
+        e += 4 + l
+      }
+      indice.set(nombre, { metodo, comprimido, tamano, offset, mtimeMs })
+      p += 46 + lNombre + lExtra + lComent
+    }
+    return indice
+  } finally {
+    closeSync(fd)
+  }
+}
+
+export function leerEntradaZip(ruta, e) {
+  const fd = openSync(ruta, 'r')
+  try {
+    const cab = Buffer.alloc(30)
+    readSync(fd, cab, 0, 30, e.offset)
+    if (cab.readUInt32LE(0) !== 0x04034b50) throw new Error('entrada del zip rota')
+    const datos = Buffer.alloc(e.comprimido)
+    readSync(fd, datos, 0, e.comprimido, e.offset + 30 + cab.readUInt16LE(26) + cab.readUInt16LE(28))
+    if (e.metodo === 0) return datos
+    if (e.metodo === 8) return inflateRawSync(datos)
+    throw new Error(`compresión ${e.metodo} no soportada`)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+// <dir>\<instrumento>.zip, con <instrumento>/<AAAA-MM>.csv dentro
+export function fuenteZips(dir) {
+  const indices = new Map()   // ruta → { mtime, indice }
+  return (instrument, mes) => {
+    const ruta = join(dir, `${instrument}.zip`)
+    try {
+      const mtime = statSync(ruta).mtimeMs
+      let visto = indices.get(ruta)
+      if (visto?.mtime !== mtime) indices.set(ruta, visto = { mtime, indice: leerIndiceZip(ruta) })
+      const e = visto.indice.get(`${instrument}/${mes}.csv`)
+      if (!e) return null
+      return {
+        id: `${ruta}|${mes}|${mtime}`, mtimeMs: e.mtimeMs, size: e.tamano,
+        leer: () => leerEntradaZip(ruta, e).toString('utf8'),
+      }
+    } catch {
+      return null
+    }
+  }
+}
+
+// `fuente`: una carpeta con los CSV (texto) o una de las fuentes de arriba; null, nada
+export function crearHistoricoDukascopy(fuente) {
+  const mesDe = typeof fuente === 'string' ? fuenteCarpeta(fuente) : fuente
+  const meses = new Map()   // id → velas
+
+  function leerMes(m) {
+    const visto = meses.get(m.id)
+    if (visto) {
+      meses.delete(m.id); meses.set(m.id, visto)   // al final: el más reciente
+      return visto
+    }
+    const velas = parsearMes(m.leer())
+    meses.set(m.id, velas)
     while (meses.size > MESES_EN_MEMORIA) meses.delete(meses.keys().next().value)
     return velas
   }
@@ -72,18 +171,16 @@ export function crearHistoricoDukascopy(dir) {
   // Las velas de `date` (AAAA-MM-DD, día UTC) en el timeframe `tf`, o null si no están
   return function velasDelHistorico(instrument, date, tf) {
     const minutos = MINUTOS_TF[tf]
-    if (!dir || !minutos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
-    const ruta = join(dir, instrument.toLowerCase(), `${date.slice(0, 7)}.csv`)
-    let st
-    try { st = statSync(ruta) } catch { return null }
+    if (!mesDe || !minutos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+    const m = mesDe(instrument.toLowerCase(), date.slice(0, 7))
     const desde = Date.parse(`${date}T00:00:00Z`) / 1000
     const hasta = desde + 86400
-    if (st.size === 0 || st.mtimeMs < hasta * 1000 + MARGEN_MS) return null
+    if (!m || m.size === 0 || m.mtimeMs < hasta * 1000 + MARGEN_MS) return null
     let velas
-    try { velas = leerMes(ruta, st.mtimeMs) } catch { return null }
+    try { velas = leerMes(m) } catch { return null }
     // búsqueda binaria del primer minuto del día: el mes viene ordenado
     let lo = 0, hi = velas.length
-    while (lo < hi) { const m = (lo + hi) >> 1; if (velas[m].time < desde) lo = m + 1; else hi = m }
+    while (lo < hi) { const k = (lo + hi) >> 1; if (velas[k].time < desde) lo = k + 1; else hi = k }
     let fin = lo
     while (fin < velas.length && velas[fin].time < hasta) fin++
     if (fin === lo) return null

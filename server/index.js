@@ -3,7 +3,8 @@ import express from 'express'
 import cors from 'cors'
 import { getHistoricalRates } from 'dukascopy-node'
 import { instalarTransporteDukascopy, estadoTransporteDukascopy, dukascopyLimitando, revalidarTransporteDukascopy } from './dukascopy-transport.js'
-import { crearHistoricoDukascopy } from './historico-dukascopy.js'
+import { crearHistoricoDukascopy, fuenteZips } from './historico-dukascopy.js'
+import { crearSincronizacionHistorico } from './historico-github.js'
 import { getEventIndex, getEventosEnFecha } from './eventos.js'
 import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
@@ -827,11 +828,17 @@ const DUKA_TIMEFRAMES = new Set(['m1', 'm5', 'm15', 'm30', 'h1'])
 // Sesión cerrada (ayer y antes): sus datos ya no cambian y pueden ir al disco
 const sesionCerrada = date => date <= new Date(Date.now() - 86400_000).toISOString().slice(0, 10)
 
-// El histórico a 1 min de Documents\Dukascopy\historico (scripts/bajar-dukascopy-todo.mjs y
-// bajar-zips-github.mjs): lo que esté ahí sale del CSV, idéntico a lo que daría el feed.
-// En el servidor online no está, salvo que DUKASCOPY_HISTORICO_DIR apunte a una copia.
+// El histórico de Dukascopy a 1 min: lo que esté ahí sale de sus CSV, idéntico a lo que daría
+// el feed. En local, la carpeta Documents\Dukascopy\historico (scripts/bajar-dukascopy-todo.mjs
+// y bajar-zips-github.mjs); en el servidor online, los zips del release de GitHub, que se
+// mantienen al día en el volumen (server/historico-github.js). DUKASCOPY_HISTORICO_DIR
+// apunta a otra carpeta de CSV.
+const HISTORICO_ZIPS_DIR = process.env.NODE_ENV === 'production' && existsSync('/data') ? '/data/dukascopy-historico' : null
+const sincronizacionHistorico = HISTORICO_ZIPS_DIR ? crearSincronizacionHistorico(HISTORICO_ZIPS_DIR) : null
 const velasDelHistorico = crearHistoricoDukascopy(process.env.DUKASCOPY_HISTORICO_DIR
-  || (process.env.NODE_ENV === 'production' ? null : 'C:\\Users\\Sergio\\Documents\\Dukascopy\\historico'))
+  || (HISTORICO_ZIPS_DIR ? fuenteZips(HISTORICO_ZIPS_DIR)
+    : process.env.NODE_ENV === 'production' ? null : 'C:\\Users\\Sergio\\Documents\\Dukascopy\\historico'))
+sincronizacionHistorico?.iniciar()
 
 // Las velas de ese día que ya están guardadas, sin salir a la red; null si no las hay
 function velasDukascopyGuardadas(instrument, date, tf) {
@@ -3736,6 +3743,13 @@ const resumenDiario = bot ? crearResumenDiario({
   ],
 }) : null
 if (BOT_OPERA) { conciliacion?.iniciar(); resumenDiario?.iniciar() }
+
+// Cómo va la copia del histórico de Dukascopy en el servidor online (qué zips tiene y de cuándo)
+app.get('/api/dukascopy-historico', (_req, res) => {
+  res.json(sincronizacionHistorico
+    ? { fuente: 'zips', dir: HISTORICO_ZIPS_DIR, ...sincronizacionHistorico.estado() }
+    : { fuente: process.env.NODE_ENV === 'production' ? null : 'carpeta' })
+})
 
 const bucle = medirBucle()
 app.get('/healthz/bots', (_req, res) => {

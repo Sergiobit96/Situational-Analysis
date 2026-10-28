@@ -5,9 +5,11 @@
 //   node scripts/bajar-zips-github.mjs                 todos los zips con algo dentro
 //   node scripts/bajar-zips-github.mjs eurusd xauusd   solo esos
 //
-// No pisa lo que ya está bien en local: un mes se copia solo si aquí falta o quedó a medias
-// (su CSV se escribió antes de cerrarse el mes) y el del zip está completo. Un zip que no ha
-// cambiado desde la última vez no se vuelve a bajar (historico\.zips-github.json).
+// No pisa lo que ya está bien en local: un mes se copia solo si aquí falta, o si quedó a medias
+// (su CSV se escribió antes de cerrarse el mes) y el del zip es más nuevo; así entra cada día
+// el mes en curso. Un zip que no ha cambiado desde la última vez no se vuelve a bajar
+// (historico\.zips-github.json). La tarea «Traer Dukascopy de GitHub» lo lanza cada mañana,
+// después de la ejecución diaria del workflow (04:30 UTC).
 import { execFileSync } from 'child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -53,7 +55,7 @@ for (const a of assets) {
     writeFileSync(zip, Buffer.from(await r.arrayBuffer()))
     const dentro = join(tmp, 'x')
     mkdirSync(dentro)
-    execFileSync(join(process.env.SystemRoot || 'C:\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', dentro])   // el tar de Windows (bsdtar; el GNU de Git Bash no abre .zip) conserva las fechas
+    execFileSync(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', dentro])   // el tar de Windows (bsdtar; el GNU de Git Bash no abre .zip) conserva las fechas
 
     const origen = join(dentro, instrumento)
     const destino = join(BASE, instrumento)
@@ -64,8 +66,8 @@ for (const a of assets) {
       if (!mes) continue
       const de = join(origen, f), a_ = join(destino, f)
       const tZip = mtime(de), tLocal = mtime(a_)
-      if (!mesHecho(tZip, mes)) continue                            // en el zip también está a medias
       if (tLocal != null && mesHecho(tLocal, mes)) { iguales++; continue }   // el local ya vale
+      if (tLocal != null && tZip <= tLocal) { iguales++; continue }          // a medias, pero el local es igual o más nuevo
       copyFileSync(de, `${a_}.tmp`)
       utimesSync(`${a_}.tmp`, new Date(), new Date(tZip))        // conserva la fecha: sigue contando como hecho
       renameSync(`${a_}.tmp`, a_)

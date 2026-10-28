@@ -3,6 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import { getHistoricalRates } from 'dukascopy-node'
 import { instalarTransporteDukascopy, estadoTransporteDukascopy, dukascopyLimitando, revalidarTransporteDukascopy } from './dukascopy-transport.js'
+import { crearHistoricoDukascopy } from './historico-dukascopy.js'
 import { getEventIndex, getEventosEnFecha } from './eventos.js'
 import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
@@ -826,6 +827,12 @@ const DUKA_TIMEFRAMES = new Set(['m1', 'm5', 'm15', 'm30', 'h1'])
 // Sesión cerrada (ayer y antes): sus datos ya no cambian y pueden ir al disco
 const sesionCerrada = date => date <= new Date(Date.now() - 86400_000).toISOString().slice(0, 10)
 
+// El histórico a 1 min de Documents\Dukascopy\historico (scripts/bajar-dukascopy-todo.mjs y
+// bajar-zips-github.mjs): lo que esté ahí sale del CSV, idéntico a lo que daría el feed.
+// En el servidor online no está, salvo que DUKASCOPY_HISTORICO_DIR apunte a una copia.
+const velasDelHistorico = crearHistoricoDukascopy(process.env.DUKASCOPY_HISTORICO_DIR
+  || (process.env.NODE_ENV === 'production' ? null : 'C:\\Users\\Sergio\\Documents\\Dukascopy\\historico'))
+
 // Las velas de ese día que ya están guardadas, sin salir a la red; null si no las hay
 function velasDukascopyGuardadas(instrument, date, tf) {
   const cacheKey = `duka_${instrument}_${date}_${tf}`
@@ -834,7 +841,14 @@ function velasDukascopyGuardadas(instrument, date, tf) {
   const cached = fromCache(cacheKey)
   if (cached) return cached
 
-  // 2. Cache en disco: ayer y antes (sesión cerrada → datos inmutables)
+  // 2. El histórico en CSV
+  const delHistorico = velasDelHistorico(instrument, date, tf)
+  if (delHistorico) {
+    toCache(cacheKey, delHistorico, 6 * 60 * 60_000)
+    return delHistorico
+  }
+
+  // 3. Cache en disco: ayer y antes (sesión cerrada → datos inmutables)
   if (!sesionCerrada(date)) return null
   const disk = diskCacheGet(cacheKey)
   if (disk) toCache(cacheKey, disk, 6 * 60 * 60_000)
@@ -847,7 +861,7 @@ async function obtenerVelasDukascopy(instrument, date, timeframe = 'm15') {
   const guardadas = velasDukascopyGuardadas(instrument, date, tf)
   if (guardadas) return guardadas
 
-  // 3. Sin caché: si la fuente está marcada como caída, no gastar otro timeout de 10 s
+  // 4. Sin caché: si la fuente está marcada como caída, no gastar otro timeout de 10 s
   if (dukaCaido()) return []
   return descargarVelasDukascopy(instrument, date, tf)
 }

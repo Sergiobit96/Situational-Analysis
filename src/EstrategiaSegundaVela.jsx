@@ -1016,8 +1016,12 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
           {!estr.soloFomc && <div className="filtro-group">
             <label className="filtro-label">Datos</label>
             <div className="filtro-presets">
-              <button className={`chip ${fuente === 'feed' ? 'activo' : ''}`} onClick={() => setFuente('feed')}>
-                Feed (Dukascopy)
+              <button
+                className={`chip ${fuente === 'feed' ? 'activo' : ''}`}
+                title="El histórico de Dukascopy a 1 min en CSV (Documents\Dukascopy\historico en local; los zips de GitHub en el servidor online) y, lo que no esté, el feed"
+                onClick={() => setFuente('feed')}
+              >
+                Dukascopy (CSV + feed)
               </button>
               {estr.admiteCsv && (
                 <button className={`chip ${fuente === 'csv' ? 'activo' : ''}`} onClick={() => { setFuente('csv'); setTicker('^GDAXI') }}>
@@ -1037,7 +1041,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 ? 'CSV de DAX cash a 5 min, sin límite de peticiones'
                 : fuente === 'yahoo'
                   ? 'Los CSV de Yahoo de Documentos: el contado de cada índice a 5 min desde julio (y a 1 min desde septiembre para afinar), todas sus sesiones de una vez'
-                  : 'Del feed, unas pocas sesiones por tanda'}
+                  : 'Del histórico de Dukascopy en CSV (Documentos), al momento; solo lo que no esté (lo más reciente, o un instrumento sin CSV) se pide al feed, unas pocas sesiones por tanda'}
             </p>
           </div>}
 
@@ -1121,7 +1125,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 >{p.label}</button>
               ))}
             </div>
-            <p className="estr-explica">Todas las sesiones del periodo, una descarga por sesión: la primera vez, un periodo largo tarda; después sale de la caché</p>
+            <p className="estr-explica">Todas las sesiones del periodo. Lo que está en los CSV de Dukascopy sale al momento; lo que haya que pedir al feed tarda la primera vez y después sale de la caché</p>
           </div>}
 
           {cambiosPendientes.length > 0 && !cargando && (

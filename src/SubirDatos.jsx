@@ -66,7 +66,8 @@ function parseCSV(text) {
 
   const velas = []
   for (let i = 1; i < lines.length; i++) {
-    const cols    = lines[i].split(delim)
+    // los CSV de Dukascopy (scripts/bajar-dukascopy*.mjs) llevan cada valor entre comillas
+    const cols    = lines[i].split(delim).map(c => c.trim().replace(/^"(.*)"$/, '$1'))
     const timeStr = iTime !== -1 ? (cols[iTime] ?? '') : ''
     const time    = parseFecha(cols[iDate] ?? '', timeStr)
     if (!time) continue
@@ -145,82 +146,111 @@ function parseJSON(text) {
 
 // ── Componente ────────────────────────────────────────────────────────────────
 
+// Lee un archivo; nunca lanza: lo que falle vuelve como { error }
+async function leerArchivo(file) {
+  try {
+    const text  = await file.text()
+    // un CSV vacío es un mes sin velas (así los deja bajar-dukascopy-todo.mjs): no es un error
+    if (!text.replace(/^﻿/, '').trim()) return { nombre: file.name, velas: [], vacio: true }
+    const velas = file.name.toLowerCase().endsWith('.json') ? parseJSON(text) : parseCSV(text)
+    if (!velas.length) throw new Error('No se extrajeron datos OHLCV válidos del archivo')
+    return { nombre: file.name, velas }
+  } catch (err) {
+    return { nombre: file.name, velas: [], error: err.message }
+  }
+}
+
+// Junta las velas de varios archivos (p. ej. un CSV por mes) en una sola serie ordenada.
+// Si dos archivos traen la misma vela, se queda la del último de la lista.
+function juntarVelas(archivos) {
+  const porTiempo = new Map()
+  for (const a of archivos) for (const v of a.velas) porTiempo.set(v.time, v)
+  return [...porTiempo.values()].sort((a, b) => a.time - b.time)
+}
+
 export default function SubirDatos() {
+  // datos: { archivos: [{ nombre, velas, error? }], velas } — velas ya juntadas
   const [datos,    setDatos]    = useState(null)
   const [dragging, setDragging] = useState(false)
+  const [leyendo,  setLeyendo]  = useState(0)
   const inputRef = useRef(null)
 
-  const procesar = useCallback((file) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const text  = e.target.result
-        const velas = file.name.toLowerCase().endsWith('.json')
-          ? parseJSON(text)
-          : parseCSV(text)
-        if (!velas.length) throw new Error('No se extrajeron datos OHLCV válidos del archivo')
-        setDatos({ nombre: file.name, velas, error: null })
-      } catch (err) {
-        setDatos({ nombre: file.name, velas: [], error: err.message })
-      }
-    }
-    reader.readAsText(file, 'utf-8')
+  const procesar = useCallback(async (files) => {
+    // por nombre: los CSV mensuales (2024-01.csv, 2024-02.csv…) quedan en orden
+    const lista = [...files].sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }))
+    if (!lista.length) return
+    setLeyendo(lista.length)
+    const archivos = await Promise.all(lista.map(leerArchivo))
+    setLeyendo(0)
+    setDatos({ archivos, velas: juntarVelas(archivos) })
   }, [])
 
   const onDrop = useCallback(e => {
     e.preventDefault()
     setDragging(false)
-    const f = e.dataTransfer.files[0]
-    if (f) procesar(f)
+    procesar(e.dataTransfer.files)
   }, [procesar])
 
   const onFileInput = e => {
-    const f = e.target.files[0]
-    if (f) procesar(f)
+    procesar(e.target.files)
     e.target.value = ''
   }
 
-  const stats = datos?.velas?.length ? (() => {
+  const conVelas = datos?.velas?.length > 0
+  const fallidos = datos?.archivos.filter(a => a.error) ?? []
+
+  const stats = conVelas ? (() => {
     const v   = datos.velas
     const fmt = ts => new Date(ts * 1000).toISOString().slice(0, 10)
     return { n: v.length, desde: fmt(v[0].time), hasta: fmt(v[v.length - 1].time) }
   })() : null
+
+  const nombre = datos?.archivos.length === 1
+    ? datos.archivos[0].nombre
+    : `${datos?.archivos.length} archivos`
 
   return (
     <div className="subir-page">
 
       {/* Zona de carga */}
       <div
-        className={`drop-zone ${dragging ? 'dragging' : ''} ${datos && !datos.error ? 'compact' : ''}`}
+        className={`drop-zone ${dragging ? 'dragging' : ''} ${conVelas ? 'compact' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         onClick={() => inputRef.current?.click()}
       >
-        <input ref={inputRef} type="file" accept=".csv,.json,.txt" hidden onChange={onFileInput} />
-        {datos && !datos.error ? (
-          <span className="drop-replace">📂 Cambiar archivo</span>
+        <input ref={inputRef} type="file" accept=".csv,.json,.txt" multiple hidden onChange={onFileInput} />
+        {leyendo > 0 ? (
+          <span className="drop-replace">Leyendo {leyendo} {leyendo === 1 ? 'archivo' : 'archivos'}…</span>
+        ) : conVelas ? (
+          <span className="drop-replace">📂 Cambiar archivos</span>
         ) : (
           <>
             <div className="drop-icon">📂</div>
             <div className="drop-text">
               {dragging
-                ? 'Suelta el archivo aquí'
-                : 'Arrastra un archivo CSV / JSON o haz clic para seleccionar'}
+                ? 'Suelta los archivos aquí'
+                : 'Arrastra uno o varios archivos CSV / JSON o haz clic para seleccionar'}
             </div>
             <div className="drop-hint">
               Compatible con: Yahoo Finance · MetaTrader MT4/MT5 · Stooq · Dukascopy-node · TradingView
               <br />Columnas necesarias: fecha, open, high, low, close (volume opcional)
+              <br />Con varios archivos (p. ej. un CSV por mes) se juntan en un solo gráfico
             </div>
           </>
         )}
       </div>
 
-      {/* Error de parseo */}
-      {datos?.error && (
+      {/* Errores de parseo */}
+      {fallidos.length > 0 && (
         <div className="subir-error">
-          <strong>Error al leer {datos.nombre}</strong>
-          <p>{datos.error}</p>
+          {fallidos.map(a => (
+            <div key={a.nombre}>
+              <strong>Error al leer {a.nombre}</strong>
+              <p>{a.error}</p>
+            </div>
+          ))}
           <p className="subir-error-hint">
             Columnas esperadas (cualquier orden, mayúsculas o minúsculas):<br />
             <code>date / datetime / timestamp</code> · <code>open</code> · <code>high</code> · <code>low</code> · <code>close</code> · <code>volume</code> (opcional)
@@ -228,12 +258,20 @@ export default function SubirDatos() {
         </div>
       )}
 
+      {datos && !conVelas && !fallidos.length && (
+        <div className="subir-error">
+          <strong>{nombre}: sin velas</strong>
+          <p>Los archivos están vacíos.</p>
+        </div>
+      )}
+
       {/* Stats + gráfico */}
       {stats && (
         <>
           <div className="subir-stats">
-            <span className="subir-nombre">📄 {datos.nombre}</span>
+            <span className="subir-nombre" title={datos.archivos.map(a => a.nombre).join('\n')}>📄 {nombre}</span>
             <span>{stats.n.toLocaleString('es-ES')} velas</span>
+            {fallidos.length > 0 && <span>{fallidos.length} con error</span>}
             <span className="subir-rango">{stats.desde} → {stats.hasta}</span>
           </div>
           <GraficoVelas velas={datos.velas} patrones={[]} skipTz />

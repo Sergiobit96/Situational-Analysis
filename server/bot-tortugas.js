@@ -12,7 +12,7 @@
 //     Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene una
 //     unidad a menos de ½ N), solo se ejecuta una. Por defecto, solo largos, como el backtest;
 //   · `riesgoPct` es lo más que pierde una pirámide si salta su stop, en % del capital del
-//     sistema (con un 20 % menos por cada 10 % de caída desde el máximo, como el backtest): con
+//     sistema (con un 20 % menos del saldo por cada 10 % de caída desde el máximo): con
 //     el stop a 2 N y añadidos cada ½ N, la peor es la de 4 o 5 unidades, 5 N, así que una
 //     unidad es el tamaño con el que 1 N cuesta un quinto de `riesgoPct`; el stop de
 //     todas las unidades va a 2 N del último relleno y lo guarda IG, así que la posición sigue
@@ -149,7 +149,7 @@ export const CONFIG_TORTUGAS_BOT = {
   maxUnidades:  6,          // por índice y sistema, con la entrada
   maxGrupo:     9,          // por grupo (Asia, Europa, EEUU), sentido y sistema
   maxSentido:   15,         // por sentido y sistema
-  reduccionDD:  true,       // un 20 % menos de capital por cada 10 % de caída desde el máximo
+  reduccionDD:  true,       // un 20 % menos del saldo por cada 10 % de caída desde el máximo
   margenNoticias: 15,       // no entra de tantos minutos antes a tantos después de una noticia de alto impacto
                             // de su divisa o del dólar (server/noticias.js); null: no mira las noticias
 }
@@ -202,11 +202,12 @@ export const sistemaDeReferencia = ref => {
 }
 
 // El capital con el que se calcula la unidad: el saldo, recortado un 20 % por cada 10 % que
-// esté por debajo de su máximo (como fijarCapital en el backtest)
+// esté por debajo de su máximo (con una caída del 15 %, el 80 % del saldo de ahora; del 25 %,
+// el 64 %), como fijarCapital en el backtest
 export function capitalNominal(saldo, pico, reduccion = true) {
   if (!reduccion || !(pico > 0)) return saldo
   const tramos = Math.floor((1 - saldo / pico) / 0.10 + 1e-9)
-  return Math.min(saldo, pico * 0.8 ** Math.max(tramos, 0))
+  return saldo * 0.8 ** Math.max(tramos, 0)
 }
 
 // Dónde entra la siguiente unidad: ½ N a favor desde el último relleno. `ocupados`, los precios

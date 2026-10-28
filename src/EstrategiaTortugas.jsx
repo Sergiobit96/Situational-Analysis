@@ -871,7 +871,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
             </div>
             <p className="estr-explica">
               {ajustes.media ? 'Largos solo por encima de la media de 200 sesiones; cortos, por debajo' : 'Entra en cualquier ruptura, sin mirar la tendencia'}
-              {ajustes.reduccionDD ? '. Por cada 10 % de caída desde el máximo, el capital nominal baja un 20 %' : ''}
+              {ajustes.reduccionDD ? '. Por cada 10 % de caída desde el máximo, la unidad se calcula con un 20 % menos del capital que hay' : ''}
             </p>
           </div>
         </Bloque>

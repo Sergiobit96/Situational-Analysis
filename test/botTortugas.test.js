@@ -86,8 +86,8 @@ test('el Sistema 1 entra en toda ruptura de 20: el filtro de la anterior ganador
 test('el capital de la unidad baja un 20% por cada 10% de caída desde el máximo', () => {
   assert.equal(capitalNominal(20_000, 20_000), 20_000)
   assert.equal(capitalNominal(18_500, 20_000), 18_500)
-  assert.equal(capitalNominal(17_900, 20_000), 16_000)          // −10,5%: un tramo
-  assert.ok(Math.abs(capitalNominal(15_900, 20_000) - 12_800) < 1e-9)   // −20,5%: dos tramos
+  assert.equal(capitalNominal(17_900, 20_000), 14_320)          // −10,5%: un tramo, el 80 % del saldo
+  assert.ok(Math.abs(capitalNominal(15_900, 20_000) - 10_176) < 1e-9)   // −20,5%: dos tramos, el 64 %
   assert.equal(capitalNominal(17_900, 20_000, false), 17_900)
 })
 

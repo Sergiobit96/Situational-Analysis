@@ -287,12 +287,14 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
   const comisionDe = (m, tam, i) => (cfg.comisiones && m.info.comision
     ? Math.max(m.info.comision.porAccion * tam / (m.factor?.[i] ?? 1), m.info.comision.minimo) : 0)
 
+  // Con reducción por drawdown, un 20 % menos del capital de ahora por cada 10 % de caída
+  // desde el máximo (como capitalNominal en el bot)
   const fijarCapital = () => {
     const v = valorAyer
     pico = Math.max(pico, v)
     if (!cfg.reduccionDD) { nominal = v; return }
     const tramos = Math.floor((1 - v / pico) / 0.10 + 1e-9)
-    nominal = Math.min(v, pico * 0.8 ** tramos)
+    nominal = v * 0.8 ** tramos
   }
 
   const permite = (e, lado) => {

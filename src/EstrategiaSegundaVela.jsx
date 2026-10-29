@@ -265,6 +265,9 @@ const fmtPct = v => v == null ? '—' : `${Math.round(v)}%`
 // Resultados en puntos del instrumento, que es como se leen en el gráfico
 const fmtSgn = v => v == null ? '—'
   : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('es-ES', { maximumFractionDigits: Math.abs(v) < 10 ? 2 : 1 })}`
+// % pequeños (0,05 % por operación): con tres decimales para que no salgan todos a cero
+const fmtPctSgn = v => v == null ? '—'
+  : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toLocaleString('es-ES', { minimumFractionDigits: 3, maximumFractionDigits: 3 })} %`
 const fmtPtsSgn = v => v == null ? '—' : `${fmtSgn(v)} pts`
 
 // Lo que se dice mientras se espera a la cola del feed del servidor: lo que no está en
@@ -1652,6 +1655,13 @@ function Resumen({ r, compuesta, riesgoOp }) {
     { label: 'Días con operación',    valor: fmtPct(r.pctEntrada), sub: lados },
     { label: 'Operaciones ganadoras', valor: fmtPct(r.pctGanadas), sub: sobreOps, marca: '▲', tono: 'verde' },
     { label: 'Resultado medio',       valor: fmtPtsSgn(r.resultadoMedPts), sub: 'por sesión operada' },
+    ...(r.esperanzaR != null ? [{
+      label: 'Esperanza matemática',
+      valor: `${fmtSgn(r.esperanzaR)} R`,
+      sub: `por operación · ${fmtPtsSgn(r.esperanzaPts)} · ${fmtPctSgn(r.esperanzaPct)} del índice · ${fmtPct(r.pctPosR)} × ${r.ganMedR?.toFixed(2) ?? '0'} R − ${fmtPct(r.pctNegR)} × ${r.perdMedR?.toFixed(2) ?? '0'} R`,
+      marca: r.esperanzaR < 0 ? '▼' : '▲',
+      tono:  r.esperanzaR < 0 ? 'rojo' : 'verde',
+    }] : []),
     ...(compuesta ? [{
       label: 'CAGR',
       valor: `${compuesta.cagr > 0 ? '+' : ''}${compuesta.cagr.toLocaleString('es-ES', { maximumFractionDigits: 1 })}%`,
@@ -1782,21 +1792,27 @@ function Mitades({ mitades }) {
   )
 }
 
-// Cada año del histórico filtrado por separado, con la misma operativa: si la ventaja está
-// repartida o sale de uno o dos años buenos. El drawdown de cada año se cuenta desde cero.
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+
+// Cada año (o cada mes) del histórico filtrado por separado, con la misma operativa: si la
+// ventaja está repartida o sale de unos pocos periodos buenos. El drawdown se cuenta desde cero.
 function PorAnios({ analizadas }) {
+  const [porMes, setPorMes] = useState(false)
+  const nAnios = useMemo(() => new Set(analizadas.filter(x => x.analisis.valido).map(x => x.sesion.date.slice(0, 4))).size, [analizadas])
   const anios = useMemo(() => {
     const grupos = {}
     for (const { sesion, analisis: a } of analizadas) {
-      if (a.valido) (grupos[sesion.date.slice(0, 4)] ??= []).push({ date: sesion.date, a })
+      if (a.valido) (grupos[sesion.date.slice(0, porMes ? 7 : 4)] ??= []).push({ date: sesion.date, a })
     }
     return Object.entries(grupos).sort(([x], [y]) => x.localeCompare(y)).map(([anio, xs]) => {
       const r = resumir(xs.map(x => x.a))
       const curva = curvaEquity(xs.filter(x => x.a.entrada).map(x => ({ date: x.date, pts: x.a.resultadoTotalPts ?? x.a.resultadoPts })))
       return { anio, r, curva }
     })
-  }, [analizadas])
-  if (anios.length < 2) return null   // con un año solo, la tabla repite el resumen
+  }, [analizadas, porMes])
+  if (anios.length < 2 && nAnios < 2) return null   // con un periodo solo, la tabla repite el resumen
+  const nombre = k => (k.length > 4 ? `${MESES_CORTOS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}` : k)
+  const periodos = porMes ? 'meses' : 'años'
 
   const conOps = anios.filter(x => x.r.nOps > 0)
   const enPositivo = conOps.filter(x => x.r.totalPts > 0).length
@@ -1807,16 +1823,23 @@ function PorAnios({ analizadas }) {
 
   return (
     <div className="estr-resumen">
+      <div className="filtro-presets">
+        <button className={`chip ${porMes ? '' : 'activo'}`} onClick={() => setPorMes(false)}>Año a año</button>
+        <button className={`chip ${porMes ? 'activo' : ''}`} onClick={() => setPorMes(true)}>Mes a mes</button>
+      </div>
       <table className="estr-mitades-tabla estr-anios-tabla">
         <thead>
           <tr>
-            <th>Año a año</th>
+            <th>{porMes ? 'Mes a mes' : 'Año a año'}</th>
             <th>Sesiones</th>
             <th>Operaciones</th>
             <th>Ganadoras</th>
             <th>Acumulado</th>
             <th>En R</th>
             <th>Medio</th>
+            <th title="Por operación: % ganadoras × ganancia media − % perdedoras × pérdida media">Esperanza (R)</th>
+            <th>Esperanza (pts)</th>
+            <th title="Puntos de cada operación entre su precio de entrada">Esperanza (% índice)</th>
             <th>Profit factor</th>
             <th>Máx. drawdown</th>
             <th>Mejor sesión</th>
@@ -1826,13 +1849,16 @@ function PorAnios({ analizadas }) {
         <tbody>
           {anios.map(({ anio, r, curva }) => (
             <tr key={anio}>
-              <th>{anio}</th>
+              <th>{nombre(anio)}</th>
               <td>{r.n}</td>
               <td>{r.nOps}</td>
               <td>{fmtPct(r.pctGanadas)}</td>
               <td className={tono(r.totalPts)}>{fmtPtsSgn(r.totalPts)}</td>
               <td>{r.totalR == null ? '—' : `${fmtSgn(r.totalR)} R`}</td>
               <td>{fmtPtsSgn(r.resultadoMedPts)}</td>
+              <td className={tono(r.esperanzaR)}>{r.esperanzaR == null ? '—' : `${fmtSgn(r.esperanzaR)} R`}</td>
+              <td className={tono(r.esperanzaPts)}>{fmtPtsSgn(r.esperanzaPts)}</td>
+              <td className={tono(r.esperanzaPct)}>{fmtPctSgn(r.esperanzaPct)}</td>
               <td>{pf(r)}</td>
               <td>{r.nOps ? fmtPtsSgn(curva.maxDD) : '—'}</td>
               <td>{fmtPtsSgn(curva.mejor?.pts)}</td>
@@ -1842,13 +1868,13 @@ function PorAnios({ analizadas }) {
         </tbody>
       </table>
       <p className="estr-nota">
-        <strong>{enPositivo} de {conOps.length} años en positivo.</strong>
+        <strong>{enPositivo} de {conOps.length} {periodos} en positivo.</strong>
         {mejor && total > 0 && mejor.r.totalPts > 0 && <>
-          {' '}El mejor, {mejor.anio}, deja {fmtPtsSgn(mejor.r.totalPts)}: el {fmtPct(100 * mejor.r.totalPts / total)} del
-          acumulado{mejor.r.totalPts >= total ? ', así que el resto de años juntos no gana nada' : ''}.
+          {' '}El mejor, {nombre(mejor.anio)}, deja {fmtPtsSgn(mejor.r.totalPts)}: el {fmtPct(100 * mejor.r.totalPts / total)} del
+          acumulado{mejor.r.totalPts >= total ? `, así que el resto de ${periodos} juntos no gana nada` : ''}.
         </>}
-        {' '}Cada año se mide por separado con la misma operativa y el drawdown se cuenta desde cero dentro del año.
-        Si casi todo sale de uno o dos años, la ventaja depende de lo que pasó entonces.
+        {' '}Cada {porMes ? 'mes' : 'año'} se mide por separado con la misma operativa y el drawdown se cuenta desde cero dentro del {porMes ? 'mes' : 'año'}.
+        Si casi todo sale de {porMes ? 'unos pocos meses' : 'uno o dos años'}, la ventaja depende de lo que pasó entonces.
       </p>
     </div>
   )

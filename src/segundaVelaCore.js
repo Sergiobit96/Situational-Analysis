@@ -510,6 +510,16 @@ export function resumir(analisis) {
     resultadoMed: media(erres),
     resultadoMdn: mediana(erres),
     totalR:       erres.length ? erres.reduce((a, b) => a + b, 0) : null,
+    // Esperanza matemática por operación, en R: % ganadoras × ganancia media − % perdedoras ×
+    // pérdida media (lo mismo que la media de R; se guardan las piezas para enseñarlas)
+    esperanzaR:   media(erres),
+    pctPosR:      pct(erres.filter(x => x > 0).length, erres.length),
+    pctNegR:      pct(erres.filter(x => x < 0).length, erres.length),
+    ganMedR:      media(erres.filter(x => x > 0)),
+    perdMedR:     media(erres.filter(x => x < 0).map(x => -x)),
+    // la misma esperanza en puntos y en % del índice (puntos de cada operación entre su precio de entrada)
+    esperanzaPts: media(puntos),
+    esperanzaPct: media(ops.map((a, i) => (a.entrada.precio ? puntos[i] / a.entrada.precio * 100 : null)).filter(x => x != null)),
     // Profit factor: lo ganado entre lo perdido, en puntos. Sin pérdidas no hay división
     // posible, así que se devuelve null y la interfaz lo pinta como ∞.
     ganadoPts:    ganado,

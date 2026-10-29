@@ -104,7 +104,7 @@ export default function BotTortugas() {
     return <div className="bot-page">{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</div>
   }
 
-  const { config, mercados, operaciones, eventos, ig, opera, reglas, cambiosConfig = [] } = datos
+  const { config, mercados, operaciones, eventos, ig, opera, reglas, cambiosConfig = [], sinEntrar = [] } = datos
   const editando = form ?? config
   const cambiar = (campo, valor) => setForm({ ...editando, [campo]: valor })
   const nombre = t => mercados.find(m => m.ticker === t)?.nombre ?? t
@@ -273,7 +273,7 @@ export default function BotTortugas() {
         )}
       </section>
 
-      <RealFrenteBacktest config={config} cambios={cambiosConfig} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
+      <RealFrenteBacktest config={config} cambios={cambiosConfig} sinEntrar={sinEntrar} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
 
       <section className="bot-bloque">
         <h3>Registro</h3>
@@ -462,6 +462,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
 // Lo que hizo el bot frente a lo que habría hecho el backtest con sus reglas sobre los mismos
 // diarios (src/tortugasComparar.js). Los diarios se piden una vez (y con el botón), no en cada
 // refresco: el backtest de todos los mercados no hace falta rehacerlo cada 5 s.
+const FILTRO_CAMBIADO = 'sa.tortugas.filtroCambiado'
 const QUIEN = { ambos: 'los dos', 'solo-bot': 'solo el bot', 'solo-backtest': 'solo el backtest' }
 
 // El backtest de cada mercado, rehecho solo si cambian los diarios, los mercados o las reglas
@@ -481,14 +482,20 @@ const describirTramo = c => [
   `${c.maxUnidades} unidades`, ...(c.anadido === 0.5 ? ['añadidos de media unidad'] : []),
 ].join(', ')
 
-function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, eventos, nombre }) {
+function RealFrenteBacktest({ config, cambios, sinEntrar, reglas, mercados, operaciones, eventos, nombre }) {
   const [diarios, setDiarios] = useState(null)
   const [error, setError] = useState(null)
   const [cargando, setCargando] = useState(false)
   const [desde, setDesde] = useState('')
   // El bot apunta desde el 29-oct-2026 cuándo cambia lo que juega el backtest (cambiosConfig);
   // un cambio del filtro del S1 de antes se puede fechar a mano, o forzarlo en todo el periodo
-  const [filtroCambiado, setFiltroCambiado] = useState('')
+  // se guarda en el navegador: el bot no la sabe, y sin ella la comparación sale peor
+  const [filtroCambiado, setFiltroCambiado] = useState(() => {
+    try { return localStorage.getItem(FILTRO_CAMBIADO) ?? '' } catch { return '' }
+  })
+  useEffect(() => {
+    try { if (filtroCambiado) localStorage.setItem(FILTRO_CAMBIADO, filtroCambiado); else localStorage.removeItem(FILTRO_CAMBIADO) } catch { /* sin almacenamiento */ }
+  }, [filtroCambiado])
   const [filtroElegido, setFiltroElegido] = useState(null)
 
   const cargar = useCallback(async () => {
@@ -522,7 +529,7 @@ function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, ev
   ].filter(Boolean).sort()[0] ?? null
   const desdeUsado = desde || primerApunte
   const eurPorN = Object.fromEntries(mercados.filter(m => m.plan?.unidad?.eurPorN).map(m => [m.ticker, m.plan.unidad.eurPorN]))
-  const cmp = backtest && desdeUsado ? compararTortugas(reales.filter(r => conDiario.includes(r.ticker)), backtest, { desde: desdeUsado, eurPorN }) : null
+  const cmp = backtest && desdeUsado ? compararTortugas(reales.filter(r => conDiario.includes(r.ticker)), backtest, { desde: desdeUsado, eurPorN, sinEntrar }) : null
   const r = cmp?.resumen
 
   // de qué fuente salió cada diario, y los que faltan
@@ -555,7 +562,7 @@ function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, ev
         <>
           <div className="estr-tiles">
             <Tile label="Operaciones" valor={String(r.casadas + r.soloBot + r.soloBacktest)}
-              sub={`${r.casadas} de los dos · ${r.soloBot} solo del bot · ${r.soloBacktest} solo del backtest`} />
+              sub={`${r.casadas} de los dos · ${r.soloBot} solo del bot · ${r.soloBacktest} solo del backtest${r.soloBacktest ? ` (${r.soloBacktestConMotivo} con el motivo apuntado)` : ''}`} />
             <Tile label="Bot" valor={nTxt(r.realN, 1)} tonoValor={tono(r.realN)} sub="en N de una unidad, con las abiertas al precio de ahora" />
             <Tile label="Backtest" valor={nTxt(r.backtestN, 1)} tonoValor={tono(r.backtestN)} sub="mismas reglas y diarios, sin costes ni límites de cartera" />
             <Tile label="Diferencia" valor={nTxt(r.difN, 1)} tonoValor={tono(r.difN)}
@@ -567,7 +574,7 @@ function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, ev
             <div className="velas-tabla-wrap">
               <table className="velas-tabla bot-tabla tor-todas tor-comparar">
                 <thead>
-                  <tr><th>Abierta</th><th>Mercado</th><th>Sistema</th><th>Lado</th><th>Quién</th><th>Entrada bot</th><th>Entrada backtest</th><th>Deslizamiento</th><th>Unidades</th><th>Bot</th><th>Backtest</th><th>Diferencia</th><th>€</th></tr>
+                  <tr><th>Abierta</th><th>Mercado</th><th>Sistema</th><th>Lado</th><th>Quién</th><th>Entrada bot</th><th>Entrada backtest</th><th>Deslizamiento</th><th>Unidades</th><th>Bot</th><th>Backtest</th><th>Diferencia</th><th>€</th>{r.soloBacktest > 0 && <th>Por qué no entró el bot</th>}</tr>
                 </thead>
                 <tbody>
                   {cmp.filas.map((f, i) => {
@@ -588,6 +595,12 @@ function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, ev
                         <td className={tono(f.backtest?.resultadoN)}>{f.backtest ? nTxt(f.backtest.resultadoN) : '—'}{abierta(f.backtest)}</td>
                         <td className={tono(f.difN)}>{nTxt(f.difN)}</td>
                         <td className={tono(f.difEur)}>{eur(f.difEur)}{f.eurAproximado && f.difEur != null ? ' (aprox.)' : ''}</td>
+                        {r.soloBacktest > 0 && (
+                          <td className="tor-porque">
+                            {f.porQue ? `${f.porQue.motivo[0].toUpperCase()}${f.porQue.motivo.slice(1)}${f.porQue.fecha !== o.abierta ? ` (sesión del ${f.porQue.fecha})` : ''}`
+                              : f.tipo === 'solo-backtest' ? <span className="bot-nota">No apuntó nada{o.abierta < '2026-10-30' ? ' (lo apunta desde el 30-oct-2026)' : ''}</span> : ''}
+                          </td>
+                        )}
                       </tr>
                     )
                   })}

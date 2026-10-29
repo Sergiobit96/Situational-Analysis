@@ -184,6 +184,7 @@ const CUENTA_VALE_S = 30           // el saldo se pide una vez para todos los pl
 const ESPERA_TRAS_CIERRE_S = 3600  // Yahoo tarda en dejar la vela del día: el plan de mañana, una hora después del cierre
 const DIAS_VIEJO = 6               // una vela diaria más vieja que esto (días naturales) es que Yahoo no está al día
 const MAX_EVENTOS = 1000
+const MAX_SIN_ENTRAR = 1000
 const MAX_OPERACIONES = 500
 
 const dir = lado => (lado === 'largo' ? 1 : -1)
@@ -328,7 +329,7 @@ const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 // en orden, con la fecha en la zona de su bolsa). `avisar(texto)` es Telegram. `cartera` y
 // `noticias` frenan las entradas, como en el bot SRS (server/cartera.js, server/noticias.js).
 export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, cartera = null, noticias = null }) {
-  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, salidas: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [], cambiosConfig: [] })
+  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, salidas: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [], cambiosConfig: [], sinEntrar: [] })
   let datos = vacio()
   try {
     const leido = JSON.parse(readFileSync(archivo, 'utf8'))
@@ -380,6 +381,17 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     log(`[tortugas] ${ticker}${sistema ? ` S${sistema}` : ''} ${texto}`)
     if (aviso) avisarSinFallar(`Tortugas${sistema ? ` S${sistema}` : ''} · ${nombreDe(ticker)} · ${texto}`)
   }
+  // Por qué no entró: lo último de cada sesión, mercado, sistema y lado (null en los dos: el
+  // mercado entero, sin plan o sin unidad que quepa). La pestaña lo usa para explicar las
+  // rupturas que el backtest sí cogió; dura más que el registro, que se llena de planes.
+  function noEntro(fecha, ticker, sistema, lado, motivo) {
+    const lista = (datos.sinEntrar ??= []).filter(x => !(x.fecha === fecha && x.ticker === ticker && x.sistema === sistema && x.lado === lado))
+    lista.push({ fecha, ticker, sistema, lado, motivo, hora: new Date(ahora() * 1000).toISOString() })
+    datos.sinEntrar = lista.slice(-MAX_SIN_ENTRAR)
+  }
+  const planBien = (fecha, ticker) => {
+    datos.sinEntrar = (datos.sinEntrar ?? []).filter(x => !(x.fecha === fecha && x.ticker === ticker && x.sistema == null))
+  }
   const referenciaNueva = (ticker, sistema) => `${PREFIJO}${sistema}-${ticker.replace(/\W/g, '')}-${fechaEnZona(ahora(), 'Europe/Madrid').replace(/-/g, '')}-${Math.random().toString(36).slice(2, 6)}`
   const posicionesDe = sistema => Object.values(datos.posiciones).filter(p => p.sistema === sistema)
   // Lo que tiene abierto, para el límite de riesgo correlacionado entre bots, la conciliación
@@ -406,6 +418,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     try { await hacerPlan(ticker, ses) } catch (err) {
       const plan = { fecha: ses.fecha, calculado: ahora(), provisional: ahora() < ses.abre, error: `IG: ${err.message}`, reintentar: ahora() + REINTENTO_IG_S }
       datos.planes[ticker] = plan
+      noEntro(ses.fecha, ticker, null, null, `sin plan: ${err.message}`)
       apuntar(ticker, `Sin plan: ${err.message}`, { aviso: !plan.provisional })
     }
   }
@@ -419,6 +432,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const falla = (texto, { espera = REINTENTO_PLAN_S, aviso = !plan.provisional } = {}) => {
       Object.assign(plan, { error: texto, reintentar: ahora() + espera })
       datos.planes[ticker] = plan
+      noEntro(ses.fecha, ticker, null, null, `sin plan: ${texto}`)
       apuntar(ticker, texto, { aviso })
     }
     const fuente = MERCADOS_TORTUGAS[ticker]?.datos?.fuente === 'ig' ? 'IG' : 'Yahoo'
@@ -466,6 +480,8 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
     plan.unidad ??= { ok: false, motivo: descartes.join('; ') || 'sin contrato' }
     datos.planes[ticker] = plan
+    if (plan.unidad.ok) planBien(ses.fecha, ticker)
+    else noEntro(ses.fecha, ticker, null, null, `no se puede operar: ${plan.unidad.motivo}`)
 
     const partes = [`N ${px(plan.n)}${plan.respaldo ? ` (niveles de ${plan.respaldo}: IG no da su histórico)` : ''}`]
     for (const s of SISTEMAS) {
@@ -554,12 +570,14 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     const noticia = noticias?.bloqueo(ticker, ahora(), datos.config.margenNoticias)
     if (noticia) {
       sp.esperaEntrar = noticia.hasta
+      noEntro(ses.fecha, ticker, sistema, lado, `noticia: ${noticia.texto}`)
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero hay noticia (${noticia.texto}): no entra hasta que pase`, { sistema })
       return
     }
     const otro = otroYaDentro(ticker, sistema, lado, precio, plan.n)
     if (otro) {
       sp.bloqueado = `señal doble con el Sistema ${otro}`
+      noEntro(ses.fecha, ticker, sistema, lado, `señal doble: el Sistema ${otro} ya estaba dentro`)
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: el Sistema ${otro} ya ${lado === 'largo' ? 'compró' : 'vendió'} a menos de ½ N de ${px(precio)} (señal doble, se ejecuta una sola vez)`, { sistema })
       return
     }
@@ -568,6 +586,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       ?? cartera?.noCabe({ ticker, lado, riesgoEur: u.tamano * STOP_N * plan.n * valorDe(m) * m.cambioAEur, saldo: cuenta.saldo })
     if (motivo) {
       sp.esperaEntrar = ahora() + 60
+      noEntro(ses.fecha, ticker, sistema, lado, motivo)
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: ${motivo}`, { sistema })
       return
     }
@@ -584,10 +603,13 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     delete datos.intentos[clave]
     if (!r.aceptada) {
       sp.bloqueado = r.motivo
+      noEntro(ses.fecha, ticker, sistema, lado, `IG rechaza la orden: ${r.motivo}`)
       apuntar(ticker, `IG rechaza la orden (${r.motivo}): hoy ya no entra`, { sistema })
       return
     }
     abrirPosicion(ticker, sistema, { lado, n0: plan.n, k: sp.k, fecha: ses.fecha, nivel, dealId: r.dealId, tamano: r.tamano ?? u.tamano, entrada: r.nivel, stop: r.stop ?? stop, referencia })
+    // al final entró (pasó la noticia, o hubo sitio): lo de antes ya no explica nada
+    datos.sinEntrar = (datos.sinEntrar ?? []).filter(x => !(x.fecha === ses.fecha && x.ticker === ticker && x.sistema === sistema && x.lado === lado))
   }
 
   function abrirPosicion(ticker, sistema, { lado, n0, k, fecha, nivel, dealId, tamano, entrada, stop, referencia, hora = null }) {
@@ -1109,6 +1131,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       operaciones: datos.operaciones.slice(0, 200),
       eventos: datos.eventos.slice(-300).reverse(),
       cambiosConfig: datos.cambiosConfig ?? [],
+      sinEntrar: (datos.sinEntrar ?? []).slice(-500),
     }
   }
 

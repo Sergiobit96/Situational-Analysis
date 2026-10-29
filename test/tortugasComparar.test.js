@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { backtestDelBot, backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas } from '../src/tortugasComparar.js'
+import { backtestDelBot, backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas, porQueNoEntro } from '../src/tortugasComparar.js'
 
 // 70 sesiones quietas entre 99 y 101 (sin rupturas una vez hay canal), 25 de subida y 25 de bajada
 function serie() {
@@ -154,4 +154,23 @@ test('el backtest por tramos coge cada operación del backtest con las reglas de
   const despues = backtestPorTramos('X', velas, tramos('2099-01-01'))
   assert.ok(!despues.some(o => o.sistema === 2), 'con el 2 encendido después, no')
   assert.deepEqual(despues, backtestDelBot('X', velas, { ...CONFIG, sistemas: [1] }))
+})
+
+test('por qué no entró el bot: lo de su sistema y lado antes que lo del mercado, y lo más cercano en fecha', () => {
+  const b = { ticker: 'X', sistema: 1, lado: 'largo', abierta: '2026-10-22' }
+  const sinEntrar = [
+    { fecha: '2026-10-21', ticker: 'X', sistema: null, lado: null, motivo: 'sin plan: IG limita' },
+    { fecha: '2026-10-23', ticker: 'X', sistema: 1, lado: 'largo', motivo: 'noticia: USD FOMC' },
+    { fecha: '2026-10-22', ticker: 'X', sistema: 1, lado: 'largo', motivo: 'con dólar vendido ya hay 900 €' },
+    { fecha: '2026-10-22', ticker: 'X', sistema: 1, lado: 'corto', motivo: 'otro lado' },
+    { fecha: '2026-10-22', ticker: 'Y', sistema: 1, lado: 'largo', motivo: 'otro mercado' },
+  ]
+  assert.deepEqual(porQueNoEntro(b, sinEntrar), { fecha: '2026-10-22', motivo: 'con dólar vendido ya hay 900 €', delMercado: false })
+  assert.deepEqual(porQueNoEntro({ ...b, sistema: 2 }, sinEntrar), { fecha: '2026-10-21', motivo: 'sin plan: IG limita', delMercado: true })
+  assert.equal(porQueNoEntro({ ...b, abierta: '2026-11-20' }, sinEntrar), null, 'lejos en fecha, no explica nada')
+  // en la comparación, solo en las que hizo solo el backtest
+  const bt = { ...b, ticker: 'X', resultadoN: 1, entrada: 100 }
+  const { filas, resumen } = compararTortugas([], [bt], { desde: '2026-10-01', sinEntrar })
+  assert.equal(filas[0].porQue.motivo, 'con dólar vendido ya hay 900 €')
+  assert.equal(resumen.soloBacktestConMotivo, 1)
 })

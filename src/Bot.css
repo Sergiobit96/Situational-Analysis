@@ -110,6 +110,8 @@
 .velas-tabla.tor-tabla td.tor-entrada { white-space: nowrap; }
 /* real frente al backtest: una línea por operación, con scroll lateral si no cabe */
 .velas-tabla.tor-comparar th, .velas-tabla.tor-comparar td { white-space: nowrap; }
+/* lo que apuntó el bot al no entrar: puede ser largo, se parte en líneas */
+.velas-tabla.tor-comparar td.tor-porque { white-space: normal; min-width: 16rem; max-width: 26rem; text-align: left; font-size: 0.75rem; }
 /* el contrato de IG con que se opera la unidad (CS.D.EURUSD.CECM.IP) */
 .tor-tabla small.tor-epic { font-size: 0.65rem; letter-spacing: 0.01em; opacity: 0.8; }
 .tor-apagado td { opacity: 0.55; }

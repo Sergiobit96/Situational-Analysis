@@ -447,6 +447,10 @@ test('los límites de cartera: con el grupo lleno no entra otro índice del mism
     enHora(fra(11, 2, 10, 1, 20)); await bot._paso()
     assert.equal(posicion(bot, '^FTSE'), null)
     assert.ok(bot.estado().eventos.some(e => e.ticker === '^FTSE' && /el Sistema 1 ya tiene 1 unidades largas en Europa/.test(e.texto)))
+    // y se guarda aparte, por sesión, para explicar en la pestaña por qué no entró
+    const [sin] = bot.estado().sinEntrar.filter(x => x.ticker === '^FTSE')
+    assert.deepEqual({ ...sin, hora: undefined, motivo: undefined }, { fecha: '2026-11-02', ticker: '^FTSE', sistema: 1, lado: 'largo', hora: undefined, motivo: undefined })
+    assert.match(sin.motivo, /el Sistema 1 ya tiene 1 unidades largas en Europa/)
     assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 1)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
@@ -466,6 +470,7 @@ test('junto a una noticia no entra; pasada, entra. Y no entra si el riesgo de lo
     enHora(fra(11, 2, 10, 0, 20)); await bot._paso()
     assert.equal(posicion(bot, '^GDAXI'), null)
     assert.ok(bot.estado().eventos.some(e => /hay noticia \(EUR IPC a las 10:00\): no entra hasta que pase/.test(e.texto)))
+    assert.deepEqual(bot.estado().sinEntrar.filter(x => x.ticker === '^GDAXI').map(x => x.motivo), ['noticia: EUR IPC a las 10:00'])
     // pasada la noticia, el SRS tiene el FTSE comprado con todo el tope: no entra
     otros.push({ ticker: '^FTSE', lado: 'largo', riesgoEur: 1200 })
     vela1m('^GDAXI', fra(11, 2, 10, 15), 25_156, 25_150)
@@ -477,6 +482,7 @@ test('junto a una noticia no entra; pasada, entra. Y no entra si el riesgo de lo
     vela1m('^GDAXI', fra(11, 2, 10, 17), 25_156, 25_150)
     enHora(pasa + 90); await bot._paso()
     assert.ok(posicion(bot, '^GDAXI'))
+    assert.deepEqual(bot.estado().sinEntrar.filter(x => x.ticker === '^GDAXI'), [], 'al final entró: ya no hay por qué')
     assert.ok(cartera.estado().posiciones.find(p => p.bot === 'Tortugas' && p.ticker === '^GDAXI').riesgoEur > 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
@@ -488,7 +494,7 @@ test('en EE. UU. usa el contrato de 1 € (o el de 1 $) y, sin ellos, el grande,
     const { bot, dir, enHora } = botDePrueba(igFalso({ precios: { '^NDX': [29_000, 29_002] }, sinPrecio }), diarios, { instrumentos, sistemas: [1] })
     try {
       enHora(fra(11, 9, 16)); await bot._paso()                // 10:00 en Nueva York
-      return mercado(bot, '^NDX').plan
+      return { ...mercado(bot, '^NDX').plan, sinEntrar: bot.estado().sinEntrar.filter(x => x.ticker === '^NDX') }
     } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
   }
   // 1% de 20.000 € = 200 € por N / 400 puntos a 1 €/punto = 0,5 contratos de 1 €
@@ -504,6 +510,8 @@ test('en EE. UU. usa el contrato de 1 € (o el de 1 $) y, sin ellos, el grande,
   assert.equal(plan.unidad.ok, false)
   assert.match(plan.unidad.motivo, /IX\.D\.NASDAQ\.ICE\.IP sin precio/)
   assert.match(plan.unidad.motivo, /costaría 6880 € por N/)
+  assert.deepEqual(plan.sinEntrar.map(x => [x.fecha, x.ticker, x.sistema, x.lado]), [['2026-11-09', '^NDX', null, null]])
+  assert.match(plan.sinEntrar[0].motivo, /^no se puede operar: .*costaría 6880 €/)
 })
 
 test('al arrancar recupera de IG las posiciones del bot y deja las de otros (SRS)', async () => {

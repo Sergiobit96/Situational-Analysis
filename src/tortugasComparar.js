@@ -96,7 +96,9 @@ export function operacionesDelBot(operaciones, mercados) {
 // Empareja las del bot con las del backtest abiertas desde `desde` (las del backtest de antes no
 // cuentan: el bot empezó plano, salvo la pareja de una del bot, que puede ir un día o dos antes). `eurPorN[ticker]`, lo que vale 1 N de una unidad hoy (el
 // riesgoEurN del plan), para poner en euros las que solo hizo el backtest.
-export function compararTortugas(reales, backtest, { desde, eurPorN = {} } = {}) {
+// `sinEntrar`: lo que apuntó el bot cuando no entró (estado().sinEntrar), para decir por qué
+// en las que solo hizo el backtest.
+export function compararTortugas(reales, backtest, { desde, eurPorN = {}, sinEntrar = [] } = {}) {
   const antes = new Date(Date.parse(desde) - DIAS_PARA_CASAR * 86_400_000).toISOString().slice(0, 10)
   const bt = backtest.filter(o => o.abierta >= antes)
   const libres = new Set(bt.map((_, i) => i))
@@ -135,7 +137,7 @@ export function compararTortugas(reales, backtest, { desde, eurPorN = {} } = {})
     const porN = eurPorN[b.ticker] ?? null
     filas.push({
       tipo: 'solo-backtest', ticker: b.ticker, sistema: b.sistema, lado: b.lado, real: null, backtest: b,
-      deslizamientoN: null, difN: -b.resultadoN, difEur: porN != null ? -b.resultadoN * porN : null, eurAproximado: true,
+      porQue: porQueNoEntro(b, sinEntrar), deslizamientoN: null, difN: -b.resultadoN, difEur: porN != null ? -b.resultadoN * porN : null, eurAproximado: true,
     })
   }
   filas.sort((a, b) => (a.real ?? a.backtest).abierta.localeCompare((b.real ?? b.backtest).abierta) || a.ticker.localeCompare(b.ticker))
@@ -149,6 +151,7 @@ export function compararTortugas(reales, backtest, { desde, eurPorN = {} } = {})
       casadas: ambos.length,
       soloBot: filas.filter(f => f.tipo === 'solo-bot').length,
       soloBacktest: filas.filter(f => f.tipo === 'solo-backtest').length,
+      soloBacktestConMotivo: filas.filter(f => f.porQue).length,
       realN: sumar(filas.map(f => f.real?.resultadoN)),
       backtestN: sumar(filas.map(f => f.backtest?.resultadoN)),
       difN: sumar(filas.map(f => f.difN)),
@@ -162,4 +165,15 @@ export function compararTortugas(reales, backtest, { desde, eurPorN = {} } = {})
       deslizamientoMedioN: desl.length ? sumar(desl) / desl.length : null,
     },
   }
+}
+
+// Lo que apuntó el bot de esa ruptura: primero lo de ese sistema y lado (una noticia, un
+// límite, IG que rechaza la orden) y, si no, lo del mercado entero (sin plan, la unidad no
+// cabe), lo más cercano en fecha a ≤4 días. null si no apuntó nada (no la vio, o el mercado o
+// el sistema estaban apagados).
+export function porQueNoEntro(b, sinEntrar = []) {
+  const cerca = sinEntrar.filter(x => x.ticker === b.ticker && dias(x.fecha, b.abierta) <= DIAS_PARA_CASAR)
+  const elegir = xs => xs.sort((x, y) => dias(x.fecha, b.abierta) - dias(y.fecha, b.abierta))[0] ?? null
+  const x = elegir(cerca.filter(x => x.sistema === b.sistema && x.lado === b.lado)) ?? elegir(cerca.filter(x => x.sistema == null))
+  return x && { fecha: x.fecha, motivo: x.motivo, delMercado: x.sistema == null }
 }

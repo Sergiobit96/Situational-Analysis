@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import { peorHastaStops, nHastaStop } from './tortugas'
+import { backtestDelBot, operacionesDelBot, compararTortugas } from './tortugasComparar'
 import { rupturaMasCercana, acumulado } from './botCalculos'
 import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
@@ -272,6 +273,8 @@ export default function BotTortugas() {
         )}
       </section>
 
+      <RealFrenteBacktest config={config} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
+
       <section className="bot-bloque">
         <h3>Registro</h3>
         {eventos.length === 0 ? <p className="bot-nota">Nada todavía.</p> : (
@@ -453,6 +456,146 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
         )
       })}
     </tbody>
+  )
+}
+
+// Lo que hizo el bot frente a lo que habría hecho el backtest con sus reglas sobre los mismos
+// diarios (src/tortugasComparar.js). Los diarios se piden una vez (y con el botón), no en cada
+// refresco: el backtest de todos los mercados no hace falta rehacerlo cada 5 s.
+const QUIEN = { ambos: 'los dos', 'solo-bot': 'solo el bot', 'solo-backtest': 'solo el backtest' }
+
+// El backtest de cada mercado, rehecho solo si cambian los diarios, los mercados o las reglas
+function useBacktestDelBot(diarios, claveTickers, claveCfg) {
+  return useMemo(() => {
+    if (!diarios) return null
+    const { stopN, paso, ...cfg } = JSON.parse(claveCfg)
+    return claveTickers.split(',').filter(t => t && diarios[t]?.velas?.length).flatMap(t => backtestDelBot(t, diarios[t].velas, cfg, { stopN, paso }))
+  }, [diarios, claveTickers, claveCfg])
+}
+
+function RealFrenteBacktest({ config, reglas, mercados, operaciones, eventos, nombre }) {
+  const [diarios, setDiarios] = useState(null)
+  const [error, setError] = useState(null)
+  const [cargando, setCargando] = useState(false)
+  const [desde, setDesde] = useState('')
+  // el filtro del S1 con que se juega el backtest: el bot no apunta cuándo se cambió su
+  // configuración, así que el de ahora vale para todo el periodo salvo que se elija otro
+  const [filtroElegido, setFiltroElegido] = useState(null)
+  const filtroS1 = filtroElegido ?? !!config.filtroS1
+
+  const cargar = useCallback(async () => {
+    setCargando(true)
+    try { setDiarios(await pedir('/api/bot/tortugas/diarios')); setError(null) } catch (err) { setError(err.message) } finally { setCargando(false) }
+  }, [])
+  useEffect(() => {
+    const primera = setTimeout(cargar, 0)
+    return () => clearTimeout(primera)
+  }, [cargar])
+
+  const reales = operacionesDelBot(operaciones, mercados)
+  // los mercados que juega ahora y los que jugó: uno apagado después sigue contando lo que hizo
+  const claveTickers = mercados
+    .filter(m => m.encendido || Object.values(m.posiciones).some(Boolean) || operaciones.some(o => o.ticker === m.ticker))
+    .map(m => m.ticker).join(',')
+  const tickers = claveTickers.split(',').filter(Boolean)
+  // sin su diario, un mercado no se compara: lo del bot contaría todo como «solo el bot»
+  const conDiario = tickers.filter(t => diarios?.[t]?.velas?.length)
+  const claveCfg = JSON.stringify({
+    sistemas: config.sistemas, filtroS1, lados: config.lados, maxUnidades: Number(config.maxUnidades),
+    anadido: config.anadido ?? 1, stopN: reglas.stopN, paso: reglas.pasoN,
+  })
+  const backtest = useBacktestDelBot(diarios, claveTickers, claveCfg)
+
+  // El bot no apunta cuándo arrancó: por defecto, lo primero que apuntó (una operación, una
+  // posición o el registro, que guarda los 300 últimos)
+  const primerApunte = [
+    ...operaciones.map(o => o.abierta),
+    ...mercados.flatMap(m => Object.values(m.posiciones).filter(Boolean).map(p => p.abierta)),
+    ...eventos.map(e => e.hora?.slice(0, 10)),
+  ].filter(Boolean).sort()[0] ?? null
+  const desdeUsado = desde || primerApunte
+  const eurPorN = Object.fromEntries(mercados.filter(m => m.plan?.unidad?.eurPorN).map(m => [m.ticker, m.plan.unidad.eurPorN]))
+  const cmp = backtest && desdeUsado ? compararTortugas(reales.filter(r => conDiario.includes(r.ticker)), backtest, { desde: desdeUsado, eurPorN }) : null
+  const r = cmp?.resumen
+
+  // de qué fuente salió cada diario, y los que faltan
+  const fuentes = diarios ? tickers.reduce((acc, t) => {
+    const f = diarios[t]?.error ? 'sin diario' : diarios[t]?.velas?.length ? diarios[t].fuente : 'sin diario'
+    return { ...acc, [f]: [...(acc[f] ?? []), t] }
+  }, {}) : {}
+  const nTxt = (x, dec = 2) => (x == null ? '—' : `${conSigno(x, dec)} N`)
+
+  return (
+    <section className="bot-bloque">
+      <div className="tor-cab-tabla">
+        <h3>Real frente al backtest</h3>
+        <div className="estrategias-nav tor-orden">
+          <label className="bot-nota">Desde <input type="date" value={desdeUsado ?? ''} onChange={e => setDesde(e.target.value)} /></label>
+          {desde && <button className="estrategia-chip" onClick={() => setDesde('')} title="Volver a la fecha del primer apunte del bot">Desde el primer apunte</button>}
+          <button className={`estrategia-chip ${filtroS1 ? 'activo' : ''}`} onClick={() => setFiltroElegido(!filtroS1)}
+            title={`El bot lo tiene ${config.filtroS1 ? 'encendido' : 'apagado'}; si lo cambiaste en el periodo, prueba el otro`}>
+            Filtro del S1{filtroElegido != null && filtroElegido !== !!config.filtroS1 ? ' (no el del bot)' : ''}
+          </button>
+          <button className="estrategia-chip" disabled={cargando} onClick={cargar}>{cargando ? 'Cargando…' : 'Volver a cargar los diarios'}</button>
+        </div>
+      </div>
+      {error && <p className="bot-error">{error}</p>}
+      {!cmp ? <p className="bot-nota">{!diarios ? (error ? '' : 'Cargando los diarios…') : 'El bot aún no ha apuntado nada: elige arriba desde cuándo comparar.'}</p> : (
+        <>
+          <div className="estr-tiles">
+            <Tile label="Operaciones" valor={String(r.casadas + r.soloBot + r.soloBacktest)}
+              sub={`${r.casadas} de los dos · ${r.soloBot} solo del bot · ${r.soloBacktest} solo del backtest`} />
+            <Tile label="Bot" valor={nTxt(r.realN, 1)} tonoValor={tono(r.realN)} sub="en N de una unidad, con las abiertas al precio de ahora" />
+            <Tile label="Backtest" valor={nTxt(r.backtestN, 1)} tonoValor={tono(r.backtestN)} sub="mismas reglas y diarios, sin costes ni límites de cartera" />
+            <Tile label="Diferencia" valor={nTxt(r.difN, 1)} tonoValor={tono(r.difN)}
+              sub={`${eur(r.difEur)}${r.sinEur ? ` (sin contar ${r.sinEur}: no tienen plan de unidad)` : ''} · ${nTxt(r.difCasadasN, 1)} en las de los dos, ${nTxt(r.difSueltasN, 1)} en las sueltas`} />
+            <Tile label="Deslizamiento medio" valor={nTxt(r.deslizamientoMedioN)} tonoValor={tono(r.deslizamientoMedioN == null ? null : -r.deslizamientoMedioN)}
+              sub="en la primera unidad, frente al relleno del backtest (positivo, peor)" />
+          </div>
+          {cmp.filas.length === 0 ? <p className="bot-nota">Desde el {desdeUsado} ninguno de los dos ha abierto nada.</p> : (
+            <div className="velas-tabla-wrap">
+              <table className="velas-tabla bot-tabla tor-todas tor-comparar">
+                <thead>
+                  <tr><th>Abierta</th><th>Mercado</th><th>Sistema</th><th>Lado</th><th>Quién</th><th>Entrada bot</th><th>Entrada backtest</th><th>Deslizamiento</th><th>Unidades</th><th>Bot</th><th>Backtest</th><th>Diferencia</th><th>€</th></tr>
+                </thead>
+                <tbody>
+                  {cmp.filas.map((f, i) => {
+                    const o = f.real ?? f.backtest
+                    const abierta = x => (x?.enCurso ? ' (abierta)' : '')
+                    return (
+                      <tr key={i}>
+                        <td>{o.abierta}</td>
+                        <td className="bot-celda-texto">{nombre(f.ticker)}</td>
+                        <td className="bot-celda-texto">S{f.sistema}</td>
+                        <td className="bot-celda-texto">{f.lado === 'largo' ? 'Largo' : 'Corto'}{o.ruptura ? ` (${o.ruptura})` : ''}</td>
+                        <td className={`bot-celda-texto ${f.tipo === 'ambos' ? '' : 'bot-neg'}`}>{QUIEN[f.tipo]}</td>
+                        <td>{f.real ? px(f.real.entrada) : '—'}</td>
+                        <td>{f.backtest ? px(f.backtest.entrada) : '—'}</td>
+                        <td className={tono(f.deslizamientoN == null ? null : -f.deslizamientoN)}>{nTxt(f.deslizamientoN)}</td>
+                        <td>{f.real?.unidades ?? '—'} / {f.backtest?.unidades ?? '—'}</td>
+                        <td className={tono(f.real?.resultadoN)}>{f.real ? nTxt(f.real.resultadoN) : '—'}{abierta(f.real)}</td>
+                        <td className={tono(f.backtest?.resultadoN)}>{f.backtest ? nTxt(f.backtest.resultadoN) : '—'}{abierta(f.backtest)}</td>
+                        <td className={tono(f.difN)}>{nTxt(f.difN)}</td>
+                        <td className={tono(f.difEur)}>{eur(f.difEur)}{f.eurAproximado && f.difEur != null ? ' (aprox.)' : ''}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="bot-nota">
+            El backtest juega cada mercado por su cuenta con las reglas del bot ({config.sistemas.length > 1 ? 'los Sistemas 1 y 2 como uno' : `solo el Sistema ${config.sistemas[0]}`}, {filtroS1 ? 'con' : 'sin'} el filtro del S1, {config.maxUnidades} unidades, stop a {reglas.stopN} N y añadidos cada {num(reglas.pasoN, 1)} N)
+            sobre el mismo diario del que el bot saca sus niveles, sin costes, sin financiación y sin los límites de cartera ni de noticias: lo que el bot no abrió por esos límites sale como «solo el backtest».
+            Cada operación del bot se empareja con la del backtest del mismo mercado, sistema y lado abierta a 4 días o menos; las demás las hizo solo uno de los dos y cuentan contra el otro como 0.
+            Todo va en N de una unidad (los añadidos, en unidades de la primera), como el bot apunta sus resultados; en euros, con lo que vale 1 N de una unidad hoy (las del backtest solo, aproximado).
+            Las del backtest de antes del {desdeUsado} no cuentan: el bot empezó plano.
+            El bot no guarda cuándo se cambió su configuración: el backtest la juega igual todo el periodo (el filtro del S1 se puede cambiar arriba).
+            {diarios && <> Diarios (los mercados sin diario no se comparan): {Object.entries(fuentes).map(([f, ts]) => `${f}, ${ts.length}${f === 'sin diario' || f === 'IG (caché)' ? ` (${ts.map(nombre).join(', ')})` : ''}`).join(' · ')}.</>}
+          </p>
+        </>
+      )}
+    </section>
   )
 }
 

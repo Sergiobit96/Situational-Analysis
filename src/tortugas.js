@@ -92,8 +92,11 @@ export const sistemasDe = sistema => (sistema === '1+2' ? [1, 2] : [sistema])
 // La ruptura con la que entra un sistema que está fuera, o null si no entra. Solo, el 1 entra
 // en la de 20, o en la de 55 si la anterior habría ganado, y el 2 en la de 55. Juntos, la que
 // el 1 se salta la coge el 2, siempre que el 1 no esté dentro.
+// Con `comoBot`, juntos como el bot (server/bot-tortugas.js): los dos siempre en marcha, el 2
+// en la de 55 y el 1 en la de 20, o en la de 55 con `filtroS1` si la anterior habría ganado.
 function entradaDe(cfg, e, s) {
   if (cfg.sistema !== '1+2') return s === 2 || e.gano ? 55 : 20
+  if (cfg.comoBot) return s === 2 || (cfg.filtroS1 && e.gano) ? 55 : 20
   if (s === 1) return e.gano ? null : 20
   return e.gano && !e.pos[1] ? 55 : null
 }
@@ -367,7 +370,7 @@ export function backtestTortugas(mercados, tipos, parcial = {}) {
       indice: e.m.info.id, sistema: p.sis, lado: p.lado > 0 ? 'largo' : 'corto', ruptura: p.ruptura,
       entrada: p.abierta, salida: fecha, dias: fecha ? noches(p.abierta, fecha) : null,
       n: p.n0, unidades: p.unidades.length, tamano: tamDe(p), nominal: tamDe(p) * precioMedio(p),
-      tamanos: p.unidades.map(u => u.tam), precioEntrada: precioMedio(p), precioSalida: salida, motivo,
+      tamanos: p.unidades.map(u => u.tam), precios: p.unidades.map(u => u.precio), fechas: p.unidades.map(u => u.fecha), precioEntrada: precioMedio(p), precioSalida: salida, motivo,
       bruto, financiacion: p.financiacion, comision: p.comision, neto, pctCapital: 100 * neto / p.capital,
       // en acciones, cuántas eran de las de entonces (la serie está ajustada por los splits)
       ...(e.m.info.contratos ? { contratos: Math.round(tamDe(p) / e.m.info.lote) }

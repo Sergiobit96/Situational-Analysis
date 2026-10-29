@@ -3710,7 +3710,16 @@ async function horasDukascopy(instrumento, desde, hasta) {
   return velas
 }
 
-const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugas, archivo: BOT_TORTUGAS_PATH, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
+// El último diario que pidió el bot de cada mercado, para comparar en la pestaña sus operaciones
+// con el backtest sobre las mismas velas (/api/bot/tortugas/diarios)
+const diariosTortugas = new Map()
+async function velasDiariasTortugasGuardadas(ticker) {
+  const velas = await velasDiariasTortugas(ticker)
+  diariosTortugas.set(ticker, { velas, hora: Date.now(), fuente: velas.respaldo ?? (MERCADOS_TORTUGAS[ticker].datos.fuente === 'ig' ? 'IG' : 'Yahoo') })
+  return velas
+}
+
+const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortugasGuardadas, archivo: BOT_TORTUGAS_PATH, cartera, noticias, avisar: BOT_OPERA ? telegram.enviar : undefined }) : null
 if (botTortugas && BOT_OPERA) botTortugas.arrancar()
 if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
@@ -3786,6 +3795,33 @@ app.get('/api/bot/salud', (_req, res) => {
 app.get('/api/bot/tortugas', (req, res) => {
   if (!botTortugas) return sinBot(res)
   res.json({ archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() })
+})
+
+// El diario de cada mercado del bot de las tortugas: el que usó el bot si es de hace menos de
+// 6 h; si no, Yahoo otra vez (con su caché) o, en los de IG, lo que haya en la caché de IG,
+// sin pedirle nada: el cupo semanal de histórico es para el bot.
+const DIARIO_FRESCO_MS = 6 * 3600_000
+app.get('/api/bot/tortugas/diarios', async (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  const salida = {}
+  await Promise.all(Object.keys(MERCADOS_TORTUGAS).map(async ticker => {
+    let g = diariosTortugas.get(ticker)
+    if (!g || Date.now() - g.hora > DIARIO_FRESCO_MS) {
+      try {
+        if (MERCADOS_TORTUGAS[ticker].datos.fuente !== 'ig') {
+          await velasDiariasTortugasGuardadas(ticker)
+          g = diariosTortugas.get(ticker)
+        } else if (!g) {
+          const ahora = Math.floor(Date.now() / 1000)
+          const velas = ig.velasEnCache(ticker, 'd1', ahora - DIAS_IG_TORTUGAS * 86400, ahora - 86400)
+            .map(v => ({ date: fechaEnZona(v.time, 'Europe/Madrid'), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
+          g = { velas, hora: null, fuente: 'IG (caché)' }
+        }
+      } catch (err) { if (!g) return void (salida[ticker] = { error: err.message }) }
+    }
+    salida[ticker] = { fuente: g.fuente, hora: g.hora, velas: g.velas.map(v => [v.date, v.open, v.high, v.low, v.close]) }
+  }))
+  res.json(salida)
 })
 
 app.put('/api/bot/tortugas/config', (req, res) => {

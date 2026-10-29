@@ -31,6 +31,45 @@ export function backtestDelBot(ticker, velas, config, { stopN = 2, paso = 0.5 } 
   return [...res.operaciones.map(deApunte(false)), ...res.abiertas.map(deApunte(true))]
 }
 
+// Lo de la configuración del bot que cambia qué operaciones hace el backtest (como
+// CLAVES_BACKTEST en server/bot-tortugas.js, que apunta sus cambios en cambiosConfig)
+export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 'lados', 'maxUnidades', 'anadido']
+const fechaMadrid = iso => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Madrid' })
+const soloClaves = c => Object.fromEntries(CLAVES_BACKTEST.map(k => [k, c[k]]))
+
+// Las configuraciones que ha tenido el bot, de la primera a la de ahora: [{ desde, config }],
+// la primera con `desde` null. Cada cambio apuntado empieza un tramo el día (de Madrid) en que
+// se hizo. `filtroCambiado`: una fecha en que se cambió el filtro del S1 antes de que el bot
+// apuntara sus cambios: hasta ese día el filtro estaba al revés que ese día. `filtroS1`
+// (true/false) lo fuerza en todo el periodo. Los tramos seguidos iguales se juntan.
+export function tramosDeConfig(actual, cambios = [], { filtroCambiado = null, filtroS1 = null } = {}) {
+  let tramos = [{ desde: null, config: soloClaves(actual) }]
+  for (const c of [...cambios].sort((a, b) => b.hora.localeCompare(a.hora))) {
+    tramos[0].desde = fechaMadrid(c.hora)
+    tramos.unshift({ desde: null, config: soloClaves({ ...tramos[0].config, ...c.antes }) })
+  }
+  if (filtroCambiado) {
+    const enFecha = tramoEn(tramos, filtroCambiado).config.filtroS1
+    // un corte en esa fecha, y lo de antes con el filtro al revés
+    const i = tramos.findLastIndex(t => t.desde == null || t.desde <= filtroCambiado)
+    if (tramos[i].desde !== filtroCambiado) tramos.splice(i + 1, 0, { desde: filtroCambiado, config: { ...tramos[i].config } })
+    tramos = tramos.map(t => (t.desde == null || t.desde < filtroCambiado ? { ...t, config: { ...t.config, filtroS1: !enFecha } } : t))
+  }
+  if (filtroS1 != null) tramos = tramos.map(t => ({ ...t, config: { ...t.config, filtroS1 } }))
+  return tramos.filter((t, i) => i === 0 || JSON.stringify(t.config) !== JSON.stringify(tramos[i - 1].config))
+}
+const tramoEn = (tramos, fecha) => tramos.findLast(t => t.desde == null || t.desde <= fecha)
+
+// El backtest de un mercado con la configuración de cada tramo: un backtest entero por cada
+// configuración distinta, y de cada uno las operaciones abiertas en sus tramos. Una que se abre
+// con unas reglas sigue con ellas aunque cambien (también en el bot: los planes se rehacen,
+// pero lo abierto no se toca).
+export function backtestPorTramos(ticker, velas, tramos, reglas = {}) {
+  if (tramos.length === 1) return backtestDelBot(ticker, velas, tramos[0].config, reglas)
+  return [...new Set(tramos.map(t => JSON.stringify(t.config)))].flatMap(clave =>
+    backtestDelBot(ticker, velas, JSON.parse(clave), reglas).filter(o => JSON.stringify(tramoEn(tramos, o.abierta).config) === clave))
+}
+
 // Las del bot, cerradas y abiertas, en la misma forma. Las abiertas, a `precio` (el de IG
 // ahora) o, sin él, sin resultado.
 export function operacionesDelBot(operaciones, mercados) {

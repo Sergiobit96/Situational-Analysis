@@ -562,6 +562,27 @@ test('si IG falla a mitad del plan, no lo reintenta en cada paso, y el saldo se 
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('los cambios de lo que juega el backtest se apuntan con la hora; el riesgo no', async () => {
+  const ig = igFalso({})
+  const { bot, dir, enHora, archivo } = botDePrueba(ig, {}, soloDax)
+  try {
+    assert.deepEqual(bot.estado().cambiosConfig, [], 'activar y elegir mercados no cuenta')
+    enHora(fra(10, 20, 10))
+    bot.cambiarConfig({ filtroS1: true, riesgoPct: 2 })
+    bot.cambiarConfig({ riesgoPct: 1 })
+    bot.cambiarConfig({ lados: 'ambos', maxUnidades: 4 })
+    const c = bot.estado().cambiosConfig
+    assert.equal(c.length, 2)
+    assert.equal(c[0].hora, new Date(fra(10, 20, 10) * 1000).toISOString())
+    assert.deepEqual(c[0], { hora: c[0].hora, antes: { filtroS1: false }, despues: { filtroS1: true } })
+    assert.deepEqual(c[1].antes, { lados: 'largos', maxUnidades: 6 })
+    assert.deepEqual(c[1].despues, { lados: 'ambos', maxUnidades: 4 })
+    bot.parar()
+    const otra = crearBotTortugas({ ig, archivo, velasDiarias: async () => [], log: () => {}, revisarCadaMs: 0 })
+    assert.deepEqual(otra.estado().cambiosConfig, c, 'se guardan en el registro')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('la configuración se valida y un cambio de riesgo rehace los planes', async () => {
   const ig = igFalso({})
   const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150) }, soloDax)

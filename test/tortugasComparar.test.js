@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { backtestDelBot, operacionesDelBot, compararTortugas } from '../src/tortugasComparar.js'
+import { backtestDelBot, backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas } from '../src/tortugasComparar.js'
 
 // 70 sesiones quietas entre 99 y 101 (sin rupturas una vez hay canal), 25 de subida y 25 de bajada
 function serie() {
@@ -118,4 +118,40 @@ test('el total en euros dice cuántas se quedan fuera por no tener lo que vale 1
   assert.equal(resumen.difN, -3)
   assert.equal(resumen.difEur, -30)
   assert.equal(resumen.sinEur, 1)
+})
+
+test('los tramos de configuración salen de los cambios apuntados, del más antiguo al de ahora', () => {
+  const ahora = { ...CONFIG, filtroS1: true, lados: 'ambos', riesgoPct: 1 }
+  const cambios = [
+    // a las 23:30 de Lisboa ya es el día siguiente en Madrid
+    { hora: '2026-10-23T22:30:00.000Z', antes: { filtroS1: false }, despues: { filtroS1: true } },
+    { hora: '2026-10-18T19:00:00.000Z', antes: { lados: 'largos' }, despues: { lados: 'ambos' } },
+  ]
+  const t = tramosDeConfig(ahora, cambios)
+  assert.deepEqual(t.map(x => [x.desde, x.config.lados, x.config.filtroS1]), [[null, 'largos', false], ['2026-10-18', 'ambos', false], ['2026-10-24', 'ambos', true]])
+  assert.ok(!('riesgoPct' in t[0].config), 'solo lo que cambia el backtest')
+  // sin cambios, uno solo con la de ahora
+  assert.deepEqual(tramosDeConfig(ahora), [{ desde: null, config: { ...CONFIG, filtroS1: true, lados: 'ambos' } }])
+})
+
+test('el filtro del S1 cambiado a mano antes de apuntarse los cambios, y forzado en todo el periodo', () => {
+  const ahora = { ...CONFIG, filtroS1: true }
+  const cambios = [{ hora: '2026-10-25T10:00:00.000Z', antes: { maxUnidades: 6 }, despues: { maxUnidades: 4 } }]
+  const t = tramosDeConfig(ahora, cambios, { filtroCambiado: '2026-10-21' })
+  assert.deepEqual(t.map(x => [x.desde, x.config.filtroS1, x.config.maxUnidades]), [[null, false, 6], ['2026-10-21', true, 6], ['2026-10-25', true, 4]])
+  // la fecha a mano en un corte que ya existe no lo duplica
+  assert.deepEqual(tramosDeConfig(ahora, cambios, { filtroCambiado: '2026-10-25' }).map(x => [x.desde, x.config.filtroS1]), [[null, false], ['2026-10-25', true]])
+  // forzado: los tramos que solo se distinguían por el filtro se juntan
+  assert.deepEqual(tramosDeConfig(ahora, [], { filtroCambiado: '2026-10-21', filtroS1: false }), [{ desde: null, config: { ...CONFIG, filtroS1: false } }])
+})
+
+test('el backtest por tramos coge cada operación del backtest con las reglas del día en que se abrió', () => {
+  const velas = serie()
+  const s2 = backtestDelBot('X', velas, CONFIG).find(o => o.sistema === 2)
+  const tramos = desde => [{ desde: null, config: { ...CONFIG, sistemas: [1] } }, { desde, config: CONFIG }]
+  const antes = backtestPorTramos('X', velas, tramos('2026-01-01'))
+  assert.ok(antes.some(o => o.sistema === 2 && o.abierta === s2.abierta), 'con los dos sistemas desde antes, está')
+  const despues = backtestPorTramos('X', velas, tramos('2099-01-01'))
+  assert.ok(!despues.some(o => o.sistema === 2), 'con el 2 encendido después, no')
+  assert.deepEqual(despues, backtestDelBot('X', velas, { ...CONFIG, sistemas: [1] }))
 })

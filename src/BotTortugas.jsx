@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import { peorHastaStops, nHastaStop } from './tortugas'
-import { backtestDelBot, operacionesDelBot, compararTortugas } from './tortugasComparar'
+import { backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas } from './tortugasComparar'
 import { rupturaMasCercana, acumulado } from './botCalculos'
 import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
@@ -104,7 +104,7 @@ export default function BotTortugas() {
     return <div className="bot-page">{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</div>
   }
 
-  const { config, mercados, operaciones, eventos, ig, opera, reglas } = datos
+  const { config, mercados, operaciones, eventos, ig, opera, reglas, cambiosConfig = [] } = datos
   const editando = form ?? config
   const cambiar = (campo, valor) => setForm({ ...editando, [campo]: valor })
   const nombre = t => mercados.find(m => m.ticker === t)?.nombre ?? t
@@ -273,7 +273,7 @@ export default function BotTortugas() {
         )}
       </section>
 
-      <RealFrenteBacktest config={config} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
+      <RealFrenteBacktest config={config} cambios={cambiosConfig} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
 
       <section className="bot-bloque">
         <h3>Registro</h3>
@@ -468,20 +468,28 @@ const QUIEN = { ambos: 'los dos', 'solo-bot': 'solo el bot', 'solo-backtest': 's
 function useBacktestDelBot(diarios, claveTickers, claveCfg) {
   return useMemo(() => {
     if (!diarios) return null
-    const { stopN, paso, ...cfg } = JSON.parse(claveCfg)
-    return claveTickers.split(',').filter(t => t && diarios[t]?.velas?.length).flatMap(t => backtestDelBot(t, diarios[t].velas, cfg, { stopN, paso }))
+    const { stopN, paso, tramos } = JSON.parse(claveCfg)
+    return claveTickers.split(',').filter(t => t && diarios[t]?.velas?.length).flatMap(t => backtestPorTramos(t, diarios[t].velas, tramos, { stopN, paso }))
   }, [diarios, claveTickers, claveCfg])
 }
 
-function RealFrenteBacktest({ config, reglas, mercados, operaciones, eventos, nombre }) {
+// Cómo se lee un tramo de configuración en la nota
+const describirTramo = c => [
+  c.sistemas.length > 1 ? 'los Sistemas 1 y 2 como uno' : `solo el Sistema ${c.sistemas[0]}`,
+  ...(c.sistemas.includes(1) ? [`${c.filtroS1 ? 'con' : 'sin'} el filtro del S1`] : []),
+  { largos: 'solo largos', cortos: 'solo cortos', ambos: 'largos y cortos' }[c.lados] ?? c.lados,
+  `${c.maxUnidades} unidades`, ...(c.anadido === 0.5 ? ['añadidos de media unidad'] : []),
+].join(', ')
+
+function RealFrenteBacktest({ config, cambios, reglas, mercados, operaciones, eventos, nombre }) {
   const [diarios, setDiarios] = useState(null)
   const [error, setError] = useState(null)
   const [cargando, setCargando] = useState(false)
   const [desde, setDesde] = useState('')
-  // el filtro del S1 con que se juega el backtest: el bot no apunta cuándo se cambió su
-  // configuración, así que el de ahora vale para todo el periodo salvo que se elija otro
+  // El bot apunta desde el 29-oct-2026 cuándo cambia lo que juega el backtest (cambiosConfig);
+  // un cambio del filtro del S1 de antes se puede fechar a mano, o forzarlo en todo el periodo
+  const [filtroCambiado, setFiltroCambiado] = useState('')
   const [filtroElegido, setFiltroElegido] = useState(null)
-  const filtroS1 = filtroElegido ?? !!config.filtroS1
 
   const cargar = useCallback(async () => {
     setCargando(true)
@@ -500,10 +508,9 @@ function RealFrenteBacktest({ config, reglas, mercados, operaciones, eventos, no
   const tickers = claveTickers.split(',').filter(Boolean)
   // sin su diario, un mercado no se compara: lo del bot contaría todo como «solo el bot»
   const conDiario = tickers.filter(t => diarios?.[t]?.velas?.length)
-  const claveCfg = JSON.stringify({
-    sistemas: config.sistemas, filtroS1, lados: config.lados, maxUnidades: Number(config.maxUnidades),
-    anadido: config.anadido ?? 1, stopN: reglas.stopN, paso: reglas.pasoN,
-  })
+  const tramos = tramosDeConfig({ ...config, maxUnidades: Number(config.maxUnidades), anadido: config.anadido ?? 1, filtroS1: !!config.filtroS1 },
+    cambios, { filtroCambiado: filtroCambiado || null, filtroS1: filtroElegido })
+  const claveCfg = JSON.stringify({ tramos, stopN: reglas.stopN, paso: reglas.pasoN })
   const backtest = useBacktestDelBot(diarios, claveTickers, claveCfg)
 
   // El bot no apunta cuándo arrancó: por defecto, lo primero que apuntó (una operación, una
@@ -532,10 +539,14 @@ function RealFrenteBacktest({ config, reglas, mercados, operaciones, eventos, no
         <div className="estrategias-nav tor-orden">
           <label className="bot-nota">Desde <input type="date" value={desdeUsado ?? ''} onChange={e => setDesde(e.target.value)} /></label>
           {desde && <button className="estrategia-chip" onClick={() => setDesde('')} title="Volver a la fecha del primer apunte del bot">Desde el primer apunte</button>}
-          <button className={`estrategia-chip ${filtroS1 ? 'activo' : ''}`} onClick={() => setFiltroElegido(!filtroS1)}
-            title={`El bot lo tiene ${config.filtroS1 ? 'encendido' : 'apagado'}; si lo cambiaste en el periodo, prueba el otro`}>
-            Filtro del S1{filtroElegido != null && filtroElegido !== !!config.filtroS1 ? ' (no el del bot)' : ''}
-          </button>
+          {filtroElegido == null && (
+            <label className="bot-nota" title={`Si cambiaste el filtro del S1 antes del 29-oct-2026, el bot no lo apuntó: el día del cambio (ahora está ${config.filtroS1 ? 'encendido' : 'apagado'}; antes de esa fecha, al revés)`}>
+              Filtro del S1 cambiado el <input type="date" value={filtroCambiado} onChange={e => setFiltroCambiado(e.target.value)} />
+            </label>
+          )}
+          {[[null, 'Filtro como el bot'], [true, 'Siempre con filtro'], [false, 'Siempre sin filtro']].map(([v, txt]) => (
+            <button key={txt} className={`estrategia-chip ${filtroElegido === v ? 'activo' : ''}`} onClick={() => setFiltroElegido(v)}>{txt}</button>
+          ))}
           <button className="estrategia-chip" disabled={cargando} onClick={cargar}>{cargando ? 'Cargando…' : 'Volver a cargar los diarios'}</button>
         </div>
       </div>
@@ -585,12 +596,15 @@ function RealFrenteBacktest({ config, reglas, mercados, operaciones, eventos, no
             </div>
           )}
           <p className="bot-nota">
-            El backtest juega cada mercado por su cuenta con las reglas del bot ({config.sistemas.length > 1 ? 'los Sistemas 1 y 2 como uno' : `solo el Sistema ${config.sistemas[0]}`}, {filtroS1 ? 'con' : 'sin'} el filtro del S1, {config.maxUnidades} unidades, stop a {reglas.stopN} N y añadidos cada {num(reglas.pasoN, 1)} N)
+            El backtest juega cada mercado por su cuenta con las reglas del bot (stop a {reglas.stopN} N y añadidos cada {num(reglas.pasoN, 1)} N;{' '}
+            {tramos.length === 1 ? describirTramo(tramos[0].config)
+              : tramos.map(t => `${t.desde ? `desde el ${t.desde}` : `antes del ${tramos[1].desde}`}, ${describirTramo(t.config)}`).join('; ')})
             sobre el mismo diario del que el bot saca sus niveles, sin costes, sin financiación y sin los límites de cartera ni de noticias: lo que el bot no abrió por esos límites sale como «solo el backtest».
             Cada operación del bot se empareja con la del backtest del mismo mercado, sistema y lado abierta a 4 días o menos; las demás las hizo solo uno de los dos y cuentan contra el otro como 0.
             Todo va en N de una unidad (los añadidos, en unidades de la primera), como el bot apunta sus resultados; en euros, con lo que vale 1 N de una unidad hoy (las del backtest solo, aproximado).
             Las del backtest de antes del {desdeUsado} no cuentan: el bot empezó plano.
-            El bot no guarda cuándo se cambió su configuración: el backtest la juega igual todo el periodo (el filtro del S1 se puede cambiar arriba).
+            {tramos.length > 1 && 'Cada operación del backtest sigue las reglas del día en que se abrió, aunque cambien después. '}
+            El bot apunta los cambios de su configuración desde el 29-oct-2026; uno del filtro del S1 de antes se puede fechar arriba.
             {diarios && <> Diarios (los mercados sin diario no se comparan): {Object.entries(fuentes).map(([f, ts]) => `${f}, ${ts.length}${f === 'sin diario' || f === 'IG (caché)' ? ` (${ts.map(nombre).join(', ')})` : ''}`).join(' · ')}.</>}
           </p>
         </>

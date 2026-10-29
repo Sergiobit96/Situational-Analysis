@@ -154,6 +154,10 @@ export const CONFIG_TORTUGAS_BOT = {
                             // de su divisa o del dólar (server/noticias.js); null: no mira las noticias
 }
 
+// Lo de la configuración que cambia qué operaciones hace el backtest de cada mercado: sus
+// cambios se apuntan con la hora (cambiosConfig) para compararlo tramo a tramo
+export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 'lados', 'maxUnidades', 'anadido']
+
 export const PASO_N = 0.5          // N entre añadidos
 export const STOP_N = 2            // N hasta el stop desde el último relleno
 // Lo que pierde una pirámide de k unidades si salta su stop, en N por unidad: la unidad i (desde
@@ -324,7 +328,7 @@ const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 // en orden, con la fecha en la zona de su bolsa). `avisar(texto)` es Telegram. `cartera` y
 // `noticias` frenan las entradas, como en el bot SRS (server/cartera.js, server/noticias.js).
 export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math.floor(Date.now() / 1000), log = console.log, revisarCadaMs = REVISAR_CADA_MS, avisar = () => {}, cartera = null, noticias = null }) {
-  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, salidas: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [] })
+  const vacio = () => ({ config: { ...CONFIG_TORTUGAS_BOT, instrumentos: { ...CONFIG_TORTUGAS_BOT.instrumentos } }, picoSaldo: null, planes: {}, salidas: {}, posiciones: {}, intentos: {}, operaciones: [], eventos: [], cambiosConfig: [] })
   let datos = vacio()
   try {
     const leido = JSON.parse(readFileSync(archivo, 'utf8'))
@@ -1050,6 +1054,15 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     }
     const antes = datos.config
     datos.config = c
+    // Los cambios de lo que juega el backtest, con su hora: la pestaña compara cada tramo con
+    // las reglas que tenía (src/tortugasComparar.js)
+    const cambiadas = CLAVES_BACKTEST.filter(k => !igual(antes[k], c[k]))
+    if (cambiadas.length) {
+      datos.cambiosConfig = [...(datos.cambiosConfig ?? []), {
+        hora: new Date(ahora() * 1000).toISOString(),
+        antes: Object.fromEntries(cambiadas.map(k => [k, antes[k]])), despues: Object.fromEntries(cambiadas.map(k => [k, c[k]])),
+      }].slice(-200)
+    }
     // lo que cambia los niveles o la unidad obliga a rehacer los planes
     if (['sistemas', 'filtroS1', 'lados', 'riesgoPct', 'maxUnidades', 'anadido', 'reduccionDD'].some(k => !igual(antes[k], c[k]))) datos.planes = {}
     guardar()
@@ -1095,6 +1108,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       }),
       operaciones: datos.operaciones.slice(0, 200),
       eventos: datos.eventos.slice(-300).reverse(),
+      cambiosConfig: datos.cambiosConfig ?? [],
     }
   }
 

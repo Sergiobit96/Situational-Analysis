@@ -13,6 +13,8 @@ import { FOMC, ANIOS_FOMC } from './fomc'
 import { madridOffsetAt } from './timezone'
 import { Bloque, AjustesPuestos, BarraAnalizar } from './AjustesEstrategia'
 import { conClaveBot, leerClaveBot } from './claveBot'
+import SinMejores from './SinMejores'
+import { lasMejores, N_MEJORES } from './quitarMejores.js'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -306,6 +308,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [maxAnadidos, setMaxAnadidos] = useState(estr.maxUnidades ? estr.maxUnidades - 1 : 5)
   const [coste,      setCoste]      = useState(0)
   const [velaSetup,  setVelaSetup]  = useState(5)   // First bar negative: de cuántos minutos es la vela del setup
+  const [sinMejores, setSinMejores] = useState(false)   // sin las 5 sesiones que más R ganan
   const [riesgoOp,   setRiesgoOp]   = useState(1)   // % del capital hasta el stop en cada operación, para el CAGR (el del bot)
   const [stopModo,   setStopModo]   = useState('fijo')
   const [volumen,    setVolumen]    = useState(estr.tortuga ? 'tortuga' : 'fijo')
@@ -756,10 +759,18 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
 
   const dirVela1 = VELAS1.find(v => v.id === vela1)?.dir
   const posApertura = APERTURAS.find(x => x.id === aperturaPos)?.pos
-  const analizadas = useMemo(
+  const analizadasTodas = useMemo(
     () => conModo.filter(r => pasaVela1(r, dirVela1) && pasaApertura(r, posApertura)),
     [conModo, dirVela1, posApertura],
   )
+  // Las sesiones que más R ganan: con «sin las 5 mejores» salen de todo lo de abajo
+  const rDe = a => a.valido && a.entrada ? (a.resultadoTotalR ?? a.resultadoR ?? 0) : 0
+  const mejores = useMemo(() => lasMejores(analizadasTodas, x => rDe(x.analisis)), [analizadasTodas])
+  const analizadas = useMemo(
+    () => (sinMejores ? analizadasTodas.filter(x => !mejores.includes(x)) : analizadasTodas),
+    [sinMejores, analizadasTodas, mejores],
+  )
+  const resumenTodas = useMemo(() => resumir(analizadasTodas.map(r => r.analisis)), [analizadasTodas])
 
   // Cuántas sesiones quedarían con cada chip de «qué sesiones cuentan», con lo que esté marcado
   // en el otro grupo: así no hay que ir probándolos
@@ -960,6 +971,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     vela1 !== porDefecto.vela1 && {
       id: 'vela1', texto: `1ª vela ${vela1}`, quitar: () => setVela1(porDefecto.vela1),
     },
+    sinMejores && {
+      id: 'sinMejores', texto: `Sin las ${N_MEJORES} mejores`, quitar: () => setSinMejores(false),
+    },
     aperturaPos !== porDefecto.aperturaPos && {
       id: 'apertura',
       texto: { encima: 'Abre sobre el máximo de ayer', dentro: 'Abre dentro del rango de ayer', debajo: 'Abre bajo el mínimo de ayer' }[aperturaPos],
@@ -970,6 +984,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     setModo(porDefecto.modo); setVolumen(porDefecto.volumen); setTamano(porDefecto.tamano)
     setNivelStop(porDefecto.nivelStop); setStopModo(porDefecto.stopModo); setTpModo(porDefecto.tpModo)
     setCoste(porDefecto.coste); setMaxAnadidos(porDefecto.maxAnadidos); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos); setVelaSetup(porDefecto.velaSetup)
+    setSinMejores(false)
     setMostradas(POR_PAGINA)
   }
 
@@ -978,6 +993,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const claveRevision = JSON.stringify({
     estrategia: estrategiaId, analizado, modo: modoEfectivo, volumen, tamano, nivelStop, stopModo,
     tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos, velaSetup, maxAnadidos,
+    ...(sinMejores ? { sinMejores: N_MEJORES } : {}),
   })
   const armarExpediente = () => expedienteIntradia({
     estr, nombre: INSTRUMENTOS.find(i => i.value === tickerVisto)?.label ?? tickerVisto,
@@ -995,6 +1011,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       costesPorUnidadPts: Number(coste),
       primeraVela: vela1,
       aperturaRespectoAAyer: aperturaPos,
+      ...(sinMejores ? { sesionesQuitadas: `las ${N_MEJORES} que más R ganan (${mejores.map(x => x.sesion.date).join(', ')}), para ver si gana sin ellas` } : {}),
     },
     analizadas, resumen, mitades,
     robustez: { combos: combosRobustez, matriz: matrizRobustez(), actual: `${stopModo}|${volumen}` },
@@ -1458,6 +1475,19 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
                 Contar todas
               </button>
             </div>
+          )}
+
+          {mejores.length > 0 && (
+            <SinMejores
+              activo={sinMejores}
+              onCambio={v => { setSinMejores(v); setMostradas(POR_PAGINA) }}
+              criterio="las sesiones de más R"
+              comparacion={<>Con todas, {fmtSgn(resumenTodas.totalR)} R en {resumenTodas.nOps} operaci{resumenTodas.nOps === 1 ? 'ón' : 'ones'}
+                {' '}({fmtSgn(resumenTodas.esperanzaR)} R de media); {mejores.length === 1 ? 'la mejor deja' : `las ${mejores.length} mejores suman`}
+                {' '}{fmtSgn(mejores.reduce((n, x) => n + rDe(x.analisis), 0))} R, así que sin {mejores.length === 1 ? 'ella' : 'ellas'}
+                {' '}<strong>{fmtSgn(resumenTodas.totalR - mejores.reduce((n, x) => n + rDe(x.analisis), 0))} R</strong>.</>}
+              quitadas={mejores.map(x => `${x.sesion.date} (${fmtSgn(rDe(x.analisis))} R)`).join(', ')}
+            />
           )}
 
           <Resumen r={resumen} compuesta={compuesta} riesgoOp={Number(riesgoOp)} />

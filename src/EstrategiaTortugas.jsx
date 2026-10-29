@@ -11,6 +11,8 @@ import { Bloque, AjustesPuestos, BarraAnalizar } from './AjustesEstrategia'
 import RevisionBacktest from './RevisionBacktest'
 import './Tortugas.css'
 import Robustez from './Robustez'
+import SinMejores from './SinMejores'
+import { tortugasSinLasMejores, N_MEJORES } from './quitarMejores.js'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -349,6 +351,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const [variantes, setVariantes] = useState(null)
   const [comparando, setComparando] = useState(false)
   const [mostradas, setMostradas] = useState(25)
+  const [sinMejores, setSinMejores] = useState(false)   // sin las 5 operaciones de más % del capital
   const abortRef = useRef(null)
   const filtrosRef = useRef(null)
 
@@ -453,8 +456,14 @@ export default function EstrategiaTortugas({ estrategiaId }) {
   const listo = mercados.length > 0 && (universo === 'indices' || !faltan.length)
   const res = useMemo(() => listo ? backtestTortugas(mercados, tipos, cfg) : null, [listo, mercados, tipos, cfg])
   const m = useMemo(() => res && metricasTortugas(res), [res])
+  // Lo que se enseña: el backtest entero o sin sus 5 mejores operaciones. Las órdenes de mañana
+  // y la N de hoy siguen saliendo del backtest entero.
+  const sinLas = useMemo(() => res && tortugasSinLasMejores(res), [res])
+  const vista = sinMejores && sinLas?.quitadas.length ? sinLas.res : res
+  const mVista = useMemo(() => (vista === res ? m : metricasTortugas(vista)), [vista, res, m])
+  const mSin = useMemo(() => sinLas && (sinLas.res === res ? m : metricasTortugas(sinLas.res)), [sinLas, res, m])
   // cada operación cerrada, en orden de salida, con lo que dejó en % del capital (para el Monte Carlo)
-  const serieRobustez = useMemo(() => (res ? [...res.operaciones].sort((a, b) => a.salida.localeCompare(b.salida)).map(o => ({ fecha: o.salida, r: o.pctCapital })) : []), [res])
+  const serieRobustez = useMemo(() => (vista ? [...vista.operaciones].sort((a, b) => a.salida.localeCompare(b.salida)).map(o => ({ fecha: o.salida, r: o.pctCapital })) : []), [vista])
   const ordenes = useMemo(() => res ? ordenesManana(res, ajustes.capital) : [], [res, ajustes.capital])
 
   async function cargar() {
@@ -973,12 +982,24 @@ export default function EstrategiaTortugas({ estrategiaId }) {
               Faltan los datos de {faltan.join(', ')}: pulsa <strong>Cargar lo que falta</strong> para incluirlos.
             </p>
           )}
-          <Resumen m={m} res={res} />
+          {sinLas.quitadas.length > 0 && mSin && (
+            <SinMejores
+              activo={sinMejores}
+              onCambio={setSinMejores}
+              criterio="las de más % del capital al entrar"
+              comparacion={<>Con todas, {pct(m.cagr)} al año con un drawdown de {pct(m.maxDD)}; sin {sinLas.quitadas.length === 1 ? 'la mejor' : `las ${sinLas.quitadas.length} mejores`},
+                {' '}<strong>{pct(mSin.cagr)} al año</strong> y {pct(mSin.maxDD)} de drawdown (capital final {eur(mSin.capitalFinal)}
+                {' '}frente a {eur(m.capitalFinal)}). No se vuelve a simular: sin cada una, la cuenta queda más pequeña en
+                {' '}proporción desde su salida, porque las unidades van con el capital de cada momento.</>}
+              quitadas={sinLas.quitadas.map(o => `${o.indice} ${dia(o.entrada)} → ${dia(o.salida)} (${pct(o.pctCapital, 1)})`).join(', ')}
+            />
+          )}
+          <Resumen m={mVista} res={vista} />
           <NDeHoy filas={nPorIndice} paso={res.cfg.paso} stopN={res.cfg.stopN} acciones={acciones} futuros={futuros} />
-          <CurvaTortugas res={res} />
-          <Anual res={res} />
-          {acciones ? <PorSector res={res} /> : <PorIndice res={res} futuros={futuros} />}
-          <Piramide res={res} />
+          <CurvaTortugas res={vista} />
+          <Anual res={vista} />
+          {acciones ? <PorSector res={vista} /> : <PorIndice res={vista} futuros={futuros} />}
+          <Piramide res={vista} />
           <Robustez serie={serieRobustez} unidad="%" titulo="Robustez de las operaciones (en % del capital)" />
           <Variantes variantes={variantes} vigente={variantes?.clave === claveCfg} comparando={comparando} onComparar={comparar} acciones={acciones} />
           {universo === 'indices' && (
@@ -986,8 +1007,8 @@ export default function EstrategiaTortugas({ estrategiaId }) {
               onComparar={compararFuentes} desde={desdeFuentes} hayIndices={indicesFuentes.length > 0} />
           )}
           <RevisionBacktest
-            clave={claveCfg}
-            armar={() => expedienteBacktest(res, { universo, variantes: variantes?.clave === claveCfg ? variantes.filas : null })}
+            clave={sinMejores ? `${claveCfg}|sin${N_MEJORES}` : claveCfg}
+            armar={() => expedienteBacktest(vista, { universo, variantes: variantes?.clave === claveCfg ? variantes.filas : null })}
             hasta={res.curva.at(-1).date}
             hayVariantes={variantes?.clave === claveCfg}
             nota={<>Claude lee el resumen, los años, las peores caídas, las dos mitades del periodo, de dónde sale el
@@ -996,7 +1017,7 @@ export default function EstrategiaTortugas({ estrategiaId }) {
               variantes</strong>, también las tiene en cuenta para juzgar si estos ajustes están hechos a medida de la historia.</>}
           />
           <Ordenes filas={ordenes} juntos={juntos} capital={ajustes.capital} ultimoDato={ultimoDato} acciones={acciones} futuros={futuros} />
-          <Operaciones res={res} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} futuros={futuros} />
+          <Operaciones res={vista} mostradas={mostradas} onMas={() => setMostradas(n => n + 50)} acciones={acciones} futuros={futuros} />
           {futuros ? (
             <p className="estr-nota">
               Los mercados de las reglas de las tortugas (Curtis Faith) con el futuro de hoy de cada uno en Yahoo, desde 2000:

@@ -302,6 +302,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const [modo,       setModo]       = useState(estrategiaDe(estrategiaId).modoInicial ?? 'ambos')
   const [nivelStop,  setNivelStop]  = useState('extremo')
   const [tamano,     setTamano]     = useState('uno')
+  // cuántas unidades puede añadir la pirámide a la de entrada; la estrategia puede traer su tope
+  const [maxAnadidos, setMaxAnadidos] = useState(estr.maxUnidades ? estr.maxUnidades - 1 : 5)
   const [coste,      setCoste]      = useState(0)
   const [velaSetup,  setVelaSetup]  = useState(5)   // First bar negative: de cuántos minutos es la vela del setup
   const [riesgoOp,   setRiesgoOp]   = useState(1)   // % del capital hasta el stop en cada operación, para el CAGR (el del bot)
@@ -361,6 +363,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const porDefecto = {
     modo: estr.modoInicial ?? 'ambos', volumen: estr.tortuga ? 'tortuga' : 'fijo',
     tamano: 'uno', nivelStop: 'extremo', stopModo: 'fijo', tpModo: 'no', coste: 0,
+    maxAnadidos: estr.maxUnidades ? estr.maxUnidades - 1 : 5,
     vela1: 'todas', aperturaPos: 'todas', velaSetup: 5,
   }
 
@@ -381,8 +384,8 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     tpN: objetivoN?.tpN ?? null,
     stopPct,
     tamanoAnadido: TAMANOS.find(t => t.id === tamano)?.tamano ?? 1,
-    // el tope de posiciones de la pirámide, si la estrategia trae el suyo
-    maxUnidades: estr.maxUnidades,
+    // el tope de posiciones de la pirámide: la entrada y los añadidos que se pidan
+    maxUnidades: maxAnadidos + 1,
     costePts: Number(coste) > 0 ? Number(coste) : 0,
   }
 
@@ -748,7 +751,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // opcionesMotor se rehace en cada render; sus piezas son las que de verdad disparan el
   // recalculo, y son todas valores sueltos
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, tpModo, stopPct, tamano, coste, velaSetup])
+  }), [resultados, tickerVisto, modoEfectivo, stopModo, volumen, tpValor, tpModo, stopPct, tamano, coste, velaSetup, maxAnadidos])
   const etiquetaSetup = estr.velasSetup ? `${velaSetup} min` : estr.etiquetaVela
 
   const dirVela1 = VELAS1.find(v => v.id === vela1)?.dir
@@ -936,6 +939,9 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
     conPiramide && tamano !== porDefecto.tamano && {
       id: 'tamano', texto: `Añadidos de ${TAMANOS.find(t => t.id === tamano)?.label}`, quitar: () => setTamano(porDefecto.tamano),
     },
+    conPiramide && maxAnadidos !== porDefecto.maxAnadidos && {
+      id: 'maxAnadidos', texto: `Hasta ${maxAnadidos} añadido${maxAnadidos === 1 ? '' : 's'}`, quitar: () => setMaxAnadidos(porDefecto.maxAnadidos),
+    },
     !estr.tortuga && nivelStop !== porDefecto.nivelStop && {
       id: 'nivel', texto: `Stop ${NIVELES.find(n => n.id === nivelStop)?.label.toLowerCase()}`, quitar: () => setNivelStop(porDefecto.nivelStop),
     },
@@ -963,7 +969,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   const restablecer = () => {
     setModo(porDefecto.modo); setVolumen(porDefecto.volumen); setTamano(porDefecto.tamano)
     setNivelStop(porDefecto.nivelStop); setStopModo(porDefecto.stopModo); setTpModo(porDefecto.tpModo)
-    setCoste(porDefecto.coste); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos); setVelaSetup(porDefecto.velaSetup)
+    setCoste(porDefecto.coste); setMaxAnadidos(porDefecto.maxAnadidos); setVela1(porDefecto.vela1); setAperturaPos(porDefecto.aperturaPos); setVelaSetup(porDefecto.velaSetup)
     setMostradas(POR_PAGINA)
   }
 
@@ -971,7 +977,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
   // volver a esos ajustes sale la que ya se pagó
   const claveRevision = JSON.stringify({
     estrategia: estrategiaId, analizado, modo: modoEfectivo, volumen, tamano, nivelStop, stopModo,
-    tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos, velaSetup,
+    tp: tpValor ?? objetivoN?.id ?? null, coste: Number(coste), vela1, aperturaPos, velaSetup, maxAnadidos,
   })
   const armarExpediente = () => expedienteIntradia({
     estr, nombre: INSTRUMENTOS.find(i => i.value === tickerVisto)?.label ?? tickerVisto,
@@ -980,7 +986,7 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
       ...(estr.velasSetup ? { velaDelSetup: `${velaSetup} min` } : {}),
       operativa: modos.find(m => m.id === modoEfectivo)?.label,
       volumen: volumenes.find(v => v.id === volumen)?.nota,
-      ...(volumen !== 'fijo' ? { anadidos: TAMANOS.find(t => t.id === tamano)?.nota } : {}),
+      ...(volumen !== 'fijo' ? { anadidos: TAMANOS.find(t => t.id === tamano)?.nota, maximoDeAnadidos: maxAnadidos } : {}),
       ...(!estr.tortuga ? {
         stop: NIVELES.find(n => n.id === nivelStop)?.nota,
         breakEven: STOPS.find(x => x.id === stopModo)?.nota,
@@ -1269,6 +1275,36 @@ export default function EstrategiaSegundaVela({ estrategiaId = 'segunda-vela' })
             </div>
             <p className="estr-explica">
               {conPiramide ? TAMANOS.find(t => t.id === tamano)?.nota : 'Solo cuenta con pirámide: con una unidad no hay añadidos'}
+            </p>
+          </div>
+
+          <div className="filtro-group">
+            <label className="filtro-label">Máximo de añadidos</label>
+            <div className="filtro-presets">
+              <input
+                key={maxAnadidos}
+                className="pag-input filtro-pct"
+                type="number"
+                min={0}
+                max={20}
+                step={1}
+                defaultValue={maxAnadidos}
+                disabled={!conPiramide}
+                title={conPiramide ? 'Unidades que la pirámide puede sumar a la de entrada' : 'Con una sola unidad no hay añadidos'}
+                onFocus={e => e.target.select()}
+                onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                onBlur={e => {
+                  const n = Number(e.target.value)
+                  if (!Number.isInteger(n) || n < 0 || n > 20) { e.target.value = maxAnadidos; return }
+                  setMaxAnadidos(n)
+                  setMostradas(POR_PAGINA)
+                }}
+              />
+            </div>
+            <p className="estr-explica">
+              {!conPiramide ? 'Solo cuenta con pirámide: con una unidad no hay añadidos'
+                : maxAnadidos === 0 ? 'Sin añadidos: se queda en la unidad de entrada'
+                : `Hasta ${maxAnadidos} unidad${maxAnadidos === 1 ? '' : 'es'} más sobre la de entrada: ${maxAnadidos + 1} como mucho`}
             </p>
           </div>
 

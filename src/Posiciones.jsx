@@ -23,14 +23,41 @@ const alStopPts = p => (p.stop == null ? null : (p.stop - p.nivel) * (p.lado ===
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
 const fechaHora = iso => (iso ? new Date(iso.endsWith('Z') ? iso : `${iso}Z`).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—')
 
-// La posición en una regla: a la izquierda el lado del stop y a la derecha el de la ganancia
-// (en una venta, el precio baja hacia la derecha). La zona entre el stop y la entrada es lo
-// que se arriesga (verde si el stop ya asegura ganancia) y el relleno, de la entrada al
-// precio de ahora, lo que va ganando o perdiendo.
-function Regla({ p }) {
-  const signo = p.lado === 'largo' ? 1 : -1
-  const niveles = [p.nivel, p.precio, p.stop].filter(Number.isFinite)
-  if (niveles.length < 2) return null
+// Las posiciones del mismo instrumento y del mismo lado, juntas como un solo trade: el tamaño,
+// el resultado y lo que daría el stop, sumados; la entrada y los puntos, la media por tamaño.
+// Los stops pueden ser distintos (cada sistema de las tortugas lleva el suyo): van todos.
+function juntarEnTrades(posiciones) {
+  const trades = new Map()
+  for (const p of posiciones) {
+    const clave = `${p.epic}|${p.lado}`
+    if (!trades.has(clave)) trades.set(clave, [])
+    trades.get(clave).push(p)
+  }
+  return [...trades.entries()].map(([clave, piezas]) => {
+    const tamano = piezas.reduce((s, p) => s + p.tamano, 0)
+    const media = campo => (piezas.some(p => p[campo] == null) ? null : piezas.reduce((s, p) => s + p[campo] * p.tamano, 0) / tamano)
+    const suma = campo => (piezas.some(p => p[campo] == null) ? null : piezas.reduce((s, p) => s + p[campo], 0))
+    const [p0] = piezas
+    return {
+      clave, piezas, tamano, lado: p0.lado, nombre: p0.nombre ?? p0.ticker ?? p0.epic, epic: p0.epic, mercado: p0.mercado, moneda: p0.moneda,
+      precio: p0.precio, nivel: media('nivel'), puntos: media('puntos'),
+      resultado: suma('resultado'), resultadoEur: suma('resultadoEur'), alStop: suma('alStop'), alStopEur: suma('alStopEur'),
+      bots: [...new Set(piezas.map(p => p.bot ?? 'a mano'))],
+      stops: [...new Set(piezas.map(p => p.stop).filter(Number.isFinite))],
+      sinStop: piezas.filter(p => p.stop == null).length,
+      abierta: piezas.map(p => p.abierta).filter(Boolean).sort()[0] ?? null,
+    }
+  })
+}
+
+// El trade en una regla: a la izquierda el lado del stop y a la derecha el de la ganancia
+// (en una venta, el precio baja hacia la derecha). La zona entre el stop más lejano y la
+// entrada media es lo que se arriesga (verde si el stop ya asegura ganancia) y el relleno,
+// de la entrada al precio de ahora, lo que va ganando o perdiendo.
+function Regla({ t }) {
+  const signo = t.lado === 'largo' ? 1 : -1
+  const niveles = [t.nivel, t.precio, ...t.stops].filter(Number.isFinite)
+  if (niveles.length < 2 || !Number.isFinite(t.nivel)) return null
   const v = niveles.map(n => n * signo)
   let lo = Math.min(...v)
   let hi = Math.max(...v)
@@ -39,30 +66,34 @@ function Regla({ p }) {
   hi += m
   const x = n => ((n * signo - lo) / (hi - lo)) * 100
   const tramo = (a, b) => ({ left: `${Math.min(x(a), x(b))}%`, width: `${Math.abs(x(b) - x(a))}%` })
-  const conStop = Number.isFinite(p.stop)
-  const asegura = conStop && (p.stop - p.nivel) * signo >= 0
-  const gana = (p.puntos ?? 0) >= 0
+  // de izquierda a derecha: el primero es el más lejano del precio
+  const stops = [...t.stops].sort((a, b) => a * signo - b * signo)
+  const conStop = stops.length > 0
+  const asegura = s => (s - t.nivel) * signo >= 0
+  const gana = (t.puntos ?? 0) >= 0
   // las etiquetas no se salen de la regla: cerca de un borde, alineadas hacia dentro
   const sitio = n => {
     const a = x(n)
     return { left: `${a}%`, transform: `translateX(${a < 25 ? '-6px' : a > 75 ? 'calc(6px - 100%)' : '-50%'})` }
   }
-  // si el stop y la entrada están muy juntos, el texto del stop baja una línea
-  const juntos = conStop && Math.abs(x(p.stop) - x(p.nivel)) < 30
-  const resumen = [conStop && `stop ${precio(p.stop)}`, `entrada ${precio(p.nivel)}`, Number.isFinite(p.precio) && `ahora ${precio(p.precio)}`].filter(Boolean).join(' · ')
+  const textoStop = `${stops.length > 1 ? 'stops' : 'stop'} ${stops.map(precio).join(' · ')}`
+  // si el stop y la entrada están muy juntos (o hay varios stops), el texto del stop baja una línea
+  const juntos = conStop && (stops.length > 1 || Math.abs(x(stops[0]) - x(t.nivel)) < 30)
+  const entrada = `${t.piezas.length > 1 ? 'entrada media' : 'entrada'} ${precio(t.nivel)}`
+  const resumen = [conStop && textoStop, entrada, Number.isFinite(t.precio) && `ahora ${precio(t.precio)}`].filter(Boolean).join(' · ')
   return (
     <div className="pos-regla" role="img" aria-label={resumen} title={resumen}>
-      {Number.isFinite(p.precio) && <span className={`pos-regla-ahora-txt ${gana ? 'bot-pos' : 'bot-neg'}`} style={sitio(p.precio)}>ahora {precio(p.precio)}</span>}
+      {Number.isFinite(t.precio) && <span className={`pos-regla-ahora-txt ${gana ? 'bot-pos' : 'bot-neg'}`} style={sitio(t.precio)}>ahora {precio(t.precio)}</span>}
       <div className="pos-regla-pista">
-        {conStop && <span className={`pos-regla-riesgo ${asegura ? 'asegura' : ''}`} style={tramo(p.stop, p.nivel)} />}
-        {Number.isFinite(p.precio) && <span className={`pos-regla-va ${gana ? 'sube' : 'baja'}`} style={tramo(p.nivel, p.precio)} />}
-        {conStop && <span className="pos-regla-marca stop" style={{ left: `${x(p.stop)}%` }} />}
-        <span className="pos-regla-marca entrada" style={{ left: `${x(p.nivel)}%` }} />
-        {Number.isFinite(p.precio) && <span className={`pos-regla-punto ${p.lado}`} style={{ left: `${x(p.precio)}%` }} />}
+        {conStop && <span className={`pos-regla-riesgo ${asegura(stops[0]) ? 'asegura' : ''}`} style={tramo(stops[0], t.nivel)} />}
+        {Number.isFinite(t.precio) && <span className={`pos-regla-va ${gana ? 'sube' : 'baja'}`} style={tramo(t.nivel, t.precio)} />}
+        {stops.map(s => <span key={s} className={`pos-regla-marca stop ${asegura(s) ? 'asegura' : ''}`} style={{ left: `${x(s)}%` }} />)}
+        <span className="pos-regla-marca entrada" style={{ left: `${x(t.nivel)}%` }} />
+        {Number.isFinite(t.precio) && <span className={`pos-regla-punto ${t.lado}`} style={{ left: `${x(t.precio)}%` }} />}
       </div>
       <div className={`pos-regla-pie ${juntos ? 'doble' : ''}`}>
-        {conStop && <span className={`pos-regla-txt ${asegura ? 'bot-pos' : 'bot-neg'} ${juntos ? 'abajo' : ''}`} style={sitio(p.stop)}>stop {precio(p.stop)}</span>}
-        <span className="pos-regla-txt" style={sitio(p.nivel)}>entrada {precio(p.nivel)}</span>
+        {conStop && <span className={`pos-regla-txt ${stops.every(asegura) ? 'bot-pos' : 'bot-neg'} ${juntos ? 'abajo' : ''}`} style={sitio(stops[0])}>{textoStop}</span>}
+        <span className="pos-regla-txt" style={sitio(t.nivel)}>{entrada}</span>
       </div>
     </div>
   )
@@ -130,6 +161,7 @@ export default function Posiciones() {
   const resultadoEur = sumaEur(posiciones, 'resultadoEur')
   const alStopEur = sumaEur(posiciones, 'alStopEur')
   const sinStop = posiciones.filter(p => p.stop == null).length
+  const trades = juntarEnTrades(posiciones)
   // en % del saldo (la cuenta va en €)
   const delSaldo = eur => (eur != null && cuenta?.saldo > 0 && cuenta.moneda === 'EUR' ? `${eur > 0 ? '+' : ''}${num(100 * eur / cuenta.saldo, 2)}% del saldo` : null)
   // En €, con el cambio de IG; si falta el cambio, en la moneda del instrumento. `enMoneda`, lo
@@ -148,7 +180,7 @@ export default function Posiciones() {
         {error && <p className="bot-error">{error}</p>}
 
         <div className="bot-tarjeta-datos">
-          <div className="bot-dato"><span>Posiciones</span><b className="bot-tile-valor">{posiciones.length}</b></div>
+          <div className="bot-dato"><span>Posiciones</span><b className="bot-tile-valor">{posiciones.length}</b>{trades.length < posiciones.length && <small>en {trades.length} trades</small>}</div>
           <div className="bot-dato"><span>Resultado abierto</span><b className={`bot-tile-valor ${tono(resultadoEur)}`}>{dinero(resultadoEur, '€')}</b>{delSaldo(resultadoEur) && <small>{delSaldo(resultadoEur)}</small>}</div>
           <div className="bot-dato" title="Lo que daría cerrar todo en sus stops, desde la entrada (sin contar el deslizamiento ni los huecos)">
             <span>Si saltan los stops</span><b className={`bot-tile-valor ${tono(alStopEur)}`}>{dinero(alStopEur, '€')}</b>
@@ -168,40 +200,65 @@ export default function Posiciones() {
 
         {posiciones.length === 0 ? <p className="bot-nota">No hay ninguna posición abierta.</p> : vista === 'tarjetas' ? (
           <div className="pos-tarjetas">
-            {posiciones.map(p => {
-              const moneda = enMoneda(p.resultadoEur, p.resultado, p.moneda)
-              const cerrado = p.mercado && p.mercado !== 'TRADEABLE'
+            {trades.map(t => {
+              const moneda = enMoneda(t.resultadoEur, t.resultado, t.moneda)
+              const cerrado = t.mercado && t.mercado !== 'TRADEABLE'
+              const signo = t.lado === 'largo' ? 1 : -1
+              // el stop que saltaría primero: el más cercano al precio
+              const primerStop = t.stops.length ? t.stops.reduce((a, b) => (b * signo > a * signo ? b : a)) : null
+              const varias = t.piezas.length > 1
               return (
-                <article key={p.dealId} className={`pos-tarjeta ${p.lado}`}>
+                <article key={t.clave} className={`pos-tarjeta ${t.lado}`}>
                   <div className="pos-tarjeta-cab">
                     <div className="pos-tarjeta-nombre">
-                      <strong>{p.nombre ?? p.ticker ?? p.epic}</strong>
+                      <strong>{t.nombre}</strong>
                       <div className="bot-tarjeta-titulo">
-                        <span className={`bot-pill ${p.lado}`}>{p.lado === 'largo' ? 'Compra' : 'Venta'} · {num(p.tamano, 2)}</span>
-                        <span className="bot-pill">{p.bot ?? 'a mano'}</span>
-                        {cerrado && <span className="bot-pill">{p.mercado === 'CLOSED' ? 'mercado cerrado' : p.mercado.toLowerCase()}</span>}
-                        {p.stop == null && <span className="bot-pill pos-sin-stop">sin stop</span>}
+                        <span className={`bot-pill ${t.lado}`}>{t.lado === 'largo' ? 'Compra' : 'Venta'} · {num(t.tamano, 2)}</span>
+                        {t.bots.map(b => <span key={b} className="bot-pill">{b}</span>)}
+                        {varias && <span className="bot-pill">{t.piezas.length} entradas</span>}
+                        {cerrado && <span className="bot-pill">{t.mercado === 'CLOSED' ? 'mercado cerrado' : t.mercado.toLowerCase()}</span>}
+                        {t.sinStop > 0 && <span className="bot-pill pos-sin-stop">{varias ? `${t.sinStop} sin stop` : 'sin stop'}</span>}
                       </div>
                     </div>
                     <div className="bot-tarjeta-resultado">
-                      <span className={`bot-grande ${tono(p.resultado)}`}>{enEur(p.resultadoEur, p.resultado, p.moneda)}</span>
-                      <small>{[`${pts(p.puntos, p.nivel)} pts`, moneda, delSaldo(p.resultadoEur)].filter(Boolean).join(' · ')}</small>
+                      <span className={`bot-grande ${tono(t.resultado)}`}>{enEur(t.resultadoEur, t.resultado, t.moneda)}</span>
+                      <small>{[`${pts(t.puntos, t.nivel)} pts${varias ? ' de media' : ''}`, moneda, delSaldo(t.resultadoEur)].filter(Boolean).join(' · ')}</small>
                     </div>
                   </div>
-                  <Regla p={p} />
+                  <Regla t={t} />
                   <div className="bot-tarjeta-datos">
-                    <div className="bot-dato" title="Lo que daría si saltara el stop, desde la entrada (sin contar el deslizamiento)">
-                      <span>Si salta el stop</span>
-                      <b className={p.stop == null ? 'bot-neg' : tono(p.alStop)}>{p.stop == null ? 'sin límite' : enEur(p.alStopEur, p.alStop, p.moneda)}</b>
-                      {p.stop != null && <small>{[delSaldo(p.alStopEur), `${pts(alStopPts(p), p.nivel)} pts`].filter(Boolean).join(' · ')}</small>}
+                    <div className="bot-dato" title="Lo que daría si saltaran los stops, desde la entrada (sin contar el deslizamiento)">
+                      <span>{varias ? 'Si saltan los stops' : 'Si salta el stop'}</span>
+                      <b className={t.sinStop ? 'bot-neg' : tono(t.alStop)}>{t.sinStop ? 'sin límite' : enEur(t.alStopEur, t.alStop, t.moneda)}</b>
+                      {!t.sinStop && <small>{[delSaldo(t.alStopEur), !varias && `${pts(alStopPts(t.piezas[0]), t.nivel)} pts`].filter(Boolean).join(' · ')}</small>}
                     </div>
-                    {p.stop != null && Number.isFinite(p.precio) && (
-                      <div className="bot-dato" title="Lo que tiene que moverse el precio de ahora para tocar el stop">
-                        <span>Al stop</span><b>{num(Math.abs(p.precio - p.stop), decimales(p.nivel))} pts</b><small>{num(100 * Math.abs(p.precio - p.stop) / p.precio, 2)}% del precio</small>
+                    {primerStop != null && Number.isFinite(t.precio) && (
+                      <div className="bot-dato" title="Lo que tiene que moverse el precio de ahora para tocar el stop más cercano">
+                        <span>Al stop</span><b>{num(Math.abs(t.precio - primerStop), decimales(t.nivel))} pts</b><small>{num(100 * Math.abs(t.precio - primerStop) / t.precio, 2)}% del precio</small>
                       </div>
                     )}
-                    <div className="bot-dato"><span>Abierta</span><b>{fechaHora(p.abierta)}</b><small>{p.epic}</small></div>
+                    <div className="bot-dato"><span>{varias ? 'La primera' : 'Abierta'}</span><b>{fechaHora(t.abierta)}</b><small>{t.epic}</small></div>
                   </div>
+                  {varias && (
+                    <details className="pos-piezas">
+                      <summary>Las {t.piezas.length} entradas</summary>
+                      <table>
+                        <thead><tr><th>Bot</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Resultado</th><th>Abierta</th></tr></thead>
+                        <tbody>
+                          {t.piezas.map(p => (
+                            <tr key={p.dealId}>
+                              <td>{p.bot ?? 'a mano'}</td>
+                              <td className="tor-num">{num(p.tamano, 2)}</td>
+                              <td className="tor-num">{precio(p.nivel)}</td>
+                              <td className={`tor-num ${p.stop == null ? 'bot-neg' : ''}`}>{p.stop == null ? 'sin stop' : precio(p.stop)}</td>
+                              <td className={`tor-num ${tono(p.resultado)}`}>{enEur(p.resultadoEur, p.resultado, p.moneda)}</td>
+                              <td>{fechaHora(p.abierta)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </details>
+                  )}
                 </article>
               )
             })}

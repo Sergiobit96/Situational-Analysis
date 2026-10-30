@@ -341,3 +341,12 @@
 .pos-regla-txt.abajo { top: 1.05rem; }
 .pos-regla-txt.bot-neg { color: var(--red); }
 .pos-regla-txt.bot-pos { color: var(--green); }
+.pos-regla-marca.stop.asegura { background: var(--green); }
+.pos-piezas { border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.pos-piezas summary { cursor: pointer; font-size: 0.78rem; color: var(--muted); }
+.pos-piezas table { width: 100%; margin-top: 0.4rem; border-collapse: collapse; font-size: 0.76rem; font-variant-numeric: tabular-nums; }
+.pos-piezas th { font-size: 0.66rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); text-align: left; padding: 0.2rem 0.4rem; }
+.pos-piezas td { padding: 0.2rem 0.4rem; border-top: 1px solid var(--border); color: var(--text); }
+.pos-piezas .tor-num { text-align: right; }
+.pos-piezas td.bot-pos { color: var(--green); }
+.pos-piezas td.bot-neg { color: var(--red); }

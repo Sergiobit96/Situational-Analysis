@@ -305,3 +305,39 @@
 /* Vista Salud de la pestaña Bots (src/Salud.jsx) */
 .salud-avisos { margin: 0.4rem 0 0; padding-left: 1.2rem; line-height: 1.6; }
 .salud-ojo { color: #f59e0b; }
+
+/* ═══ Posiciones activas: una tarjeta por posición, con su regla stop · entrada · ahora ═══ */
+.pos-vistas { margin: 0.9rem 0 0.6rem; }
+.pos-tarjetas { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 0.8rem; }
+.pos-tarjeta { display: flex; flex-direction: column; gap: 0.7rem; padding: 0.85rem 1rem; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border-strong); border-radius: var(--radius-lg); }
+.pos-tarjeta.largo { border-left-color: var(--long); }
+.pos-tarjeta.corto { border-left-color: var(--short); }
+.pos-tarjeta-cab { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.pos-tarjeta-nombre { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; }
+.pos-tarjeta-nombre strong { font-size: 1rem; }
+.bot-pill.pos-sin-stop { background: rgba(239, 68, 68, 0.16); color: #fca5a5; }
+.pos-tarjeta .bot-tarjeta-datos { gap: 0.5rem 1.2rem; }
+.pos-tarjeta .bot-dato { min-width: 6rem; }
+.pos-tarjeta .bot-dato > b.bot-pos { color: var(--green); }
+.pos-tarjeta .bot-dato > b.bot-neg { color: var(--red); }
+
+.pos-regla { position: relative; padding: 1.15rem 0 0; font-variant-numeric: tabular-nums; }
+.pos-regla-pista { position: relative; height: 10px; border-radius: 5px; background: var(--surface-3); }
+.pos-regla-riesgo { position: absolute; top: 0; bottom: 0; background: rgba(239, 68, 68, 0.22); border-radius: 5px; }
+.pos-regla-riesgo.asegura { background: rgba(34, 197, 94, 0.18); }
+.pos-regla-va { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; }
+.pos-regla-va.sube { background: var(--green); }
+.pos-regla-va.baja { background: var(--red); }
+.pos-regla-marca { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 1px; }
+.pos-regla-marca.stop { background: var(--red); }
+.pos-regla-marca.entrada { background: var(--text); }
+.pos-regla-punto { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; border: 2px solid var(--surface); background: var(--text); }
+.pos-regla-punto.largo { background: var(--long); }
+.pos-regla-punto.corto { background: var(--short); }
+.pos-regla-ahora-txt { position: absolute; top: 0; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+.pos-regla-pie { position: relative; height: 1.25rem; margin-top: 0.3rem; }
+.pos-regla-pie.doble { height: 2.3rem; }
+.pos-regla-txt { position: absolute; top: 0; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.pos-regla-txt.abajo { top: 1.05rem; }
+.pos-regla-txt.bot-neg { color: var(--red); }
+.pos-regla-txt.bot-pos { color: var(--green); }

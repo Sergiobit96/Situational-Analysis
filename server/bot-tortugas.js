@@ -142,6 +142,8 @@ export const CONFIG_TORTUGAS_BOT = {
   instrumentos: Object.fromEntries(Object.keys(GRUPOS_TORTUGAS).map(t => [t, true])),
   sistemas:     [1, 2],     // los que juega, a la vez y con el capital a partes iguales
   filtroS1:     false,      // true: el Sistema 1 se salta la ruptura de 20 si la anterior habría ganado y entra en la de 55
+  s2ConS1:      false,      // false (regla del usuario, 30-oct-2026): el Sistema 2 no entra en un mercado en el que ya está
+                            // el 1, así que un mercado arriesga como mucho el riesgoPct del S1; true: entra igualmente
   lados:        'largos',   // largos | ambos | cortos
   riesgoPct:    1,          // lo más que pierde una pirámide hasta el stop, en % del saldo (en cada sistema: todo el capital);
                             // 1 N por unidad cuesta riesgoPct / picoPiramide(maxUnidades): con 6 unidades, 0,2 (como el backtest)
@@ -156,7 +158,7 @@ export const CONFIG_TORTUGAS_BOT = {
 
 // Lo de la configuración que cambia qué operaciones hace el backtest de cada mercado: sus
 // cambios se apuntan con la hora (cambiosConfig) para compararlo tramo a tramo
-export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 'lados', 'maxUnidades', 'anadido']
+export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 's2ConS1', 'lados', 'maxUnidades', 'anadido']
 
 export const PASO_N = 0.5          // N entre añadidos
 export const STOP_N = 2            // N hasta el stop desde el último relleno
@@ -313,6 +315,7 @@ const DESCRIBIR = {
   activo:      v => (v ? 'Bot de las tortugas encendido' : 'Bot de las tortugas apagado'),
   sistemas:    describirSistemas,
   filtroS1:    v => (v ? 'Filtro del Sistema 1: si la ruptura anterior habría ganado, espera a la de 55' : 'Sistema 1 sin filtro: entra en toda ruptura de 20'),
+  s2ConS1:     v => (v ? 'El Sistema 2 entra aunque el 1 ya esté en el mercado' : 'El Sistema 2 no entra en un mercado en el que ya está el 1'),
   lados:       v => `Lados: ${{ largos: 'solo largos', ambos: 'largos y cortos', cortos: 'solo cortos' }[v]}`,
   riesgoPct:   v => `Riesgo: una pirámide pierde como mucho el ${String(v).replace('.', ',')}% del saldo si salta su stop`,
   anadido:     v => `Cada añadido, de ${v === 1 ? 'una unidad' : 'media unidad'}`,
@@ -338,6 +341,11 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     config.instrumentos = { ...CONFIG_TORTUGAS_BOT.instrumentos, ...config.instrumentos }
     datos = { ...datos, ...leido, config }
     delete datos.config.sistema
+    // Hasta el 30-oct-2026 el Sistema 2 entraba aunque el 1 estuviera dentro: se apunta el
+    // cambio, para que la comparación con el backtest juegue lo de antes con la regla de antes
+    if (leido.config && !('s2ConS1' in leido.config)) {
+      datos.cambiosConfig = [...(datos.cambiosConfig ?? []), { hora: new Date(ahora() * 1000).toISOString(), antes: { s2ConS1: true }, despues: { s2ConS1: false } }]
+    }
     // Los registros de antes de jugar los dos sistemas: las posiciones e intentos iban por
     // índice y eran del sistema elegido; los planes no traían los dos sistemas y se rehacen
     const sistemaViejo = Number(leido.config?.sistema) || 1
@@ -579,6 +587,13 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
       sp.bloqueado = `señal doble con el Sistema ${otro}`
       noEntro(ses.fecha, ticker, sistema, lado, `señal doble: el Sistema ${otro} ya estaba dentro`)
       apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: el Sistema ${otro} ya ${lado === 'largo' ? 'compró' : 'vendió'} a menos de ½ N de ${px(precio)} (señal doble, se ejecuta una sola vez)`, { sistema })
+      return
+    }
+    // el Sistema 2 no entra donde ya está el 1 (con su posición o con su orden sin confirmar)
+    if (sistema === 2 && !datos.config.s2ConS1 && (datos.posiciones[claveDe(ticker, 1)] || datos.intentos[claveDe(ticker, 1)])) {
+      sp.bloqueado = 'el Sistema 1 ya está dentro'
+      noEntro(ses.fecha, ticker, sistema, lado, 'el Sistema 1 ya está en este mercado')
+      apuntar(ticker, `Ruptura de ${px(nivel)}, pero no entra: el Sistema 1 ya está en este mercado (el 2 solo entra donde no está el 1)`, { sistema })
       return
     }
     const cuenta = await cuentaDeAhora(plan)
@@ -1069,6 +1084,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if ('maxSentido' in cambios) entero('maxSentido', 1, 50, 'Unidades por sentido: de 1 a 50')
     if ('reduccionDD' in cambios) c.reduccionDD = !!cambios.reduccionDD
     if ('filtroS1' in cambios) c.filtroS1 = !!cambios.filtroS1
+    if ('s2ConS1' in cambios) c.s2ConS1 = !!cambios.s2ConS1
     if ('margenNoticias' in cambios) {
       const v = cambios.margenNoticias === null || cambios.margenNoticias === '' ? null : Number(cambios.margenNoticias)
       if (v !== null && !(v >= 1 && v <= 120)) throw new Error('Margen de las noticias entre 1 y 120 min, o ninguno')
@@ -1095,6 +1111,31 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
     if (lineas.length) avisarSinFallar(`Tortugas · ${lineas.join('\n')}`)
     despertar()
     return c
+  }
+
+  // Aprieta a mano el stop de todas las unidades de una posición (en IG y en el registro).
+  // Solo hacia el lado de la ganancia: aflojarlo es arriesgar más de lo que dicen las reglas
+  async function apretarStop(ticker, sistema, nivel) {
+    const stop = Number(nivel)
+    if (!Number.isFinite(stop)) throw new Error('Stop sin nivel')
+    return encolar(async () => {
+      const pos = datos.posiciones[claveDe(ticker, Number(sistema))]
+      if (!pos) throw new Error(`El Sistema ${sistema} no tiene posición en ${nombreDe(ticker)}`)
+      const d = dir(pos.lado)
+      if (pos.stop != null && d * (stop - pos.stop) <= 0) throw new Error(`Solo se aprieta: el stop está en ${px(pos.stop)} y ${px(stop)} arriesga más`)
+      const m = await ig.operar.datosMercado(ticker, pos.epic)
+      const precio = pos.lado === 'largo' ? m.bid : m.oferta
+      if (precio != null && d * (precio - stop) <= 0) throw new Error(`El precio (${px(precio)}) ya está al otro lado de ${px(stop)}`)
+      const antes = pos.stop
+      let texto
+      try {
+        const fallos = await moverStops(pos, stop)
+        texto = fallos.length ? `IG no deja apretar el stop a ${px(stop)} (${fallos[0]})` : `Stop apretado a mano de ${px(antes)} a ${px(stop)}`
+      } catch (err) { texto = err.message }
+      apuntar(ticker, texto, { sistema: pos.sistema })
+      guardar()
+      return { stop: pos.stop, texto }
+    })
   }
 
   // Apaga el bot y cierra todo lo que tenga abierto
@@ -1136,7 +1177,7 @@ export function crearBotTortugas({ ig, velasDiarias, archivo, ahora = () => Math
   }
 
   return {
-    arrancar, parar, estado, cambiarConfig, pararYCerrar,
+    arrancar, parar, estado, cambiarConfig, pararYCerrar, apretarStop,
     latido: () => ({ enMarcha: reloj !== null, desde: arrancadoEn, ultimaVuelta }),
     // un paso del bucle sin el temporizador (para las pruebas): por la misma cola y guardando
     _paso: () => encolar(async () => { try { await paso() } finally { guardar() } }),

@@ -18,7 +18,7 @@ export function backtestDelBot(ticker, velas, config, { stopN = 2, paso = 0.5 } 
     velas.map(([date, open, high, low, close]) => ({ date, open, high, low, close })))
   const sistemas = config.sistemas ?? [1, 2]
   const res = backtestTortugas([m], null, {
-    sistema: sistemas.length > 1 ? '1+2' : sistemas[0], comoBot: true, filtroS1: !!config.filtroS1,
+    sistema: sistemas.length > 1 ? '1+2' : sistemas[0], comoBot: true, filtroS1: !!config.filtroS1, s2ConS1: config.s2ConS1 ?? true,
     lados: config.lados ?? 'ambos', maxUnidades: config.maxUnidades ?? 4, anadido: config.anadido ?? 1,
     stopN, paso, maxGrupo: Infinity, maxSentido: Infinity, apalancamiento: 0,
     deslizN: 0, financiacion: false, reduccionDD: false, comisiones: false, media: 0, desde: '1900-01-01',
@@ -33,9 +33,10 @@ export function backtestDelBot(ticker, velas, config, { stopN = 2, paso = 0.5 } 
 
 // Lo de la configuración del bot que cambia qué operaciones hace el backtest (como
 // CLAVES_BACKTEST en server/bot-tortugas.js, que apunta sus cambios en cambiosConfig)
-export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 'lados', 'maxUnidades', 'anadido']
+export const CLAVES_BACKTEST = ['sistemas', 'filtroS1', 's2ConS1', 'lados', 'maxUnidades', 'anadido']
 const fechaMadrid = iso => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Madrid' })
-const soloClaves = c => Object.fromEntries(CLAVES_BACKTEST.map(k => [k, c[k]]))
+// (sin las que no traiga: s2ConS1 llegó el 30-oct-2026, y sin ella el backtest juega la regla de antes)
+const soloClaves = c => Object.fromEntries(CLAVES_BACKTEST.filter(k => c[k] !== undefined).map(k => [k, c[k]]))
 
 // Las configuraciones que ha tenido el bot, de la primera a la de ahora: [{ desde, config }],
 // la primera con `desde` null. Cada cambio apuntado empieza un tramo el día (de Madrid) en que

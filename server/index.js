@@ -3830,6 +3830,14 @@ app.put('/api/bot/tortugas/config', (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }) }
 })
 
+// Aprieta a mano el stop de una posición del bot: { ticker, sistema, stop }
+app.post('/api/bot/tortugas/stop', async (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  const { ticker, sistema, stop } = req.body ?? {}
+  try { res.json(await botTortugas.apretarStop(ticker, sistema, stop)) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+
 app.post('/api/bot/tortugas/parar', async (req, res) => {
   if (!botTortugas) return sinBot(res)
   try { res.json(await botTortugas.pararYCerrar()) }

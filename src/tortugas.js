@@ -93,10 +93,14 @@ export const sistemasDe = sistema => (sistema === '1+2' ? [1, 2] : [sistema])
 // en la de 20, o en la de 55 si la anterior habría ganado, y el 2 en la de 55. Juntos, la que
 // el 1 se salta la coge el 2, siempre que el 1 no esté dentro.
 // Con `comoBot`, juntos como el bot (server/bot-tortugas.js): los dos siempre en marcha, el 2
-// en la de 55 y el 1 en la de 20, o en la de 55 con `filtroS1` si la anterior habría ganado.
+// en la de 55 y el 1 en la de 20, o en la de 55 con `filtroS1` si la anterior habría ganado;
+// con `s2ConS1` en false, el 2 no entra mientras el 1 esté dentro.
 function entradaDe(cfg, e, s) {
   if (cfg.sistema !== '1+2') return s === 2 || e.gano ? 55 : 20
-  if (cfg.comoBot) return s === 2 || (cfg.filtroS1 && e.gano) ? 55 : 20
+  if (cfg.comoBot) {
+    if (s === 2 && cfg.s2ConS1 === false && e.pos[1]) return null
+    return s === 2 || (cfg.filtroS1 && e.gano) ? 55 : 20
+  }
   if (s === 1) return e.gano ? null : 20
   return e.gano && !e.pos[1] ? 55 : null
 }

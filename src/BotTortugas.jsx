@@ -300,6 +300,12 @@ export default function BotTortugas() {
               <option value="si">Sí: si la anterior habría ganado, espera a la de 55</option>
             </select>
           </label>
+          <label>Sistema 2 con el 1 dentro
+            <select value={editando.s2ConS1 ? 'si' : 'no'} onChange={e => cambiar('s2ConS1', e.target.value === 'si')}>
+              <option value="no">No entra: un mercado arriesga como mucho lo del S1</option>
+              <option value="si">Entra igualmente</option>
+            </select>
+          </label>
           <label>Lados
             <select value={editando.lados} onChange={e => cambiar('lados', e.target.value)}>
               <option value="largos">Solo largos</option>
@@ -344,7 +350,7 @@ export default function BotTortugas() {
         <p className="bot-nota">
           Como las tortugas, juega los dos sistemas a la vez: el 1 entra al romper 20 sesiones y sale al romper 10 ({editando.filtroS1 ? 'con el filtro: si la ruptura anterior habría ganado, espera a la de 55' : 'sin el filtro de la ruptura anterior'}); el 2 entra en 55 y sale en 20.
           Cada entrada va con todo el capital, y cada sistema lleva sus propias posiciones y límites, así que con los dos llenos se arriesga el doble que con uno solo; el tope de nominal ({reglas.apalancamiento} veces el saldo) cuenta los dos.
-          Pero van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene en ese mercado una unidad del mismo sentido a menos de {num(reglas.pasoN, 1)} N), solo se ejecuta una vez.
+          {editando.s2ConS1 ? '' : 'El 2 no entra en un mercado en el que ya está el 1, así que un mercado arriesga como mucho una pirámide. '}Y van como uno: si los dos dan la señal a precios parecidos (el otro ya tiene en ese mercado una unidad del mismo sentido a menos de {num(reglas.pasoN, 1)} N), solo se ejecuta una vez.
           Ese % es lo más que pierde una pirámide si salta su stop, en su peor punto ({num(picoN, 1)} N con estas unidades): una unidad es el tamaño con el que un movimiento de 1 N (el ATR de 20 sesiones) cuesta un {num(porN, 2)}% del saldo; el stop va a {reglas.stopN} N del último relleno, así que una unidad recién entrada arriesga el doble.
           Con estos límites caben {peor.unidades} unidades por sentido en cada sistema: 1 N en contra de todas las de un sentido costaría un {num(peor.unidades * porN * config.sistemas.length, 1)}% del saldo, y si saltaran a la vez todos sus stops, hasta un {num(peorPct, 1)}%{config.lados === 'ambos' ? ' (con largos y cortos, cada sentido por su lado)' : ''}
           (no el doble, porque el stop de cada pirámide sube con cada añadido; sin contar los huecos, que pueden pasar el stop).
@@ -355,8 +361,8 @@ export default function BotTortugas() {
           Los avisos van al mismo Telegram que el bot SRS (se conecta en esa pestaña), y los contratos son los mismos: el «Ensayo de órdenes» de esa pestaña los prueba. Un cambio de sistemas, filtro, lados, riesgo, unidades o añadido rehace los planes de todos los índices.
         </p>
         <button className="diario-boton" disabled={ocupado || !form} onClick={() => {
-          const { sistemas, filtroS1, lados: l, riesgoPct, anadido, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias } = form
-          guardarConfig({ sistemas, filtroS1: !!filtroS1, lados: l, riesgoPct, anadido: anadido ?? 1, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
+          const { sistemas, filtroS1, s2ConS1, lados: l, riesgoPct, anadido, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias } = form
+          guardarConfig({ sistemas, filtroS1: !!filtroS1, s2ConS1: !!s2ConS1, lados: l, riesgoPct, anadido: anadido ?? 1, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
     </div>
@@ -478,6 +484,7 @@ function useBacktestDelBot(diarios, claveTickers, claveCfg) {
 const describirTramo = c => [
   c.sistemas.length > 1 ? 'los Sistemas 1 y 2 como uno' : `solo el Sistema ${c.sistemas[0]}`,
   ...(c.sistemas.includes(1) ? [`${c.filtroS1 ? 'con' : 'sin'} el filtro del S1`] : []),
+  ...(c.sistemas.length > 1 && c.s2ConS1 === false ? ['el S2 solo donde no está el S1'] : []),
   { largos: 'solo largos', cortos: 'solo cortos', ambos: 'largos y cortos' }[c.lados] ?? c.lados,
   `${c.maxUnidades} unidades`, ...(c.anadido === 0.5 ? ['añadidos de media unidad'] : []),
 ].join(', ')

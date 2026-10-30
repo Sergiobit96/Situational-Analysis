@@ -642,10 +642,10 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con todo el c
     assert.ok(posicion(bot, '^GDAXI', 1))
     assert.equal(posicion(bot, '^GDAXI', 2), null)
 
-    // rompe 55 lejos de la unidad del 1 (con una sola unidad, el 1 no añade): entra también el
-    // Sistema 2, en una posición aparte
+    // rompe 55 lejos de la unidad del 1 (con una sola unidad, el 1 no añade): con `s2ConS1`
+    // entra también el Sistema 2, en una posición aparte
     // (con una unidad el pico de la pirámide es 2 N: un 2% deja 1 N en el 1%, como antes)
-    bot.cambiarConfig({ maxUnidades: 1, riesgoPct: 2 })
+    bot.cambiarConfig({ maxUnidades: 1, riesgoPct: 2, s2ConS1: true })
     ig.precios['^GDAXI'] = [25_405, 25_406]
     vela1m('^GDAXI', fra(11, 23, 11), 25_406, 25_390)
     enHora(fra(11, 23, 11, 0, 20)); await bot._paso()
@@ -659,6 +659,66 @@ test('juega los dos sistemas a la vez: cada uno entra en su canal, con todo el c
     // dos órdenes (la entrada de cada uno), cada una su posición en IG
     assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 2)
     assert.equal(new Set([...posicion(bot, '^GDAXI', 1).unidades, ...s2.unidades].map(u => u.dealId)).size, 2)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('por defecto el Sistema 2 no entra en un mercado en el que ya está el 1', async () => {
+  const diario = diarioPlano(25_000, 150, '2026-11-20')
+  diario[diario.length - 40] = { ...diario[diario.length - 40], high: 25_400 }
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora, avisos } = botDePrueba(ig, { '^GDAXI': diario }, { ...soloDax, maxUnidades: 1 })
+  try {
+    assert.equal(bot._datos().config.s2ConS1, false)
+    enHora(fra(11, 23, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_160, 25_161]
+    vela1m('^GDAXI', fra(11, 23, 10), 25_161, 25_140)
+    enHora(fra(11, 23, 10, 0, 20)); await bot._paso()
+    assert.ok(posicion(bot, '^GDAXI', 1))
+    // rompe 55 lejos de la unidad del 1: no es señal doble, pero el 1 ya está dentro
+    ig.precios['^GDAXI'] = [25_405, 25_406]
+    vela1m('^GDAXI', fra(11, 23, 11), 25_406, 25_390)
+    enHora(fra(11, 23, 11, 0, 20)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI', 2), null)
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'abrir').length, 1)
+    assert.ok(avisos.some(a => /^Tortugas S2 · DAX · .*el Sistema 1 ya está en este mercado/.test(a)))
+    assert.ok(bot.estado().sinEntrar.some(x => x.sistema === 2 && /Sistema 1 ya está/.test(x.motivo)))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('un registro de antes de la regla del S2 la apunta como cambio de configuración', async () => {
+  const ig = igFalso({})
+  const { bot, dir, enHora, archivo } = botDePrueba(ig, {}, soloDax)
+  try {
+    bot.parar()
+    const viejo = JSON.parse(readFileSync(archivo, 'utf8'))
+    delete viejo.config.s2ConS1
+    writeFileSync(archivo, JSON.stringify(viejo))
+    enHora(fra(10, 30, 12))
+    const otra = crearBotTortugas({ ig, archivo, ahora: () => fra(10, 30, 12), velasDiarias: async () => [], log: () => {}, revisarCadaMs: 0 })
+    assert.equal(otra.estado().config.s2ConS1, false)
+    assert.deepEqual(otra.estado().cambiosConfig.at(-1), { hora: new Date(fra(10, 30, 12) * 1000).toISOString(), antes: { s2ConS1: true }, despues: { s2ConS1: false } })
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('el stop de una posición se aprieta a mano en IG y en el registro, pero no se afloja', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora, avisos } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-11-20') }, soloDax)
+  try {
+    enHora(fra(11, 23, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_160, 25_161]
+    vela1m('^GDAXI', fra(11, 23, 10), 25_161, 25_140)
+    enHora(fra(11, 23, 10, 0, 20)); await bot._paso()
+    const pos = posicion(bot, '^GDAXI', 1)
+    const antes = pos.stop
+    await assert.rejects(bot.apretarStop('^GDAXI', 1, antes - 10), /Solo se aprieta/)
+    await assert.rejects(bot.apretarStop('^GDAXI', 2, antes + 10), /no tiene posición/)
+    await assert.rejects(bot.apretarStop('^GDAXI', 1, 25_200), /al otro lado/)
+    const r = await bot.apretarStop('^GDAXI', 1, antes + 100)
+    assert.equal(r.stop, antes + 100)
+    assert.equal(posicion(bot, '^GDAXI', 1).stop, antes + 100)
+    assert.ok(posicion(bot, '^GDAXI', 1).unidades.every(u => u.stop === antes + 100))
+    assert.ok(ig.ordenes.some(o => o.tipo === 'stop' && o.stop === antes + 100))
+    assert.ok(avisos.some(a => /Stop apretado a mano/.test(a)))
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

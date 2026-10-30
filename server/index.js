@@ -28,7 +28,7 @@ import { crearConciliacion } from './conciliacion.js'
 import { crearResumenDiario } from './resumen-diario.js'
 import { VERSION_EXCURSION, claveExcursion, tramoDe, calcularExcursion, ladoDe, aUtc } from './excursiones.js'
 import { INDICE_YAHOO, INDICE_YAHOO_CSV, DIARIOS_YAHOO, DIARIOS_STOOQ, parsearCsvYahoo, parsearDiarioYahoo, parsearDiarioStooq, velasYahooDeOperacion } from './velas-yahoo.js'
-import { crearAccionesEeuu, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
+import { crearAccionesEeuu, decodificarSerie, SP500, MAX_POR_PETICION as MAX_ACCIONES_PETICION } from './acciones-eeuu.js'
 import { crearFuturosTortugas } from './futuros-tortugas.js'
 import { crearColaFeed } from './cola-feed.js'
 import { gzipSync } from 'zlib'
@@ -42,6 +42,8 @@ import PptxGenJS from 'pptxgenjs'
 import multer from 'multer'
 import { GoogleAuth } from 'google-auth-library'
 import { avisosDeSalud } from './salud.js'
+import { crearAlpaca } from './alpaca.js'
+import { crearBotTortugasAcciones } from './bot-tortugas-acciones.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -3556,6 +3558,49 @@ app.post('/api/bot/ensayo', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ── Alpaca (server/alpaca.js): la cuenta paper, sus posiciones y órdenes, y órdenes a mano ──
+// Bajo /api/bot para que en producción pida la misma clave. Ningún bot opera aquí todavía.
+// La cuenta real solo con ALPACA_REAL=1.
+const alpaca = crearAlpaca({ clave: process.env.ALPACA_API_KEY, secreto: process.env.ALPACA_SECRET_KEY, paper: process.env.ALPACA_REAL !== '1' })
+const conAlpaca = hacer => async (req, res) => {
+  if (!alpaca) return res.status(404).json({ error: 'Alpaca no está configurado (faltan ALPACA_API_KEY y ALPACA_SECRET_KEY)' })
+  try { res.json(await hacer(req)) }
+  catch (err) { res.status(/^Alpaca 4|no válid|Falta|tiene que|Pon la|solo pueden/.test(err.message) ? 400 : 500).json({ error: err.message }) }
+}
+app.get('/api/bot/alpaca', conAlpaca(async () => {
+  const [cuenta, reloj, posiciones, ordenes] = await Promise.all([alpaca.cuenta(), alpaca.reloj(), alpaca.posiciones(), alpaca.ordenes()])
+  return { paper: alpaca.paper, cuenta, reloj, posiciones, ordenes }
+}))
+app.post('/api/bot/alpaca/orden', conAlpaca(req => alpaca.enviarOrden(req.body ?? {})))
+app.delete('/api/bot/alpaca/orden/:id', conAlpaca(req => alpaca.cancelarOrden(req.params.id)))
+app.delete('/api/bot/alpaca/posicion/:simbolo', conAlpaca(req => alpaca.cerrarPosicion(req.params.simbolo)))
+
+// ── Tortugas en las acciones del S&P 500, en la cuenta paper de Alpaca (server/bot-tortugas-acciones.js) ──
+// Los niveles salen del diario de Yahoo del backtest (accionesEeuu); opera donde BOT_OPERA=1 y nace apagado.
+const BOT_TORTUGAS_ACCIONES_PATH = process.env.BOT_TORTUGAS_ACCIONES || join(dirname(BOT_PATH), PRODUCCION ? 'bot-tortugas-acciones.json' : 'Bot Tortugas acciones.json')
+const botTortugasAcciones = alpaca?.paper ? crearBotTortugasAcciones({
+  alpaca, universo: SP500.acciones, archivo: BOT_TORTUGAS_ACCIONES_PATH,
+  velasDiarias: async (tickers, desde) => {
+    const { series, fallos } = await accionesEeuu.series(tickers, { desde })
+    return { velas: Object.fromEntries(series.map(x => [x.ticker, decodificarSerie(x)])), fallos: Object.fromEntries(fallos.map(x => [x.ticker, x.error])) }
+  },
+  avisar: BOT_OPERA ? telegram.enviar : undefined,
+}) : null
+if (botTortugasAcciones && BOT_OPERA) botTortugasAcciones.arrancar()
+if (botTortugasAcciones) console.log(`[tortugas acciones] registro en ${BOT_TORTUGAS_ACCIONES_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+const conTortugasAcciones = hacer => async (req, res) => {
+  if (!botTortugasAcciones) return res.status(404).json({ error: 'Hacen falta las claves de la cuenta paper de Alpaca (ALPACA_API_KEY y ALPACA_SECRET_KEY)' })
+  try { res.json(await hacer(req)) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+}
+app.get('/api/bot/tortugas-acciones', conTortugasAcciones(async () => {
+  // con el precio de ahora de lo abierto y de lo que está más cerca de romper
+  const precios = await alpaca.precios(botTortugasAcciones.simbolosVistos()).catch(() => ({}))
+  return { archivo: BOT_TORTUGAS_ACCIONES_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ...botTortugasAcciones.estado({ precios }) }
+}))
+app.put('/api/bot/tortugas-acciones/config', conTortugasAcciones(req => botTortugasAcciones.cambiarConfig(req.body ?? {})))
+app.post('/api/bot/tortugas-acciones/parar', conTortugasAcciones(() => botTortugasAcciones.pararYCerrar()))
+
 // ── Bot de la Rule of 4 en la demo de IG (RULE_OF_4 en server/bot-srs.js) ──
 // El motor del SRS en los días del FOMC: la cuarta vela de 10 min desde el comunicado. Otro
 // bot, con su registro y sus referencias (R4-…), que opera donde opera el SRS (BOT_OPERA=1),
@@ -3730,7 +3775,7 @@ if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT
 // similar), que es el único que puede avisar si se cae el proceso entero. Sin clave: no
 // enseña nada más que esto.
 const vigilancia = crearVigilancia({
-  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
+  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas], ['Tortugas acciones', botTortugasAcciones]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
   avisar: avisarServidor,
 })
 if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)

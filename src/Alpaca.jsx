@@ -148,10 +148,12 @@ export default function Alpaca() {
     return <div className="bot-page">{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</div>
   }
 
-  const { cuenta, reloj, posiciones, ordenes, paper } = datos
+  const { cuenta, reloj, posiciones, ordenes, abiertas: pendientes = [], paper } = datos
   const hoy = cuenta.equity != null && cuenta.equityAyer != null ? cuenta.equity - cuenta.equityAyer : null
   const abierto = posiciones.reduce((s, p) => s + (p.resultado ?? 0), 0)
   const abiertas = ordenes.filter(o => ABIERTA.has(o.estado) || o.patas.some(p => ABIERTA.has(p.estado)))
+  // los stops pendientes que cierran cada posición (sueltos o patas de un OTO)
+  const stopsDe = p => pendientes.flatMap(o => [o, ...o.patas]).filter(o => o.simbolo === p.simbolo && ABIERTA.has(o.estado) && (o.tipo === 'stop' || o.tipo === 'stop_limit') && o.lado === (p.lado === 'largo' ? 'venta' : 'compra'))
   // una orden y sus patas (el stop del OTO), en filas seguidas
   const filas = ordenes.flatMap(o => [o, ...o.patas.map(p => ({ ...p, pata: true }))])
 
@@ -180,7 +182,7 @@ export default function Alpaca() {
         {posiciones.length === 0 ? <p className="bot-nota">No hay ninguna posición abierta.</p> : (
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla">
-              <thead><tr><th>Símbolo</th><th>Lado</th><th className="tor-num">Acciones</th><th className="tor-num">Entrada</th><th className="tor-num">Ahora</th><th className="tor-num">Valor</th><th className="tor-num">Resultado</th><th className="tor-num">Hoy</th><th /></tr></thead>
+              <thead><tr><th>Símbolo</th><th>Lado</th><th className="tor-num">Acciones</th><th className="tor-num">Entrada</th><th className="tor-num">Ahora</th><th className="tor-num">Stop</th><th className="tor-num">Valor</th><th className="tor-num">Resultado</th><th className="tor-num">Hoy</th><th /></tr></thead>
               <tbody>
                 {posiciones.map(p => (
                   <tr key={p.simbolo}>
@@ -189,6 +191,7 @@ export default function Alpaca() {
                     <td className="tor-num">{cantidad(p.cantidad)}</td>
                     <td className="tor-num">{num(p.entrada)}</td>
                     <td className="tor-num">{num(p.precio)}</td>
+                    <td className={`tor-num ${stopsDe(p).length ? '' : 'bot-neg'}`}>{stopsDe(p).length ? stopsDe(p).map(o => num(o.stop)).join(' · ') : 'sin stop'}</td>
                     <td className="tor-num">{num(Math.abs(p.valor ?? 0))}</td>
                     <td className={`tor-num ${tono(p.resultado)}`}>{dinero(p.resultado)} <small>({num(p.resultadoPct)} %)</small></td>
                     <td className={`tor-num ${tono(p.resultadoHoy)}`}>{dinero(p.resultadoHoy)}</td>

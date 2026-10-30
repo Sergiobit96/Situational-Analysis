@@ -3568,8 +3568,8 @@ const conAlpaca = hacer => async (req, res) => {
   catch (err) { res.status(/^Alpaca 4|no válid|Falta|tiene que|Pon la|solo pueden/.test(err.message) ? 400 : 500).json({ error: err.message }) }
 }
 app.get('/api/bot/alpaca', conAlpaca(async () => {
-  const [cuenta, reloj, posiciones, ordenes] = await Promise.all([alpaca.cuenta(), alpaca.reloj(), alpaca.posiciones(), alpaca.ordenes()])
-  return { paper: alpaca.paper, cuenta, reloj, posiciones, ordenes }
+  const [cuenta, reloj, posiciones, ordenes, abiertas] = await Promise.all([alpaca.cuenta(), alpaca.reloj(), alpaca.posiciones(), alpaca.ordenes(), alpaca.ordenesAbiertas()])
+  return { paper: alpaca.paper, cuenta, reloj, posiciones, ordenes, abiertas }
 }))
 app.post('/api/bot/alpaca/orden', conAlpaca(req => alpaca.enviarOrden(req.body ?? {})))
 app.delete('/api/bot/alpaca/orden/:id', conAlpaca(req => alpaca.cancelarOrden(req.params.id)))

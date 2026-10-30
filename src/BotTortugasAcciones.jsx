@@ -165,7 +165,7 @@ export default function BotTortugasAcciones() {
         {cerca.length === 0 ? <p className="bot-nota">Sin plan todavía.</p> : (
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla">
-              <thead><tr><th>Acción</th><th>Sector</th><th>Sistema</th><th>Lado</th><th className="tor-num">Nivel</th><th className="tor-num">Precio</th><th className="tor-num">N</th><th className="tor-num">Falta</th></tr></thead>
+              <thead><tr><th>Acción</th><th>Sector</th><th>Sistema</th><th>Lado</th><th className="tor-num">Nivel</th><th className="tor-num" title={`Con el que entraría: a ${reglas.stopN} N del nivel`}>Stop</th><th className="tor-num">Precio</th><th className="tor-num">N</th><th className="tor-num">Falta</th></tr></thead>
               <tbody>
                 {cerca.slice(0, 25).map(c => (
                   <tr key={`${c.simbolo}|${c.lado}|${c.nivel}`}>
@@ -174,6 +174,7 @@ export default function BotTortugasAcciones() {
                     <td className="bot-celda-texto">{c.sistemas.map(x => `S${x.sistema} (${x.k})`).join(' y ')}</td>
                     <td className="bot-celda-texto">{c.lado}</td>
                     <td className="tor-num">{num(c.nivel)}</td>
+                    <td className="tor-num">{num(c.nivel - dirDe(c.lado) * reglas.stopN * c.n)}</td>
                     <td className="tor-num">{num(c.precio)}</td>
                     <td className="tor-num">{num(c.n)}</td>
                     <td className={`tor-num ${c.faltaN <= 0 ? 'bot-pos' : ''}`}>{c.faltaN <= 0 ? 'rota' : `${num(c.faltaN)} N`}</td>

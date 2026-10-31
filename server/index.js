@@ -3840,6 +3840,7 @@ app.get('/api/bot/salud', (_req, res) => {
 
 // Resumen de los bots para quien no tiene la clave (server/resumen-bots.js): fuera de /api/bot a
 // propósito. Solo lee, sin euros ni saldo, y guardado 30 s para no gastar peticiones de IG.
+const ultimoResumen = { posIg: [], cuentaIg: null, posAlpaca: [], cuentaAlpaca: null }
 const resumenBots = crearCacheResumen(async () => {
   const t = Math.floor(Date.now() / 1000)
   const motorSrs = [['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn]].filter(([, b]) => b)
@@ -3851,11 +3852,12 @@ const resumenBots = crearCacheResumen(async () => {
   const nombres = new Map()
   for (const [, b] of motorSrs) for (const s of b.estado().sesiones) nombres.set(s.ticker, s.nombre)
   for (const m of botTortugas?.estado().mercados ?? []) nombres.set(m.ticker, m.nombre)
+  // si IG o Alpaca no contestan (recién arrancado, p. ej.), lo último que dieron: mejor eso que nada
   const [posIg, cuentaIg, posAlpaca, cuentaAlpaca] = await Promise.all([
-    bot ? ig.operar.posiciones().catch(() => []) : [],
-    bot ? ig.operar.cuenta().catch(() => null) : null,
-    botTortugasAcciones ? alpaca.posiciones().catch(() => []) : [],
-    botTortugasAcciones ? alpaca.cuenta().catch(() => null) : null,
+    bot ? ig.operar.posiciones().then(x => (ultimoResumen.posIg = x)).catch(() => ultimoResumen.posIg) : [],
+    bot ? ig.operar.cuenta().then(x => (x?.saldo != null ? (ultimoResumen.cuentaIg = x) : ultimoResumen.cuentaIg)).catch(() => ultimoResumen.cuentaIg) : null,
+    botTortugasAcciones ? alpaca.posiciones().then(x => (ultimoResumen.posAlpaca = x)).catch(() => ultimoResumen.posAlpaca) : [],
+    botTortugasAcciones ? alpaca.cuenta().then(x => (ultimoResumen.cuentaAlpaca = x)).catch(() => ultimoResumen.cuentaAlpaca) : null,
   ])
   // IG da el resultado en la moneda de cada posición (yenes en el USD/JPY): a euros, como el saldo
   const cambios = {}

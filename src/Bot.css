@@ -350,3 +350,9 @@
 .pos-piezas .tor-num { text-align: right; }
 .pos-piezas td.bot-pos { color: var(--green); }
 .pos-piezas td.bot-neg { color: var(--red); }
+
+/* Pestaña Resumen bots */
+.resumen-bots-datos { display: flex; flex-wrap: wrap; gap: 1rem 1.75rem; }
+.resumen-bots-datos .bot-dato > b.bot-pos { color: var(--green); }
+.resumen-bots-datos .bot-dato > b.bot-neg { color: var(--red); }
+.resumen-bots-sub { font-size: 0.8rem; font-weight: 600; color: var(--muted); }

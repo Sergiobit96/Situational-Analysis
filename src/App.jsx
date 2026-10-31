@@ -14,6 +14,7 @@ import Estrategias from './Estrategias.jsx'
 import Grafico from './Grafico'
 import Estadisticas from './Estadisticas.jsx'
 import Bots from './Bots'
+import ResumenBots from './ResumenBots'
 import './App.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
@@ -26,6 +27,7 @@ const ICONOS = {
   diario:   'M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3V4zM5 17a3 3 0 013-3h11M9 8h6',
   seg:      'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2',
   stats:    'M12 3v9h9a9 9 0 11-9-9zM15 3.5A9 9 0 0120.5 9H15z',
+  resumen:  'M4 4h16v16H4zM8 15v-3M12 15V8M16 15v-5',
   bots:     'M5 9h14v10H5zM12 5v4M9 13h.01M15 13h.01M9 16h6M12 5a1 1 0 100-2 1 1 0 000 2z',
   datos:    'M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4',
   pipeline: 'M6 4l14 8-14 8V4z',
@@ -51,6 +53,8 @@ const GRUPOS = [
     // los bots (SRS, Rule of 4 y tortugas) operan en la demo de IG desde el servidor (en la
     // nube, con BOT_OPERA=1); en producción la pestaña pide la clave del bot
     { id: 'bots', label: 'Bots' },
+    // cómo van los bots, sin la clave: solo mira
+    { id: 'resumen', label: 'Resumen bots' },
   ] },
   { titulo: 'Datos', tabs: [
     { id: 'datos', label: 'Subir datos' },
@@ -159,6 +163,7 @@ export default function App() {
           {tab === 'estr'     && <Estrategias />}
           {tab === 'stats'    && <Estadisticas />}
           {tab === 'bots'     && <Bots inicial={BOTS_ANTES[pedida] ?? null} />}
+          {tab === 'resumen'  && <ResumenBots />}
           {tab === 'pipeline' && <Pipeline />}
           {tab === 'fotos'    && <Fotos />}
           {tab === 'charts'   && <Charts />}

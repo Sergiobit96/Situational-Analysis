@@ -44,6 +44,7 @@ import { GoogleAuth } from 'google-auth-library'
 import { avisosDeSalud } from './salud.js'
 import { crearAlpaca } from './alpaca.js'
 import { crearBotTortugasAcciones } from './bot-tortugas-acciones.js'
+import { resumenPublico, crearCacheResumen, cerradasMotorSrs, cerradasTortugas, cerradasTortugasAcciones } from './resumen-bots.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -3835,6 +3836,47 @@ app.get('/api/bot/salud', (_req, res) => {
     conciliacion: conciliacion?.estado() ?? null,
   }
   res.json({ ...s, avisos: avisosDeSalud(s) })
+})
+
+// Resumen de los bots para quien no tiene la clave (server/resumen-bots.js): fuera de /api/bot a
+// propósito. Solo lee, sin euros ni saldo, y guardado 30 s para no gastar peticiones de IG.
+const resumenBots = crearCacheResumen(async () => {
+  const t = Math.floor(Date.now() / 1000)
+  const motorSrs = [['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn]].filter(([, b]) => b)
+  const bots = [
+    ...motorSrs.map(([nombre, b]) => ({ nombre, cuenta: 'ig', activo: () => b.estado().config.activo, cerradas: () => cerradasMotorSrs(b.estado()) })),
+    ...(botTortugas ? [{ nombre: 'Tortugas', cuenta: 'ig', activo: () => botTortugas.estado().config.activo, cerradas: () => cerradasTortugas(botTortugas.estado()) }] : []),
+    ...(botTortugasAcciones ? [{ nombre: 'Tortugas acciones', cuenta: 'alpaca', activo: () => botTortugasAcciones.estado().config.activo, cerradas: () => cerradasTortugasAcciones(botTortugasAcciones.estado()) }] : []),
+  ]
+  const nombres = new Map()
+  for (const [, b] of motorSrs) for (const s of b.estado().sesiones) nombres.set(s.ticker, s.nombre)
+  for (const m of botTortugas?.estado().mercados ?? []) nombres.set(m.ticker, m.nombre)
+  const [posIg, cuentaIg, posAlpaca, cuentaAlpaca] = await Promise.all([
+    bot ? ig.operar.posiciones().catch(() => []) : [],
+    bot ? ig.operar.cuenta().catch(() => null) : null,
+    botTortugasAcciones ? alpaca.posiciones().catch(() => []) : [],
+    botTortugasAcciones ? alpaca.cuenta().catch(() => null) : null,
+  ])
+  // IG da el resultado en la moneda de cada posición (yenes en el USD/JPY): a euros, como el saldo
+  const cambios = {}
+  for (const p of posIg) if (p.moneda && !(p.moneda in cambios)) cambios[p.moneda] = await cambioAEur(p.moneda, p)
+  const delBotAcciones = new Set(Object.values(botTortugasAcciones?._datos().posiciones ?? {}).map(p => p.simbolo))
+  return resumenPublico({
+    bots, t, vigilancia: vigilancia.estado(),
+    saldoIg: cuentaIg?.saldo ?? null,
+    posicionesIg: posIg.map(p => ({
+      bot: BOT_DE_REFERENCIA.find(([prefijo]) => p.referencia?.startsWith(prefijo))?.[1] ?? null,
+      instrumento: nombres.get(p.ticker) ?? p.nombre ?? p.epic, lado: p.lado, resultado: p.resultado == null || cambios[p.moneda] == null ? null : p.resultado * cambios[p.moneda],
+      // IG da la hora de apertura en UTC sin la Z
+      desde: p.abierta ? Math.floor(Date.parse(/Z$/.test(p.abierta) ? p.abierta : `${p.abierta}Z`) / 1000) || null : null,
+    })),
+    saldoAlpaca: cuentaAlpaca?.equity ?? null,
+    posicionesAlpaca: posAlpaca.filter(p => delBotAcciones.has(p.simbolo)).map(p => ({ bot: 'Tortugas acciones', instrumento: p.simbolo, lado: p.lado, desde: null, resultado: p.resultado })),
+  })
+})
+app.get('/api/resumen-bots', async (_req, res) => {
+  try { res.json(await resumenBots()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 app.get('/api/bot/tortugas', (req, res) => {

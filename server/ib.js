@@ -138,12 +138,14 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     api.on(EventName.error, (err, codigo, id) => {
       if (INFORMATIVOS.has(codigo)) return
       const texto = String(err?.message ?? err).replace(/<br>\s*/gi, ' ').replace(/\s+/g, ' ').trim()
-      if (codigo === 502 || codigo === 504 || /ECONNREFUSED/.test(texto)) e.ultimoError = `No hay IB Gateway escuchando en ${host}:${port}`
+      if (codigo === 502 || codigo === 504 || /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH/.test(texto)) e.ultimoError = `No hay IB Gateway escuchando en ${host}:${port} (${texto})`
       else e.ultimoError = texto
       const orden = id > 0 ? e.ordenes.get(id) : null
       // 202 = cancelada; 10147/10148 = no se pudo cancelar (ya lo estaba): no son el motivo de la orden
       if (orden && ![202, 10147, 10148].includes(codigo)) e.ordenes.set(id, { ...orden, motivo: texto })
-      if (codigo !== 502 || e.avisos[0]?.codigo !== 502) avisar(texto, codigo ?? null, id > 0 ? id : null)
+      // el mismo fallo de conexión una y otra vez: solo se actualiza la hora del último
+      if (codigo === 502 && e.avisos[0]?.codigo === 502 && e.avisos[0].texto === texto) e.avisos[0].hora = new Date().toISOString()
+      else avisar(texto, codigo ?? null, id > 0 ? id : null)
     })
     return api
   }

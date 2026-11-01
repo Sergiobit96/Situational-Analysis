@@ -219,3 +219,33 @@ test('el bot en IB: plan con el contrato vigente, entrada, cambio de vencimiento
     assert.ok(Math.abs(op.resultadoPts - -120) < 1e-6)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('cerrar a mano un mercado y sistema: vende a mercado y apunta la operación como manual', async () => {
+  const ib = ibFalso()
+  let t = ny(11, 3, 10)
+  const tib = crearTortugasIB({ ib, ahora: () => t, log: () => {} })
+  const dir = mkdtempSync(join(tmpdir(), 'tortugas-ib-'))
+  const bot = crearBotTortugas({
+    archivo: join(dir, 'bot.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0,
+    mercados: tib.mercados, operar: tib.operar, precios: tib.precios, epicsDe: tib.epicsDe, velasDiarias: tib.velasDiarias,
+    broker: 'IB', nombre: 'Tortugas IB', prefijo: tib.prefijo,
+  })
+  try {
+    await tib.arrancar()
+    ib.precio('EUR.USD', 1.0999, 1.1001)
+    ib.precio('MGCZ6', 4000, 4000.2)
+    ib.diarios.MGCZ6 = diarioPlano(4000, 30, '2026-11-02')
+    bot.cambiarConfig({ activo: true, sistemas: [1], instrumentos: Object.fromEntries(Object.keys(MERCADOS_IB).map(k => [k, k === 'XAUUSD'])) })
+    await bot._paso()
+    t += 60
+    ib.precio('MGCZ6', 4031, 4031.2)
+    await bot._paso()
+    await assert.rejects(bot.cerrarMercado('XAUUSD', 2), /no tiene posición/)
+    ib.precio('MGCZ6', 4020, 4020.2)
+    assert.deepEqual(await bot.cerrarMercado('XAUUSD', 1), { cerrada: true })
+    const op = bot.estado().operaciones[0]
+    assert.equal(op.motivo, 'manual')
+    assert.ok(Math.abs(op.resultadoPts - (4020 - 4031.2)) < 1e-9)
+    assert.deepEqual(await tib.operar.posiciones(), [])
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})

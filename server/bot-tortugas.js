@@ -1202,6 +1202,17 @@ export function crearBotTortugas({
     })
   }
 
+  // Cierra a mano la posición de un mercado y sistema (las demás siguen)
+  async function cerrarMercado(ticker, sistema) {
+    return encolar(async () => {
+      const pos = datos.posiciones[claveDe(ticker, Number(sistema))]
+      if (!pos) throw new Error(`El Sistema ${sistema} no tiene posición en ${nombreDe(ticker)}`)
+      await salir(pos, 'manual')
+      guardar()
+      return { cerrada: !datos.posiciones[claveDe(ticker, Number(sistema))] }
+    })
+  }
+
   // Apaga el bot y cierra todo lo que tenga abierto
   async function pararYCerrar() {
     datos.config.activo = false
@@ -1241,7 +1252,7 @@ export function crearBotTortugas({
   }
 
   return {
-    arrancar, parar, estado, cambiarConfig, pararYCerrar, apretarStop,
+    arrancar, parar, estado, cambiarConfig, pararYCerrar, apretarStop, cerrarMercado,
     latido: () => ({ enMarcha: reloj !== null, desde: arrancadoEn, ultimaVuelta }),
     // un paso del bucle sin el temporizador (para las pruebas): por la misma cola y guardando
     _paso: () => encolar(async () => { try { await paso() } finally { guardar() } }),

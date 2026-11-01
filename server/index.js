@@ -2271,6 +2271,14 @@ app.post('/api/bot/tortugas/stop', async (req, res) => {
   catch (err) { res.status(400).json({ error: err.message }) }
 })
 
+// Cierra a mano la posición de un mercado y sistema: { ticker, sistema }
+app.post('/api/bot/tortugas/cerrar', async (req, res) => {
+  if (!botTortugas) return sinBot(res)
+  const { ticker, sistema } = req.body ?? {}
+  try { res.json(await botTortugas.cerrarMercado(ticker, sistema)) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+
 app.post('/api/bot/tortugas/parar', async (req, res) => {
   if (!botTortugas) return sinBot(res)
   try { res.json(await botTortugas.pararYCerrar()) }
@@ -2310,6 +2318,12 @@ app.post('/api/bot/tortugas-ib/stop', async (req, res) => {
   if (!botTortugasIB) return sinBotIB(res)
   const { ticker, sistema, stop } = req.body ?? {}
   try { res.json(await botTortugasIB.apretarStop(ticker, sistema, stop)) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+app.post('/api/bot/tortugas-ib/cerrar', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  const { ticker, sistema } = req.body ?? {}
+  try { res.json(await botTortugasIB.cerrarMercado(ticker, sistema)) }
   catch (err) { res.status(400).json({ error: err.message }) }
 })
 app.post('/api/bot/tortugas-ib/parar', async (req, res) => {

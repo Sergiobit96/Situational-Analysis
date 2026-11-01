@@ -5,6 +5,7 @@ const BotTortugas = lazy(() => import('./BotTortugas'))
 const Posiciones = lazy(() => import('./Posiciones'))
 const Salud = lazy(() => import('./Salud'))
 const Alpaca = lazy(() => import('./Alpaca'))
+const IB = lazy(() => import('./IB'))
 const BotTortugasAcciones = lazy(() => import('./BotTortugasAcciones'))
 
 // Los bots de la demo de IG bajo una sola pestaña, cada uno en su vista, como el Diario. Todos
@@ -22,6 +23,8 @@ const VISTAS_BOTS = [
   { id: 'tortugas',  nombre: 'Tortugas',        render: () => <BotTortugas /> },
   { id: 'tortugas-acciones', nombre: 'Tortugas acciones', render: () => <BotTortugasAcciones /> },
   { id: 'alpaca',    nombre: 'Alpaca',          render: () => <Alpaca /> },
+  // necesita el IB Gateway abierto en este PC: en producción no hay
+  ...(import.meta.env.DEV ? [{ id: 'ib', nombre: 'Interactive Brokers', render: () => <IB /> }] : []),
   { id: 'salud',     nombre: 'Salud',           render: () => <Salud /> },
 ]
 

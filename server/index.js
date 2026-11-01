@@ -41,6 +41,7 @@ import { registrarDiarioLocal } from './rutas-diario-local.js'
 import { registrarExcursiones } from './rutas-excursiones.js'
 import { registrarDaxCash } from './rutas-dax-cash.js'
 import { registrarLocales } from './rutas-locales.js'
+import { registrarIB } from './rutas-ib.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -1851,6 +1852,9 @@ app.get('/api/bot/alpaca', conAlpaca(async () => {
 app.post('/api/bot/alpaca/orden', conAlpaca(req => alpaca.enviarOrden(req.body ?? {})))
 app.delete('/api/bot/alpaca/orden/:id', conAlpaca(req => alpaca.cancelarOrden(req.params.id)))
 app.delete('/api/bot/alpaca/posicion/:simbolo', conAlpaca(req => alpaca.cerrarPosicion(req.params.simbolo)))
+
+// ── Interactive Brokers (server/rutas-ib.js): solo donde haya IB Gateway e IB_PORT, es decir, en local ──
+registrarIB({ app })
 
 // ── Tortugas en las acciones del S&P 500, en la cuenta paper de Alpaca (server/bot-tortugas-acciones.js) ──
 // Los niveles salen del diario de Yahoo del backtest (accionesEeuu); opera donde BOT_OPERA=1 y nace apagado.

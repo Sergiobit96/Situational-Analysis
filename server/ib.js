@@ -3,7 +3,9 @@
 // (o la TWS) con la sesión iniciada y la API activada, y el servidor se conecta a su puerto por
 // TCP. Puertos por defecto: Gateway 4002 paper / 4001 real; TWS 7497 paper / 7496 real.
 //
-// Solo se conecta si IB_PORT está puesto (en local; en Railway no hay Gateway) y la primera vez
+// En Railway el Gateway va en su propio servicio (docs/ib-gateway-railway.md).
+//
+// Solo se conecta si IB_PORT está puesto y la primera vez
 // que alguien lo pide. Una vez conectado se queda escuchando la cuenta, las posiciones y las
 // órdenes, y si se cae reintenta solo. Las órdenes solo salen a una cuenta paper (empiezan por
 // DU) salvo con IB_REAL=1, que no está puesto en ningún sitio.

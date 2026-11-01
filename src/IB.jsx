@@ -96,18 +96,26 @@ function Ticket({ alEnviar, cuenta }) {
 }
 
 function SinConexion({ datos }) {
+  const local = /^(127\.0\.0\.1|localhost|::1)$/.test(datos.host)
   return (
     <section className="bot-bloque">
       <h3>Interactive Brokers · sin conexión</h3>
       <p className="bot-error">{datos.error ?? 'No conectado'}</p>
-      <p className="bot-nota">
-        El servidor se conecta al IB Gateway (o la TWS) abierto en este PC, en {datos.host}:{datos.port} con el client id {datos.clientId}. Para que conecte:
-      </p>
-      <ol className="bot-nota">
-        <li>Abre el IB Gateway, elige <b>IB API</b> y <b>Paper Trading</b>, y entra con el usuario de la cuenta paper.</li>
-        <li>En Configure → Settings → API → Settings: quita «Read-Only API», deja el puerto en {datos.port} y 127.0.0.1 en «Trusted IPs».</li>
-        <li>Esta vista vuelve a probar sola cada pocos segundos.</li>
-      </ol>
+      {local ? <>
+        <p className="bot-nota">
+          El servidor se conecta al IB Gateway (o la TWS) abierto en este PC, en {datos.host}:{datos.port} con el client id {datos.clientId}. Para que conecte:
+        </p>
+        <ol className="bot-nota">
+          <li>Abre el IB Gateway, elige <b>IB API</b> y <b>Paper Trading</b>, y entra con el usuario de la cuenta paper.</li>
+          <li>En Configure → Settings → API → Settings: quita «Read-Only API», deja el puerto en {datos.port} y 127.0.0.1 en «Trusted IPs».</li>
+          <li>Esta vista vuelve a probar sola cada pocos segundos.</li>
+        </ol>
+      </> : (
+        <p className="bot-nota">
+          El servidor se conecta al servicio del IB Gateway en {datos.host}:{datos.port}. Si acaba de arrancar o se está reiniciando (lo hace cada noche), tarda un par de minutos en entrar en IB; esta vista vuelve a probar sola.
+          Si IB ha cerrado su sesión porque se ha entrado con el mismo usuario en otro sitio, vuelve a entrar solo al cabo de un rato.
+        </p>
+      )}
       {datos.avisos?.length > 0 && <p className="bot-nota">Último aviso de IB: {datos.avisos[0].texto}</p>}
     </section>
   )

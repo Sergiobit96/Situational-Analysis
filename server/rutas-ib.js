@@ -1,6 +1,7 @@
 // ── Interactive Brokers (server/ib.js): estado de la conexión, la cuenta, sus posiciones y
-// órdenes, y órdenes a mano. Bajo /api/bot para que en producción pida la misma clave, aunque
-// allí no hay IB_PORT y contesta que no está configurado. Ningún bot opera aquí todavía.
+// órdenes, y órdenes a mano. Bajo /api/bot para que en producción pida la misma clave. En
+// producción el Gateway es otro servicio de Railway (docs/ib-gateway-railway.md): IB_HOST con su
+// dominio privado e IB_PORT=4004. Sin IB_PORT contesta que no está configurado. Ningún bot opera aquí.
 
 import { crearIB } from './ib.js'
 
@@ -10,7 +11,7 @@ export function registrarIB({ app }) {
     clientId: process.env.IB_CLIENT_ID || 17, real: process.env.IB_REAL === '1',
   })
   const conIB = hacer => async (req, res) => {
-    if (!ib) return res.status(404).json({ error: 'IB no está configurado (falta IB_PORT: 4002 para el IB Gateway paper, 7497 para la TWS paper)' })
+    if (!ib) return res.status(404).json({ error: 'IB no está configurado en este servidor (falta IB_PORT: 4002 para el IB Gateway paper de este PC, 4004 para el servicio ib-gateway de Railway)' })
     try { res.json(await hacer(req)) }
     catch (err) { res.status(/no válid|Falta|tiene que|necesita|es real|No conozco|No hay ninguna/.test(err.message) ? 400 : 503).json({ error: err.message }) }
   }

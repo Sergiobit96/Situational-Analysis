@@ -23,8 +23,7 @@ const VISTAS_BOTS = [
   { id: 'tortugas',  nombre: 'Tortugas',        render: () => <BotTortugas /> },
   { id: 'tortugas-acciones', nombre: 'Tortugas acciones', render: () => <BotTortugasAcciones /> },
   { id: 'alpaca',    nombre: 'Alpaca',          render: () => <Alpaca /> },
-  // necesita el IB Gateway abierto en este PC: en producción no hay
-  ...(import.meta.env.DEV ? [{ id: 'ib', nombre: 'Interactive Brokers', render: () => <IB /> }] : []),
+  { id: 'ib',        nombre: 'Interactive Brokers', render: () => <IB /> },
   { id: 'salud',     nombre: 'Salud',           render: () => <Salud /> },
 ]
 

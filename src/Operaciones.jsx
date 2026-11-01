@@ -62,8 +62,9 @@ export default function Operaciones({ abrir, onAbierto }) {
   const [fechaHasta, setFechaHasta] = useState('')
   const [seleccionado, setSeleccionado]   = useState(null)
   const [timeframe,    setTimeframe]      = useState('m5')
-  const [velas,        setVelas]          = useState([])
-  const [cargandoVelas,setCargandoVelas]  = useState(false)
+  // las velas que llegaron y de qué operación son (ticker|día|timeframe): las de otra no se
+  // enseñan, y mientras llegan las de la seleccionada, se está cargando
+  const [velasCargadas, setVelasCargadas] = useState({ clave: null, velas: [] })
   const [prevClose,    setPrevClose]      = useState(null)
   const [catalogoFotos, setCatalogoFotos] = useState([])
   const [errorFotos,    setErrorFotos]    = useState(null)
@@ -359,7 +360,6 @@ export default function Operaciones({ abrir, onAbierto }) {
   // Abrir una operación: lo mismo que pulsar su fila, más llevar la tabla a su página para
   // que se vea marcada cuando se salta con las flechas.
   const abrirTrade = t => {
-    setVelas([])
     setPrevClose(null)
     setAvisoBook(null)
     setBorrador(null)
@@ -479,6 +479,32 @@ export default function Operaciones({ abrir, onAbierto }) {
       </div>
     )
   }
+
+  // Todas las operaciones (con filtros o sin ellos) del mismo instrumento+día que la
+  // fila seleccionada, para marcarlas todas en el gráfico
+  // (con el ticker y la hora de apertura, no el objeto: así lo puede memorizar el compilador de React)
+  const tickerSel = seleccionado?.ticker, aperturaSel = seleccionado?.openTime, haySel = !!seleccionado
+  const tradesDelDia = useMemo(() => {
+    if (!haySel) return []
+    const fecha  = fmtFechaTS(aperturaSel)
+    const factor = FACTOR_PRECIO[tickerSel] ?? 1
+    const delDia = trades.filter(t => t.ticker === tickerSel &&
+      (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha))
+    // la tabla sigue enseñando el precio tal cual lo da el bróker; solo el gráfico
+    // necesita la escala del instrumento (ver FACTOR_PRECIO)
+    return factor === 1 ? delDia : delDia.map(t => ({
+      ...t,
+      openPrice:  t.openPrice / factor,
+      closePrice: t.closePrice / factor,
+    }))
+  }, [trades, haySel, tickerSel, aperturaSel])
+
+  // Carga las velas intraday del día de la operación seleccionada
+  const fechaVelas = seleccionado?.ticker ? fmtFechaTS(seleccionado.openTime) : null
+  const claveVelas = fechaVelas ? `${seleccionado.ticker}|${fechaVelas}|${timeframe}` : null
+  const velas = velasCargadas.clave === claveVelas ? velasCargadas.velas : []
+  const cargandoVelas = claveVelas != null && velasCargadas.clave !== claveVelas
+  const tickerVelas = seleccionado?.ticker
 
   // Los books son carpetas del disco: los botones solo tienen sentido con el servidor local
   const hayBooks = import.meta.env.DEV
@@ -672,7 +698,6 @@ export default function Operaciones({ abrir, onAbierto }) {
     setFechaDesde(abrir.fecha)
     setFechaHasta(abrir.fecha)
     setPagina(0)
-    setVelas([])
     setPrevClose(null)
     setAvisoBook(null)
     setBorrador(null)
@@ -696,37 +721,19 @@ export default function Operaciones({ abrir, onAbierto }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [fotoZoom])
 
-  // Todas las operaciones (con filtros o sin ellos) del mismo instrumento+día que la
-  // fila seleccionada, para marcarlas todas en el gráfico
-  const tradesDelDia = useMemo(() => {
-    if (!seleccionado) return []
-    const fecha  = fmtFechaTS(seleccionado.openTime)
-    const factor = FACTOR_PRECIO[seleccionado.ticker] ?? 1
-    const delDia = trades.filter(t => t.ticker === seleccionado.ticker &&
-      (fmtFechaTS(t.openTime) === fecha || fmtFechaTS(t.closeTime) === fecha))
-    // la tabla sigue enseñando el precio tal cual lo da el bróker; solo el gráfico
-    // necesita la escala del instrumento (ver FACTOR_PRECIO)
-    return factor === 1 ? delDia : delDia.map(t => ({
-      ...t,
-      openPrice:  t.openPrice / factor,
-      closePrice: t.closePrice / factor,
-    }))
-  }, [trades, seleccionado])
-
-  // Carga las velas intraday del día de la operación seleccionada
   useEffect(() => {
-    if (!seleccionado?.ticker) return
+    if (!claveVelas) return
     const controller = new AbortController()
-    const fecha = fmtFechaTS(seleccionado.openTime)
-    setCargandoVelas(true)
-    setVelas([])
-    fetch(intradayUrl(seleccionado.ticker, fecha, timeframe), { signal: controller.signal })
+    fetch(intradayUrl(tickerVelas, fechaVelas, timeframe), { signal: controller.signal })
       .then(r => r.json())
-      .then(d => { if (!controller.signal.aborted && d.velas?.length) setVelas(d.velas) })
-      .catch(e => { if (e.name !== 'AbortError') console.error(e) })
-      .finally(() => { if (!controller.signal.aborted) setCargandoVelas(false) })
+      .then(d => { if (!controller.signal.aborted) setVelasCargadas({ clave: claveVelas, velas: d.velas?.length ? d.velas : [] }) })
+      .catch(e => {
+        if (e.name === 'AbortError') return
+        console.error(e)
+        setVelasCargadas({ clave: claveVelas, velas: [] })
+      })
     return () => controller.abort()
-  }, [seleccionado, timeframe])
+  }, [claveVelas, tickerVelas, fechaVelas, timeframe])
 
   // Cierre del día de negociación anterior, para la línea de referencia del gráfico
   useEffect(() => {
@@ -998,7 +1005,7 @@ export default function Operaciones({ abrir, onAbierto }) {
                   onClick={() => setPantallaCompleta(v => !v)}
                   title={pantallaCompleta ? 'Salir de pantalla completa (Esc)' : 'Ver el trade a pantalla completa'}
                 >{pantallaCompleta ? '⤡ salir' : '⤢ pantalla completa'}</button>
-                <button className="btn-ir-fecha" onClick={() => { setVelas([]); setPrevClose(null); setPantallaCompleta(false); setSeleccionado(null) }}>× cerrar</button>
+                <button className="btn-ir-fecha" onClick={() => { setPrevClose(null); setPantallaCompleta(false); setSeleccionado(null) }}>× cerrar</button>
               </div>
 
               {/* a pantalla completa se deja solo el gráfico: ni etiquetas, ni comentario */}

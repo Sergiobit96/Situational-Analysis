@@ -24,7 +24,7 @@ async function getAuth() {
       _auth  = { cookie, crumb }
       _authTs = Date.now()
     }
-  } catch {}
+  } catch { /* sin cookie: se sigue sin ella */ }
   return _auth
 }
 

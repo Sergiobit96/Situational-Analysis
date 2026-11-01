@@ -151,7 +151,7 @@ async function leerArchivo(file) {
   try {
     const text  = await file.text()
     // un CSV vacío es un mes sin velas (así los deja bajar-dukascopy-todo.mjs): no es un error
-    if (!text.replace(/^﻿/, '').trim()) return { nombre: file.name, velas: [], vacio: true }
+    if (!text.replace(/^\uFEFF/, '').trim()) return { nombre: file.name, velas: [], vacio: true }
     const velas = file.name.toLowerCase().endsWith('.json') ? parseJSON(text) : parseCSV(text)
     if (!velas.length) throw new Error('No se extrajeron datos OHLCV válidos del archivo')
     return { nombre: file.name, velas }

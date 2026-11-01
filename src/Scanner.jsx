@@ -14,13 +14,13 @@ const fmt = {
 function useContdown(proximoScan) {
   const [segs, setSegs] = useState(null)
   useEffect(() => {
-    if (!proximoScan) { setSegs(null); return }
+    if (!proximoScan) return
     const tick = () => setSegs(Math.max(0, Math.round((proximoScan - Date.now()) / 1000)))
     tick()
     const id = setInterval(tick, 1000)
     return () => clearInterval(id)
   }, [proximoScan])
-  return segs
+  return proximoScan ? segs : null
 }
 
 export default function Scanner({ onVerDetalle }) {

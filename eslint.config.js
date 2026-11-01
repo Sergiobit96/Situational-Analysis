@@ -17,5 +17,12 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    // ({ bot: _bot, ...resto }) es la forma de quitar una clave de un objeto
+    rules: { 'no-unused-vars': ['error', { ignoreRestSiblings: true }] },
+  },
+  // el servidor, las funciones de Vercel, los scripts y los tests corren en Node, no en el navegador
+  {
+    files: ['server/**/*.{js,mjs}', 'api/**/*.js', 'scripts/**/*.{js,mjs}', 'test/**/*.{js,mjs}', '*.config.js'],
+    languageOptions: { globals: globals.node },
   },
 ])

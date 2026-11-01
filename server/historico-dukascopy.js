@@ -25,7 +25,7 @@ const MESES_EN_MEMORIA = 24
 
 // Las velas de 1 min de un CSV del histórico (con BOM y valores entre comillas)
 export function parsearMes(texto) {
-  const lineas = texto.replace(/^﻿/, '').split(/\r?\n/)
+  const lineas = texto.replace(/^\uFEFF/, '').split(/\r?\n/)
   const velas = []
   for (let i = 1; i < lineas.length; i++) {
     if (!lineas[i]) continue

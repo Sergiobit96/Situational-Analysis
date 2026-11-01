@@ -78,7 +78,7 @@ export default function Pipeline() {
     })
     es.addEventListener('error', e => {
       if (e instanceof MessageEvent) {
-        try { addLine(`✗ ${JSON.parse(e.data).msg}\n`, 'err') } catch {}
+        try { addLine(`✗ ${JSON.parse(e.data).msg}\n`, 'err') } catch { /* mensaje que no es JSON */ }
       } else {
         addLine('✗ No se pudo conectar con el servidor\n', 'err')
       }

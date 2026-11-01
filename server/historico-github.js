@@ -54,7 +54,7 @@ export function crearSincronizacionHistorico(dir, { repo = REPO, log = console }
           renameSync(`${destino}.tmp`, destino)
         } catch (err) {
           rmSync(`${destino}.tmp`, { force: true })
-          throw new Error(`${instrumento}: ${err.message}`)
+          throw new Error(`${instrumento}: ${err.message}`, { cause: err })
         }
         estado.zips[instrumento] = { actualizado: a.updated_at, bytes: a.size, bajado: new Date().toISOString() }
         guardar()

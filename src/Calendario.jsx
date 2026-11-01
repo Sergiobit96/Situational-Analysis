@@ -52,19 +52,21 @@ export default function Calendario() {
   const [impacts, setImpacts] = useState(new Set(['Holiday','High','Medium']))
   const [nager,   setNager]   = useState({})   // { year: { EUR:[...], GBP:[...], USD:[...] } }
   const [ffEvs,   setFfEvs]   = useState([])
-  const [cargando,setCargando]= useState(false)
+  // cargando mientras no han llegado los festivos del año que se ve (fetchNager no falla:
+  // sin respuesta, da la lista vacía)
+  const cargando = !nager[year]
 
-  // Cargar Nager.Date al cambiar año
+  // Cargar Nager.Date al cambiar año (fetchNager guarda cada año: volver a uno no lo pide)
   useEffect(() => {
-    if (nager[year]) return
-    setCargando(true)
+    let vigente = true
     Promise.all(
       PAISES.map(p => fetchNager(year, p.nager).then(data => ({ currency: p.currency, data })))
     ).then(res => {
       const byC = {}
       res.forEach(({ currency, data }) => { byC[currency] = data })
-      setNager(prev => ({ ...prev, [year]: byC }))
-    }).finally(() => setCargando(false))
+      if (vigente) setNager(prev => ({ ...prev, [year]: byC }))
+    })
+    return () => { vigente = false }
   }, [year])
 
   // Cargar ForexFactory una vez al montar

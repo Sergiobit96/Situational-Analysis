@@ -37,18 +37,19 @@ const ICONOS = {
   glory:    'M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9L12 3z',
 }
 
-const GRUPOS = [
+// local: solo en el servidor local; en producción no salen (lo pidió el usuario)
+const TODOS = [
   { titulo: 'Mercado', tabs: [
-    { id: 'gap',  label: 'Gap Filter' },
+    { id: 'gap',  label: 'Gap Filter', local: true },
     { id: 'graf', label: 'Gráfico' },
     { id: 'cal',  label: 'Calendario' },
-    { id: 'estr', label: 'Estrategias' },
+    { id: 'estr', label: 'Estrategias', local: true },
   ] },
   { titulo: 'Trading', tabs: [
-    { id: 'ops',    label: 'Operaciones' },
+    { id: 'ops',    label: 'Operaciones', local: true },
     { id: 'diario', label: 'Diario' },
-    { id: 'seg',    label: 'Seguimiento' },
-    { id: 'stats',  label: 'Estadísticas' },
+    { id: 'seg',    label: 'Seguimiento', local: true },
+    { id: 'stats',  label: 'Estadísticas', local: true },
     { id: 'charts', label: 'Charts' },
     // los bots (SRS, Rule of 4 y tortugas) operan en la demo de IG desde el servidor (en la
     // nube, con BOT_OPERA=1); en producción la pestaña pide la clave del bot
@@ -68,6 +69,8 @@ const GRUPOS = [
     ] },
   ] : []),
 ]
+
+const GRUPOS = TODOS.map(g => ({ ...g, tabs: g.tabs.filter(t => import.meta.env.DEV || !t.local) }))
 
 const TABS = GRUPOS.flatMap(g => g.tabs.map(t => ({ ...t, grupo: g.titulo })))
 
@@ -90,7 +93,7 @@ function tabPedida() {
     const guardada = localStorage.getItem('sa.tab')
     if (TABS.some(t => t.id === guardada) || BOTS_ANTES[guardada]) return guardada
   } catch { /* sin almacenamiento */ }
-  return 'gap'
+  return TABS[0].id
 }
 
 export default function App() {

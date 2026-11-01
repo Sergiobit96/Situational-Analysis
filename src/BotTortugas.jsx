@@ -6,8 +6,9 @@ import { rupturaMasCercana, acumulado } from './botCalculos'
 import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
 import './Bot.css'
 
-// Pestaña Bot Tortugas: el bot de las tortugas que opera en la demo de IG
-// (server/bot-tortugas.js), con las posiciones abiertas de un día para otro. Enseña los
+// Pestaña Bot Tortugas: el bot de las tortugas que opera en la demo de IG o, con `api`
+// = '/api/bot/tortugas-ib', el mismo en la paper de IB (server/bot-tortugas.js y
+// server/tortugas-ib.js), con las posiciones abiertas de un día para otro. Enseña los
 // niveles de cada índice para su sesión, las posiciones con su pirámide, los límites de
 // cartera, las operaciones cerradas, el registro y la configuración. En producción el
 // servidor pide la misma clave que la pestaña Bot SRS.
@@ -46,7 +47,7 @@ function cuentasDe(pos, precio) {
   }
 }
 
-export default function BotTortugas() {
+export default function BotTortugas({ api = '/api/bot/tortugas' }) {
   const [datos, setDatos] = useState(null)
   const [error, setError] = useState(null)
   const [pideClave, setPideClave] = useState(false)
@@ -58,14 +59,14 @@ export default function BotTortugas() {
 
   const cargar = useCallback(async () => {
     try {
-      setDatos(await pedir('/api/bot/tortugas'))
+      setDatos(await pedir(api))
       setError(null)
       setPideClave(false)
     } catch (err) {
       setError(err.message)
       if (err.necesitaClave) setPideClave(true)
     }
-  }, [])
+  }, [api])
 
   useEffect(() => {
     const primera = setTimeout(cargar, 0)
@@ -77,12 +78,12 @@ export default function BotTortugas() {
     setOcupado(true)
     try { await fn(); await cargar() } catch (err) { setError(err.message) } finally { setOcupado(false) }
   }
-  const guardarConfig = cambios => accion(() => pedir('/api/bot/tortugas/config', {
+  const guardarConfig = cambios => accion(() => pedir(`${api}/config`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cambios),
   }))
   const pararYCerrar = () => {
     if (!window.confirm('¿Apagar el bot de las tortugas y cerrar ahora todas sus posiciones?')) return
-    accion(() => pedir('/api/bot/tortugas/parar', { method: 'POST' }))
+    accion(() => pedir(`${api}/parar`, { method: 'POST' }))
   }
 
   if (pideClave) {
@@ -104,7 +105,11 @@ export default function BotTortugas() {
     return <div className="bot-page">{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</div>
   }
 
-  const { config, mercados, operaciones, eventos, ig, opera, reglas, cambiosConfig = [], sinEntrar = [] } = datos
+  const { config, mercados, operaciones, eventos, ig, opera, reglas, cambiosConfig = [], sinEntrar = [], contratos = {} } = datos
+  const enIB = datos.broker === 'IB'
+  // en IB: los mercados sin contrato y los que van con los precios con retraso (sin suscripción)
+  const sinContrato = Object.entries(contratos).filter(([, c]) => c.error).map(([t, c]) => `${mercados.find(m => m.ticker === t)?.nombre ?? t} (${c.error})`)
+  const conRetraso = Object.entries(contratos).filter(([, c]) => c.retrasado).map(([t]) => mercados.find(m => m.ticker === t)?.nombre ?? t)
   const editando = form ?? config
   const cambiar = (campo, valor) => setForm({ ...editando, [campo]: valor })
   const nombre = t => mercados.find(m => m.ticker === t)?.nombre ?? t
@@ -154,8 +159,12 @@ export default function BotTortugas() {
         <div>
           <div className={`bot-interruptor ${config.activo ? 'encendido' : ''}`}>{config.activo ? '● Encendido' : '○ Apagado'}</div>
           <p className="bot-nota">
-            Tortugas · {sistemasTexto} · {ladosTexto} · pirámide llena hasta el stop = {num(config.riesgoPct, 2)}% del saldo (1 N por unidad = {num(porN, 2)}%){dosSistemas ? ' en cada entrada, de cualquier sistema' : ''} · demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}
+            Tortugas · {sistemasTexto} · {ladosTexto} · pirámide llena hasta el stop = {num(config.riesgoPct, 2)}% del saldo (1 N por unidad = {num(porN, 2)}%){dosSistemas ? ' en cada entrada, de cualquier sistema' : ''} · {enIB
+              ? <>paper de IB (dinero ficticio) · cuenta {datos.ib.cuenta ?? '—'} · {datos.ib.conectado ? 'conectado al IB Gateway' : `sin conexión: ${datos.ib.error ?? '—'}`}</>
+              : <>demo de IG (dinero ficticio) · cuenta {ig.cuenta ?? '—'} · {ig.streaming}</>}
           </p>
+          {conRetraso.length > 0 && <p className="bot-aviso">Precios con 15 min de retraso (la cuenta no tiene la suscripción de su mercado): {conRetraso.join(', ')}. El bot ve las rupturas tarde, pero la orden sale al precio de ese momento.</p>}
+          {sinContrato.length > 0 && <p className="bot-aviso">Sin contrato en IB, no operan: {sinContrato.join('; ')}</p>}
           {!opera && <p className="bot-aviso">Este servidor no opera (BOT_OPERA no es 1): el registro es el suyo, pero las órdenes las manda el servidor que tenga BOT_OPERA=1.</p>}
         </div>
         <div className="bot-botones">
@@ -232,8 +241,10 @@ export default function BotTortugas() {
           </table>
         </div>
         <p className="bot-nota">
-          Los niveles salen del diario de Yahoo de cada índice hasta la sesión anterior, como en el backtest; el precio es el de IG (el CFD de contado, que puede ir unos puntos separado del índice).
-          Las divisas, del contado de Yahoo; las materias primas, del histórico de IG, y si IG se queda sin cupo, el oro y la plata, del contado de Twelve Data o Dukascopy (lo pone debajo de la N).
+          {enIB
+            ? <>Cada mercado opera su contrato de IB y sus niveles salen del diario de ese mismo contrato hasta la sesión anterior: los índices, de un ETF UCITS de Xetra en euros (los de EE. UU. no se pueden comprar por MiFID), a las horas de Xetra; las divisas, del contado de IDEALPRO; las materias primas y el bono, del futuro (el micro donde lo hay) del vencimiento vigente, que se cambia {10} días antes del primer aviso o del último día. Si IB no da el diario de un ETF o una divisa, sale de Yahoo (lo pone debajo de la N).</>
+            : <>Los niveles salen del diario de Yahoo de cada índice hasta la sesión anterior, como en el backtest; el precio es el de IG (el CFD de contado, que puede ir unos puntos separado del índice).
+          Las divisas, del contado de Yahoo; las materias primas, del histórico de IG, y si IG se queda sin cupo, el oro y la plata, del contado de Twelve Data o Dukascopy (lo pone debajo de la N).</>}
           En «Canal», la pista es el canal de 55 sesiones y la parte clara el de 20; las rayas azules de arriba son las compras (la corta, S1; la larga, S2), las naranjas de abajo las ventas, el punto el precio y una raya roja el stop de una posición abierta. Debajo, lo que le falta al precio para la ruptura más cercana (o para su stop, con posición), en N.
           Cada sistema lleva su posición: un índice puede tener una de cada. Antes de abrir, el plan es provisional: al abrir se rehace con el saldo de ese momento.
           «Abierto» es lo que va ganando la posición; debajo, lo que dejaría si saltara el stop ahora.
@@ -273,7 +284,7 @@ export default function BotTortugas() {
         )}
       </section>
 
-      <RealFrenteBacktest config={config} cambios={cambiosConfig} sinEntrar={sinEntrar} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
+      <RealFrenteBacktest api={api} config={config} cambios={cambiosConfig} sinEntrar={sinEntrar} reglas={reglas} mercados={mercados} operaciones={operaciones} eventos={eventos} nombre={nombre} />
 
       <section className="bot-bloque">
         <h3>Registro</h3>
@@ -426,7 +437,7 @@ function FilasIndice({ m, config, ocupado, reglas, alternar }) {
               <td className="bot-celda-texto" rowSpan={n}>{m.enSesion ? <span className="bot-pos">abierta</span> : m.proxima ? `abre ${fechaHora(m.proxima)}` : '—'}</td>
               <td className="tor-num" rowSpan={n}>
                 {hoy ? px(hoy.n) : '—'}
-                {hoy?.respaldo && <small className="tor-sub" title="IG no da su histórico (sin cupo semanal): los niveles salen del contado de esta fuente">de {hoy.respaldo}</small>}
+                {hoy?.respaldo && <small className="tor-sub" title="El bróker no da su histórico: los niveles salen de esta fuente">de {hoy.respaldo}</small>}
               </td>
               <td className="tor-num" rowSpan={n}>{px(m.precio)}</td>
               <td rowSpan={n}>
@@ -489,7 +500,7 @@ const describirTramo = c => [
   `${c.maxUnidades} unidades`, ...(c.anadido === 0.5 ? ['añadidos de media unidad'] : []),
 ].join(', ')
 
-function RealFrenteBacktest({ config, cambios, sinEntrar, reglas, mercados, operaciones, eventos, nombre }) {
+function RealFrenteBacktest({ api, config, cambios, sinEntrar, reglas, mercados, operaciones, eventos, nombre }) {
   const [diarios, setDiarios] = useState(null)
   const [error, setError] = useState(null)
   const [cargando, setCargando] = useState(false)
@@ -507,8 +518,8 @@ function RealFrenteBacktest({ config, cambios, sinEntrar, reglas, mercados, oper
 
   const cargar = useCallback(async () => {
     setCargando(true)
-    try { setDiarios(await pedir('/api/bot/tortugas/diarios')); setError(null) } catch (err) { setError(err.message) } finally { setCargando(false) }
-  }, [])
+    try { setDiarios(await pedir(`${api}/diarios`)); setError(null) } catch (err) { setError(err.message) } finally { setCargando(false) }
+  }, [api])
   useEffect(() => {
     const primera = setTimeout(cargar, 0)
     return () => clearTimeout(primera)

@@ -59,10 +59,32 @@ function apiFalsa(cuenta) {
         this.emit('accountDownloadEnd', cuenta)
       })
     }
-    reqAllOpenOrders() {}
+    reqAllOpenOrders() { setImmediate(() => this.emit('openOrderEnd')) }
     placeOrder(id, c, o) { this.mandadas.push({ id, c, o }); setImmediate(() => this.emit('orderStatus', id, 'Submitted', 0, o.totalQuantity, 0)) }
     cancelOrder() {}
     disconnect() {}
+    reqMarketDataType(tipo) { this.tipoDatos = tipo }
+    reqMktData(id) { setImmediate(() => { this.emit('tickPrice', id, 66, 1.1); this.emit('tickPrice', id, 67, 1.2) }) }
+    reqExecutions(id) {
+      setImmediate(() => {
+        this.emit('execDetails', id, { conId: 1, localSymbol: 'MGCZ6' }, { execId: 'x1', permId: 7, orderId: 101, orderRef: 'TIB1-a-stop', price: 4000.5, shares: 2, side: 'SLD', time: '20261102 10:00:00' })
+        this.emit('execDetailsEnd', id)
+      })
+    }
+    reqContractDetails(id, c) {
+      setImmediate(() => {
+        if (c.symbol === 'NADA') return this.emit('error', new Error('No security definition has been found for the request'), 200, id)
+        this.emit('contractDetails', id, { contract: { ...c, conId: 5, localSymbol: 'MGCZ6' }, minTick: 0.1 })
+        this.emit('contractDetailsEnd', id)
+      })
+    }
+    reqHistoricalData(id) {
+      setImmediate(() => {
+        this.emit('historicalData', id, '20261029', 10, 12, 9, 11, 100)
+        this.emit('historicalData', id, '20261030', 11, 13, 10, 12, 100)
+        this.emit('historicalData', id, 'finished-20261029-20261030', -1, -1, -1, -1, -1)
+      })
+    }
   }
 }
 const FalsaUltima = {}
@@ -84,6 +106,29 @@ test('crearIB: conecta, lee la cuenta y manda un bracket con la hija colgada de 
   assert.equal(hija.o.parentId, 100)
   assert.equal(hija.o.account, 'DU999')
   assert.deepEqual(r.map(o => o.estado), ['pendiente', 'pendiente'])
+  ib.cerrar()
+})
+
+test('crearIB: para los bots, contratos, histórico diario, precios (con retraso si no hay suscripción) y ejecuciones', async () => {
+  const ib = crearIB({ port: 4002, Api: apiFalsa('DU999') })
+  const [d] = await ib.detalles({ symbol: 'MGC', secType: 'FUT', exchange: 'COMEX' })
+  assert.equal(d.contract.conId, 5)
+  await assert.rejects(ib.detalles({ symbol: 'NADA', secType: 'FUT' }), /No security definition/)
+  assert.equal(FalsaUltima.api.tipoDatos, 3)
+  const velas = await ib.historico(d.contract)
+  assert.deepEqual(velas.map(v => v.date), ['2026-10-29', '2026-10-30'])
+  let avisos = 0
+  const q = ib.cotizar('MGCZ6', d.contract, () => avisos++)
+  await new Promise(r => setTimeout(r, 20))
+  assert.equal(q.bid, 1.1)
+  assert.equal(q.ask, 1.2)
+  assert.equal(q.retrasado, true)
+  assert.equal(avisos, 2)
+  assert.equal(ib.cotizar('MGCZ6', d.contract), q)
+  const ej = await ib.ejecuciones()
+  assert.equal(ej[0].orderRef, 'TIB1-a-stop')
+  assert.equal(ej[0].precio, 4000.5)
+  assert.deepEqual(await ib.abiertas(), [])
   ib.cerrar()
 })
 

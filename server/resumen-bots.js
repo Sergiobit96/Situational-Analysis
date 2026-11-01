@@ -138,17 +138,19 @@ export function cerradasTortugasAcciones(estado) {
   return (estado.operaciones ?? []).map(o => ({ hora: o.cerrada ? Math.floor(Date.parse(o.cerrada) / 1000) : null, instrumento: o.simbolo, lado: o.lado, nota: `S${o.sistema}`, resultado: o.resultado }))
 }
 
-// `bots`: [{ nombre, cuenta: 'ig' | 'alpaca', activo(), cerradas(), info?() }]; `posicionesIg`: las de
+// `bots`: [{ nombre, cuenta: 'ig' | 'alpaca' | 'ib', activo(), cerradas(), info?() }]; `posicionesIg`: las de
 // la cuenta de IG con su bot ya puesto (las que no son de ningún bot no salen); `vigilancia`: su estado.
 // `info()` da lo que cuenta de cada bot además: { instrumentos, enSesion, proxima }
-export function resumenPublico({ bots, saldoIg, posicionesIg = [], saldoAlpaca = null, posicionesAlpaca = [], vigilancia, t }) {
+export function resumenPublico({ bots, saldoIg, posicionesIg = [], saldoAlpaca = null, posicionesAlpaca = [], saldoIb = null, posicionesIb = [], vigilancia, t }) {
   const latidos = Object.fromEntries((vigilancia?.bots ?? []).map(b => [b.nombre, b]))
   const abiertas = [
     ...juntarAbiertas(posicionesIg.filter(p => p.bot), saldoIg),
     ...juntarAbiertas(posicionesAlpaca, saldoAlpaca),
+    ...juntarAbiertas(posicionesIb, saldoIb),
   ]
+  const CUENTAS = { ig: 'IG (demo)', alpaca: 'Alpaca (paper)', ib: 'IB (paper)' }
   const lista = bots.map(b => {
-    const saldo = b.cuenta === 'alpaca' ? saldoAlpaca : saldoIg
+    const saldo = { alpaca: saldoAlpaca, ib: saldoIb }[b.cuenta] ?? saldoIg
     let cerradas = [], info = {}
     try { cerradas = b.cerradas() } catch { /* un bot roto no tumba el resumen */ }
     try { info = b.info?.() ?? {} } catch { /* ídem */ }
@@ -157,7 +159,7 @@ export function resumenPublico({ bots, saldoIg, posicionesIg = [], saldoAlpaca =
     const sumar = clave => (suyas.length && suyas.every(a => a[clave] != null) ? suyas.reduce((s, a) => s + a[clave], 0) : suyas.length ? null : 0)
     return {
       nombre: b.nombre,
-      cuenta: b.cuenta === 'alpaca' ? 'Alpaca (paper)' : 'IG (demo)',
+      cuenta: CUENTAS[b.cuenta] ?? CUENTAS.ig,
       tipoCuenta: b.cuenta,
       encendido: !!b.activo(),
       enMarcha: !!latido?.enMarcha,

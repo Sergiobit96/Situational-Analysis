@@ -15,6 +15,7 @@ import { suscribir, resumenTiempoReal, escucharFuente, sembrarVelas } from './ti
 import { crearBot, RULE_OF_4, FIRST_BAR_NEGATIVE } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
+import { crearTortugasIB, MERCADOS_IB } from './tortugas-ib.js'
 import { fechaEnZona, diaSemanaEnZona, offsetZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
 import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
@@ -1853,8 +1854,9 @@ app.post('/api/bot/alpaca/orden', conAlpaca(req => alpaca.enviarOrden(req.body ?
 app.delete('/api/bot/alpaca/orden/:id', conAlpaca(req => alpaca.cancelarOrden(req.params.id)))
 app.delete('/api/bot/alpaca/posicion/:simbolo', conAlpaca(req => alpaca.cerrarPosicion(req.params.simbolo)))
 
-// ── Interactive Brokers (server/rutas-ib.js): solo donde haya IB Gateway e IB_PORT, es decir, en local ──
-registrarIB({ app })
+// ── Interactive Brokers (server/rutas-ib.js): donde haya IB Gateway e IB_PORT (en local, el de
+// este PC; en producción, el servicio ib-gateway de Railway). Lo usan la vista de IB y las tortugas en IB ──
+const { ib } = registrarIB({ app })
 
 // ── Tortugas en las acciones del S&P 500, en la cuenta paper de Alpaca (server/bot-tortugas-acciones.js) ──
 // Los niveles salen del diario de Yahoo del backtest (accionesEeuu); opera donde BOT_OPERA=1 y nace apagado.
@@ -2049,6 +2051,35 @@ const botTortugas = bot ? crearBotTortugas({ ig, velasDiarias: velasDiariasTortu
 if (botTortugas && BOT_OPERA) botTortugas.arrancar()
 if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
 
+// ── Tortugas en Interactive Brokers (server/tortugas-ib.js), en la cuenta paper ──
+// El mismo bot con los mercados de IB: índices con ETF de Xetra, divisas al contado y futuros.
+// Los niveles salen del diario de IB de cada contrato; si IB no lo da, el de los ETF y las divisas
+// sale de Yahoo (los futuros no: un continuo de Yahoo no cotiza como el vencimiento que se opera).
+// Como los demás: opera solo donde BOT_OPERA=1, nace apagado y avisa por el mismo Telegram.
+const BOT_TORTUGAS_IB_PATH = process.env.BOT_TORTUGAS_IB || join(dirname(BOT_PATH), PRODUCCION ? 'bot-tortugas-ib.json' : 'Bot Tortugas IB.json')
+const tortugasIB = ib ? crearTortugasIB({ ib }) : null
+const diariosTortugasIB = new Map()
+async function velasDiariasTortugasIB(ticker) {
+  let velas
+  try { velas = await tortugasIB.velasDiarias(ticker) } catch (err) {
+    const m = MERCADOS_IB[ticker]
+    if (!m.datos.yahoo) throw err
+    const hasta = Math.floor(Date.now() / 3_600_000) * 3600
+    velas = (await obtenerRangoYahoo(m.datos.yahoo, '1d', hasta - 365 * 86400, hasta))
+      .map(v => ({ date: fechaEnZona(v.time, m.datos.zona ?? m.zona), open: v.open, high: v.high, low: v.low, close: v.close })).filter(entreSemana)
+    velas.respaldo = 'Yahoo'
+  }
+  diariosTortugasIB.set(ticker, { velas, hora: Date.now(), fuente: velas.respaldo ?? 'IB' })
+  return velas
+}
+const botTortugasIB = tortugasIB ? crearBotTortugas({
+  ...tortugasIB, velasDiarias: velasDiariasTortugasIB, archivo: BOT_TORTUGAS_IB_PATH, noticias,
+  broker: 'IB', nombre: 'Tortugas IB', avisar: BOT_OPERA ? telegram.enviar : undefined,
+}) : null
+// primero los contratos y sus precios; después el bot
+if (botTortugasIB && BOT_OPERA) tortugasIB.arrancar().finally(() => botTortugasIB.arrancar())
+if (botTortugasIB) console.log(`[tortugas ib] registro en ${BOT_TORTUGAS_IB_PATH}; ${BOT_OPERA ? 'opera en este servidor' : 'NO opera aquí (BOT_OPERA no es 1)'}`)
+
 // ── Vigilancia de los bots (ver server/vigilancia.js) ──
 // Cada 30 s mira si los bots en marcha siguen dando vueltas, y avisa por Telegram si uno lleva
 // 2 min sin completar ninguna. /healthz/bots da lo mismo, con 503 si alguno está parado, y lo
@@ -2056,7 +2087,7 @@ if (botTortugas) console.log(`[tortugas] registro en ${BOT_TORTUGAS_PATH}; ${BOT
 // similar), que es el único que puede avisar si se cae el proceso entero. Sin clave: no
 // enseña nada más que esto.
 const vigilancia = crearVigilancia({
-  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas], ['Tortugas acciones', botTortugasAcciones]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
+  bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas], ['Tortugas IB', botTortugasIB], ['Tortugas acciones', botTortugasAcciones]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
   avisar: avisarServidor,
 })
 if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)
@@ -2135,17 +2166,19 @@ const resumenBots = crearCacheResumen(async () => {
   const bots = [
     ...motorSrs.map(([nombre, b]) => ({ nombre, cuenta: 'ig', activo: () => b.estado().config.activo, cerradas: () => cerradasMotorSrs(b.estado()), info: () => infoMotorSrs(b.estado(), t) })),
     ...(botTortugas ? [{ nombre: 'Tortugas', cuenta: 'ig', activo: () => botTortugas.estado().config.activo, cerradas: () => cerradasTortugas(botTortugas.estado()), info: () => infoTortugas(botTortugas.estado()) }] : []),
+    ...(botTortugasIB ? [{ nombre: 'Tortugas IB', cuenta: 'ib', activo: () => botTortugasIB.estado().config.activo, cerradas: () => cerradasTortugas(botTortugasIB.estado()), info: () => infoTortugas(botTortugasIB.estado()) }] : []),
     ...(botTortugasAcciones ? [{ nombre: 'Tortugas acciones', cuenta: 'alpaca', activo: () => botTortugasAcciones.estado().config.activo, cerradas: () => cerradasTortugasAcciones(botTortugasAcciones.estado()), info: () => ({ instrumentos: SP500.acciones.length }) }] : []),
   ]
   const nombres = new Map()
   for (const [, b] of motorSrs) for (const s of b.estado().sesiones) nombres.set(s.ticker, s.nombre)
   for (const m of botTortugas?.estado().mercados ?? []) nombres.set(m.ticker, m.nombre)
   // si IG o Alpaca no contestan (recién arrancado, p. ej.), lo último que dieron: mejor eso que nada
-  const [posIg, cuentaIg, posAlpaca, cuentaAlpaca] = await Promise.all([
+  const [posIg, cuentaIg, posAlpaca, cuentaAlpaca, cuentaIb] = await Promise.all([
     bot ? ig.operar.posiciones().then(x => (ultimoResumen.posIg = x)).catch(() => ultimoResumen.posIg) : [],
     bot ? ig.operar.cuenta().then(x => (x?.saldo != null ? (ultimoResumen.cuentaIg = x) : ultimoResumen.cuentaIg)).catch(() => ultimoResumen.cuentaIg) : null,
     botTortugasAcciones ? alpaca.posiciones().then(x => (ultimoResumen.posAlpaca = x)).catch(() => ultimoResumen.posAlpaca) : [],
     botTortugasAcciones ? alpaca.cuenta().then(x => (ultimoResumen.cuentaAlpaca = x)).catch(() => ultimoResumen.cuentaAlpaca) : null,
+    botTortugasIB ? tortugasIB.operar.cuenta().then(x => (ultimoResumen.cuentaIb = x)).catch(() => ultimoResumen.cuentaIb) : null,
   ])
   // IG da el resultado en la moneda de cada posición (yenes en el USD/JPY): a euros, como el saldo
   const cambios = {}
@@ -2170,8 +2203,23 @@ const resumenBots = crearCacheResumen(async () => {
     })),
     saldoAlpaca: cuentaAlpaca?.equity ?? null,
     posicionesAlpaca: posAlpaca.filter(p => delBotAcciones.has(p.simbolo)).map(p => ({ bot: 'Tortugas acciones', instrumento: p.simbolo, lado: p.lado, desde: null, resultado: p.resultado, alStop: alStopAcciones.get(p.simbolo) ?? null })),
+    saldoIb: cuentaIb?.saldo ?? null,
+    posicionesIb: botTortugasIB ? posicionesTortugasIB() : [],
   })
 })
+// Las unidades del bot de las tortugas en IB para el resumen (como las posiciones de IG, una por
+// unidad), con lo que llevan y lo que darían en su stop, en euros, al último precio de su contrato
+function posicionesTortugasIB() {
+  return botTortugasIB.estado().mercados.flatMap(m => Object.values(m.posiciones).filter(Boolean).flatMap(p => {
+    const precio = tortugasIB.precios.velas(p.ticker, 1, p.epic).at(-1)?.close ?? null
+    const enEur = (u, nivel) => (p.lado === 'largo' ? 1 : -1) * (nivel - u.entrada) * u.tamano * p.valorPunto * p.cambioAEur
+    return p.unidades.filter(u => !u.salida).map(u => ({
+      bot: 'Tortugas IB', instrumento: m.nombre, lado: p.lado, desde: u.hora ?? null,
+      resultado: precio == null ? null : enEur(u, precio),
+      alStop: p.stop == null ? null : enEur(u, p.stop),
+    }))
+  }))
+}
 app.get('/api/resumen-bots', async (_req, res) => {
   try { res.json(await resumenBots()) }
   catch (err) { res.status(500).json({ error: err.message }) }
@@ -2226,6 +2274,47 @@ app.post('/api/bot/tortugas/stop', async (req, res) => {
 app.post('/api/bot/tortugas/parar', async (req, res) => {
   if (!botTortugas) return sinBot(res)
   try { res.json(await botTortugas.pararYCerrar()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// Las tortugas en IB: lo mismo que las de IG, bajo /api/bot/tortugas-ib
+const sinBotIB = res => res.status(404).json({ error: 'Las tortugas en IB necesitan IB_PORT en este servidor' })
+app.get('/api/bot/tortugas-ib', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  const cuenta = await ib.estado().catch(err => ({ conectado: false, error: err.message }))
+  res.json({
+    archivo: BOT_TORTUGAS_IB_PATH, opera: BOT_OPERA, telegram: telegram.estado(), noticias: noticias.estado(), broker: 'IB',
+    ib: { conectado: cuenta.conectado, error: cuenta.error ?? null, cuenta: cuenta.cuenta ?? null, paper: cuenta.paper ?? null, moneda: cuenta.resumen?.moneda ?? null },
+    contratos: tortugasIB.estado(),
+    ...botTortugasIB.estado(),
+  })
+})
+app.get('/api/bot/tortugas-ib/diarios', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  const salida = {}
+  await Promise.all(Object.keys(MERCADOS_IB).map(async ticker => {
+    let g = diariosTortugasIB.get(ticker)
+    if (!g || Date.now() - g.hora > DIARIO_FRESCO_MS) {
+      try { await velasDiariasTortugasIB(ticker); g = diariosTortugasIB.get(ticker) } catch (err) { if (!g) return void (salida[ticker] = { error: err.message }) }
+    }
+    salida[ticker] = { fuente: g.fuente, hora: g.hora, velas: g.velas.map(v => [v.date, v.open, v.high, v.low, v.close]) }
+  }))
+  res.json(salida)
+})
+app.put('/api/bot/tortugas-ib/config', (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  try { res.json(botTortugasIB.cambiarConfig(req.body ?? {})) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+app.post('/api/bot/tortugas-ib/stop', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  const { ticker, sistema, stop } = req.body ?? {}
+  try { res.json(await botTortugasIB.apretarStop(ticker, sistema, stop)) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
+app.post('/api/bot/tortugas-ib/parar', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  try { res.json(await botTortugasIB.pararYCerrar()) }
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 

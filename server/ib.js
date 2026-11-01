@@ -27,6 +27,7 @@ const ESTADOS = {
   ApiPending: 'enviando', ApiCancelled: 'cancelada', Cancelled: 'cancelada', Filled: 'ejecutada', Inactive: 'inactiva',
 }
 export const ABIERTA = new Set(['enviando', 'pendiente', 'cancelando'])
+const ACABADA = new Set(['Filled', 'Cancelled', 'ApiCancelled', 'Inactive'])
 
 const n = x => (x == null || x === '' ? null : Number(x))
 const positivo = x => Number.isFinite(x) && x > 0
@@ -94,6 +95,10 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     api: null, conectado: false, conectando: null, siguienteId: null, cuenta: null, cuentas: [],
     valores: {}, cartera: new Map(), ordenes: new Map(), avisos: [], ultimoError: null, desde: null,
     reintento: null, esperaReintento: 5_000, listaCuenta: false, cerrado: false,
+    // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
+    // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
+    // errores de las dos cosas con el mismo número
+    sigPeticion: 100_000_000, peticiones: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null,
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -115,6 +120,10 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       e.cuenta = process.env.IB_CUENTA && e.cuentas.includes(process.env.IB_CUENTA) ? process.env.IB_CUENTA : e.cuentas[0] ?? null
       if (e.cuenta) api.reqAccountUpdates(true, e.cuenta)
       api.reqAllOpenOrders()
+      // sin suscripción a un mercado, IB da sus precios con 15 min de retraso en vez de nada
+      api.reqMarketDataType(3)
+      for (const [id, q] of e.cotizaciones) api.reqMktData(id, q.contrato, '', false, false)
+      api.reqExecutions(e.sigPeticion++, {})
     })
     api.on(EventName.updateAccountValue, (clave, valor, moneda, cuenta) => {
       if (cuenta !== e.cuenta) return
@@ -129,15 +138,44 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     api.on(EventName.openOrder, (id, c, o, st) => {
       const antes = e.ordenes.get(id) ?? {}
       e.ordenes.set(id, { ...antes, id, c, o, estadoIB: st?.status ?? antes.estadoIB, permId: o.permId, actualizada: Date.now() })
+      e.abiertas?.lista.push({ id, c, o, estadoIB: st?.status ?? null })
     })
+    api.on(EventName.openOrderEnd, () => { e.abiertas?.fin() })
     api.on(EventName.orderStatus, (id, estado, rellena, quedan, medio, permId, padre) => {
       const antes = e.ordenes.get(id)
       if (!antes) return
-      e.ordenes.set(id, { ...antes, estadoIB: estado, rellena, quedan, medio, padre, actualizada: Date.now() })
+      e.ordenes.set(id, { ...antes, estadoIB: estado, rellena, quedan, medio, padre, permId: permId || antes.permId, actualizada: Date.now() })
+    })
+    api.on(EventName.contractDetails, (id, d) => { e.peticiones.get(id)?.filas.push(d) })
+    api.on(EventName.contractDetailsEnd, id => { const p = e.peticiones.get(id); p?.ok(p.filas) })
+    api.on(EventName.historicalData, (id, hora, open, high, low, close) => {
+      const p = e.peticiones.get(id)
+      if (!p) return
+      if (String(hora).startsWith('finished')) return p.ok(p.filas)
+      if ([open, high, low, close].every(x => Number.isFinite(x) && x > 0)) p.filas.push({ hora: String(hora), open, high, low, close })
+    })
+    api.on(EventName.execDetails, (_id, c, x) => {
+      e.ejecuciones.set(x.execId, { permId: x.permId, orderId: x.orderId, orderRef: x.orderRef ?? null, precio: x.price, cantidad: x.shares, lado: x.side, hora: x.time, conId: c.conId, simbolo: c.localSymbol || c.symbol })
+    })
+    api.on(EventName.execDetailsEnd, id => { e.peticiones.get(id)?.ok(null) })
+    // los precios en directo (o con retraso: 66 a 68 son los mismos con 15 min de retraso)
+    const CAMPOS = { 1: 'bid', 2: 'ask', 4: 'last', 66: 'bid', 67: 'ask', 68: 'last' }
+    api.on(EventName.tickPrice, (id, campo, valor) => {
+      const q = e.cotizaciones.get(id)
+      const k = CAMPOS[campo]
+      if (!q || !k || !(valor > 0)) return
+      q[k] = valor
+      q.retrasado = campo >= 66
+      q.hora = Date.now()
+      q.error = null
+      try { q.alPrecio?.(q) } catch (err) { log.warn?.(`IB: ${err.message}`) }
     })
     api.on(EventName.error, (err, codigo, id) => {
       if (INFORMATIVOS.has(codigo)) return
       const texto = String(err?.message ?? err).replace(/<br>\s*/gi, ' ').replace(/\s+/g, ' ').trim()
+      // el error de una petición de un bot es suyo: la falla, y no es de ninguna orden
+      if (e.peticiones.has(id)) return e.peticiones.get(id).mal(new Error(texto))
+      if (e.cotizaciones.has(id)) { e.cotizaciones.get(id).error = texto; return }
       if (codigo === 502 || codigo === 504 || /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EHOSTUNREACH/.test(texto)) e.ultimoError = `No hay IB Gateway escuchando en ${host}:${port} (${texto})`
       else e.ultimoError = texto
       const orden = id > 0 ? e.ordenes.get(id) : null
@@ -225,6 +263,38 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     if (!esPaper(e.cuenta) && !real) throw new Error(`La cuenta ${e.cuenta} es real: las órdenes solo salen a una paper (DU…) salvo con IB_REAL=1`)
   }
 
+  // Una petición con respuesta: `lanzar(id)` la manda, y los eventos de arriba la terminan
+  function pedir(que, lanzar, ms = 15_000) {
+    return new Promise((ok, mal) => {
+      const id = e.sigPeticion++
+      const t = setTimeout(() => { e.peticiones.delete(id); mal(new Error(`IB no contesta (${que})`)) }, ms)
+      const fin = f => x => { clearTimeout(t); e.peticiones.delete(id); f(x) }
+      e.peticiones.set(id, { filas: [], ok: fin(ok), mal: fin(mal) })
+      lanzar(id)
+    })
+  }
+
+  // Las órdenes abiertas ahora mismo en IB, pidiéndoselas: las que se rellenaron o cancelaron
+  // sin que este proceso lo viera (con la conexión caída) ya no salen
+  function pedirAbiertas() {
+    if (e.abiertas) return e.abiertas.promesa
+    let fin
+    const promesa = new Promise(ok => { fin = ok })
+    const lista = []
+    const t = setTimeout(() => e.abiertas?.fin(), 5_000)
+    e.abiertas = { lista, promesa, fin: () => { clearTimeout(t); e.abiertas = null; fin(lista.filter(x => !ACABADA.has(x.estadoIB))) } }
+    e.api.reqAllOpenOrders()
+    return promesa
+  }
+
+  // Espera a que una orden termine (rellena, cancelada o rechazada), como mucho `ms`. Un aviso
+  // de IB sin estado no la termina: muchos son advertencias, y la orden sigue
+  async function esperarOrden(id, ms) {
+    const t0 = Date.now()
+    while (Date.now() - t0 < ms && !ACABADA.has(e.ordenes.get(id)?.estadoIB)) await new Promise(r => setTimeout(r, 100))
+    return e.ordenes.get(id)
+  }
+
   function mandar(patas) {
     let padre = null
     const ids = []
@@ -288,6 +358,66 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       const ids = mandar([{ contrato, orden: { action: p.pos > 0 ? 'SELL' : 'BUY', orderType: 'MKT', totalQuantity: Math.abs(p.pos), tif: 'DAY', orderRef: `SA-cierre-${Date.now()}`, transmit: true } }])
       return (await respuesta(ids))[0]
     },
+
+    // ── Para los bots (server/tortugas-ib.js) ──
+    async cuentaBot() {
+      await conectar()
+      return { moneda: monedaBase(), saldo: valor('NetLiquidation'), disponible: valor('AvailableFunds') }
+    },
+    // lo que vale una moneda en la base de la cuenta, si IB lo da (solo las que hay en la cuenta)
+    cambio: moneda => n(e.valores[`ExchangeRate:${moneda}`]),
+    async detalles(contrato) {
+      await conectar()
+      return pedir(`contrato ${contrato.symbol}`, id => e.api.reqContractDetails(id, contrato))
+    },
+    // las velas de `barra` (las diarias, con date 'AAAA-MM-DD')
+    async historico(contrato, { duracion = '1 Y', barra = '1 day', que = 'TRADES', rth = false } = {}) {
+      await conectar()
+      const filas = await pedir(`histórico ${contrato.localSymbol ?? contrato.symbol}`, id => e.api.reqHistoricalData(id, contrato, '', duracion, barra, que, rth ? 1 : 0, 1, false), 60_000)
+      return filas.map(f => ({ date: /^\d{8}$/.test(f.hora) ? `${f.hora.slice(0, 4)}-${f.hora.slice(4, 6)}-${f.hora.slice(6, 8)}` : f.hora, open: f.open, high: f.high, low: f.low, close: f.close }))
+    },
+    // precios en directo de un contrato (con su conId), una suscripción por `clave`;
+    // `alPrecio(q)` con cada precio nuevo. Da la cotización, que se va actualizando sola
+    cotizar(clave, contrato, alPrecio = null) {
+      const ya = [...e.cotizaciones.values()].find(q => q.clave === clave)
+      if (ya) return ya
+      const id = e.sigPeticion++
+      const q = { clave, contrato, bid: null, ask: null, last: null, retrasado: null, hora: null, error: null, alPrecio }
+      e.cotizaciones.set(id, q)
+      if (e.conectado && e.api) e.api.reqMktData(id, contrato, '', false, false)
+      else conectar().catch(() => {})   // al conectar se suscriben todas
+      return q
+    },
+    async ejecuciones() {
+      await conectar()
+      await pedir('ejecuciones', id => e.api.reqExecutions(id, {}))
+      return [...e.ejecuciones.values()]
+    },
+    async abiertas() {
+      await conectar()
+      return pedirAbiertas()
+    },
+    // manda las patas (la primera, la madre) y da sus ids; solo a una cuenta paper
+    async mandarPatas(patas) {
+      await conectar()
+      comprobarQueSePuedeOperar()
+      return mandar(patas)
+    },
+    orden: id => e.ordenes.get(id) ?? null,
+    esperarOrden,
+    // cambia una orden abierta (con su misma id, que tiene que ser de este cliente)
+    async modificar(id, contrato, orden) {
+      await conectar()
+      comprobarQueSePuedeOperar()
+      const o = { ...orden, account: e.cuenta, transmit: true }
+      e.ordenes.set(id, { ...e.ordenes.get(id), id, c: contrato, o, motivo: null, estadoIB: null, actualizada: Date.now() })
+      e.api.placeOrder(id, contrato, o)
+    },
+    async cancelar(id) {
+      await conectar()
+      e.api.cancelOrder(id)
+    },
+
     cerrar() {
       e.cerrado = true
       clearTimeout(e.reintento); e.reintento = null

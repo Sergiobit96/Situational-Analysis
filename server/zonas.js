@@ -5,7 +5,7 @@
 // cambia nunca. Todo con Intl, así que no depende de la zona horaria del servidor.
 
 const formateadores = new Map()
-const memoria = new Map()
+const memoria = new Map()   // zona → (día UTC → desfase)
 
 function formateador(zona) {
   let f = formateadores.get(zona)
@@ -20,19 +20,34 @@ function formateador(zona) {
   return f
 }
 
-// Desfase de la zona en segundos en ese instante (memorizado por hora UTC: los cambios de
-// horario caen en hora en punto)
-export function offsetZona(ts, zona) {
-  const hora = Math.floor(ts / 3600)
-  const clave = `${zona}|${hora}`
-  const visto = memoria.get(clave)
-  if (visto !== undefined) return visto
+// Desfase de la zona en segundos a una hora UTC en punto (los cambios de horario caen en hora
+// en punto)
+function offsetHora(hora, zona) {
   const p = {}
   for (const { type, value } of formateador(zona).formatToParts(hora * 3600 * 1000)) p[type] = value
   const local = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) / 1000
-  const off = local - hora * 3600
-  if (memoria.size > 100_000) memoria.clear()
-  memoria.set(clave, off)
+  return local - hora * 3600
+}
+
+// Desfase de la zona en segundos en ese instante. Memorizado por día UTC: el horario cambia
+// como mucho una vez al día, así que si a las 00:00 y a las 23:00 es el mismo, vale para todo
+// el día; el día del cambio se mira la hora. Por horas, 30 años de velas (262.000 horas)
+// vaciaban la memoria una y otra vez.
+export function offsetZona(ts, zona) {
+  const dia = Math.floor(ts / 86400)
+  let dias = memoria.get(zona)
+  if (!dias) memoria.set(zona, (dias = new Map()))
+  let d = dias.get(dia)
+  if (d === undefined) {
+    const a = offsetHora(dia * 24, zona), b = offsetHora(dia * 24 + 23, zona)
+    d = a === b ? a : { horas: new Map() }
+    if (dias.size > 100_000) dias.clear()
+    dias.set(dia, d)
+  }
+  if (typeof d === 'number') return d
+  const hora = Math.floor(ts / 3600)
+  let off = d.horas.get(hora)
+  if (off === undefined) d.horas.set(hora, (off = offsetHora(hora, zona)))
   return off
 }
 

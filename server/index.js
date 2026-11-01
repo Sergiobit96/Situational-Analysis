@@ -18,9 +18,10 @@ import { suscribir, resumenTiempoReal, escucharFuente, sembrarVelas } from './ti
 import { crearBot, RULE_OF_4, FIRST_BAR_NEGATIVE } from './bot-srs.js'
 import { crearCalendarioFomc } from './calendario-fomc.js'
 import { crearBotTortugas, MERCADOS_TORTUGAS, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan } from './bot-tortugas.js'
-import { fechaEnZona } from './zonas.js'
+import { fechaEnZona, diaSemanaEnZona, offsetZona } from './zonas.js'
 import { crearClaveBot } from './clave-bot.js'
 import { crearVigilancia, crearAvisoErrores, medirBucle } from './vigilancia.js'
+import { crearPerfilador } from './perfil.js'
 import { crearTelegram } from './telegram.js'
 import { crearCartera, MAX_RIESGO_GRUPO_PCT } from './cartera.js'
 import { crearNoticias } from './noticias.js'
@@ -432,28 +433,24 @@ function marcarDukaCaido(err) {
   console.warn(`[Dukascopy] inaccesible (${errDetalle(err)}) -> fallback intradia durante ${DUKA_CIRCUITO_MS / 60_000} min`)
 }
 
-// Timezone helpers
-const getMadridDate = ts =>
-  new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' })
+// Timezone helpers. Con el desfase memorizado de server/zonas.js: toLocaleDateString con
+// timeZone crea un formateador en cada llamada, y en las series de 30 años de diario eso
+// bloqueaba el servidor casi un segundo cada vez (medido con server/perfil.js)
+const getMadridDate = ts => fechaEnZona(ts, 'Europe/Madrid')
 
 const getMadridDay = ts => {
-  const dow = new Date(
-    new Date(ts * 1000).toLocaleString('en-US', { timeZone: 'Europe/Madrid' })
-  ).getDay()
+  const dow = diaSemanaEnZona(ts, 'Europe/Madrid')
   return dow === 0 ? 7 : dow   // 1=lun … 5=vie, 7=dom
 }
 
 // Helpers para timezone Londres (maneja GMT/BST automáticamente)
 function getLondonMinutes(tsMs) {
-  const parts = new Intl.DateTimeFormat('en', {
-    timeZone: 'Europe/London', hour: 'numeric', minute: 'numeric', hour12: false,
-  }).formatToParts(new Date(tsMs))
-  const h = parseInt(parts.find(p => p.type === 'hour').value,  10)
-  const m = parseInt(parts.find(p => p.type === 'minute').value, 10)
-  return h * 60 + m
+  const t = tsMs / 1000
+  const local = Math.floor(t + offsetZona(t, 'Europe/London'))
+  return Math.floor((((local % 86400) + 86400) % 86400) / 60)
 }
 function getLondonDateStr(tsMs) {
-  return new Date(tsMs).toLocaleDateString('en-CA', { timeZone: 'Europe/London' })
+  return fechaEnZona(tsMs / 1000, 'Europe/London')
 }
 
 // ── Dukascopy M30 → barras diarias con open/close preciso de sesión ──────────
@@ -3815,6 +3812,14 @@ app.get('/healthz/bots', (_req, res) => {
 // Todo lo que dice si el servidor está sano, junto (server/salud.js), para la vista Salud de la
 // pestaña Bots. Va bajo /api/bot, con su clave: enseña el estado de IG y de la cuenta.
 const ARRANCADO = new Date().toISOString()
+// Perfil de CPU de unos minutos, para ver qué bloquea el bucle (server/perfil.js): POST con
+// { segundos } lo enciende y GET da el último resumen
+const perfilador = crearPerfilador()
+app.get('/api/bot/perfil', (_req, res) => res.json(perfilador.estado()))
+app.post('/api/bot/perfil', async (req, res) => {
+  try { res.json(await perfilador.empezar(req.body?.segundos)) } catch (err) { res.status(409).json({ error: err.message }) }
+})
+
 app.get('/api/bot/salud', (_req, res) => {
   const e = ig?.estado()
   const s = {

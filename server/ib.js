@@ -172,8 +172,20 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
         if (e.conectado && e.siguienteId != null && (e.listaCuenta || Date.now() - t0 > 4_000)) { clearInterval(mirar); e.conectando = null; ok() }
         else if ((!e.conectado && e.ultimoError) || Date.now() - t0 > 8_000) {
           clearInterval(mirar); e.conectando = null
-          if (!e.conectado) programarReintento()
-          mal(new Error(e.ultimoError ?? `IB Gateway no contesta en ${host}:${port}`))
+          if (!e.conectado) {
+            // el socket abierto sin saludo de IB se tira, para que el reintento empiece de cero
+            if (!e.ultimoError) {
+              e.ultimoError = `El IB Gateway de ${host}:${port} acepta la conexión pero no contesta (¿sin sesión iniciada en IB, o esperando a que se acepte la conexión de la API?)`
+              avisar(e.ultimoError)
+            }
+            const api = e.api
+            e.api = null
+            // disconnect() no cierra un socket que no ha pasado del saludo: se cierra a mano
+            api?.controller?.socket?.client?.destroy()
+            try { api?.removeAllListeners(); api?.disconnect() } catch { /* ya cerrado */ }
+            programarReintento()
+          }
+          mal(new Error(e.ultimoError))
         }
       }, 100)
     })

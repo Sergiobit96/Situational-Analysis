@@ -67,7 +67,8 @@ export const MERCADOS_IB = {
   USDJPY: divisa('USD/JPY', 'USD', 'JPY', 'JPY=X'), AUDUSD: divisa('AUD/USD', 'AUD', 'USD', 'AUDUSD=X'),
   USDCAD: divisa('USD/CAD', 'USD', 'CAD', 'CAD=X'), USDCHF: divisa('USD/CHF', 'USD', 'CHF', 'CHF=X'),
   XAUUSD: futuro('Oro', 'Metales', ['MGC'], 'COMEX', 'GJMQVZ'),
-  XAGUSD: futuro('Plata', 'Metales', ['SIL'], 'COMEX', 'HKNUZ'),
+  // el micro de plata (1.000 onzas) es en IB el SI de la clase SIL
+  XAGUSD: futuro('Plata', 'Metales', [{ symbol: 'SI', tradingClass: 'SIL' }, 'SIL'], 'COMEX', 'HKNUZ'),
   COPPER: futuro('Cobre', 'Metales', ['MHG'], 'COMEX', 'HKNUZ'),
   USOIL: futuro('Crudo WTI', 'Energía', ['MCL'], 'NYMEX', LETRAS),
   UKOIL: futuro('Crudo Brent', 'Energía', ['BZ'], 'NYMEX', LETRAS),
@@ -148,12 +149,15 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
 
   async function primeroQueExista(m, buscar) {
     const fallos = []
-    for (const symbol of m.simbolos) {
+    // cada símbolo, solo o con su clase ({ symbol, tradingClass })
+    for (const s of m.simbolos) {
+      const busqueda = typeof s === 'string' ? { symbol: s } : s
+      const texto = [busqueda.symbol, busqueda.tradingClass].filter(Boolean).join(' ')
       try {
-        const d = buscar(await ib.detalles({ ...m.contrato, symbol }))
+        const d = buscar(await ib.detalles({ ...m.contrato, ...busqueda }))
         if (d) return d
-        fallos.push(`${symbol}: ningún vencimiento bueno`)
-      } catch (err) { fallos.push(`${symbol}: ${err.message}`) }
+        fallos.push(`${texto}: ningún vencimiento bueno`)
+      } catch (err) { fallos.push(`${texto}: ${err.message}`) }
     }
     throw new Error(`IB no da el contrato de ${m.nombre} (${fallos.join('; ')})`)
   }
@@ -193,7 +197,8 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     if (ya) return ya.ticker
     return Object.keys(mercados).find(t => {
       const m = mercados[t]
-      return m.contrato.secType === c.secType && m.simbolos.includes(c.symbol) && (c.secType !== 'CASH' || m.contrato.currency === c.currency)
+      return m.contrato.secType === c.secType && m.simbolos.some(s => (typeof s === 'string' ? s === c.symbol : s.symbol === c.symbol && (!c.tradingClass || s.tradingClass === c.tradingClass)))
+        && (c.secType !== 'CASH' || m.contrato.currency === c.currency)
     }) ?? null
   }
 

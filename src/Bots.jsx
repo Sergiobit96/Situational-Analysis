@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
-import Bot from './Bot'
-import BotTortugas from './BotTortugas'
-import Posiciones from './Posiciones'
-import Salud from './Salud'
-import Alpaca from './Alpaca'
-import BotTortugasAcciones from './BotTortugasAcciones'
+import { useState, useEffect, lazy, Suspense } from 'react'
+// cada vista se descarga al abrirla (como las pestañas en App.jsx)
+const Bot = lazy(() => import('./Bot'))
+const BotTortugas = lazy(() => import('./BotTortugas'))
+const Posiciones = lazy(() => import('./Posiciones'))
+const Salud = lazy(() => import('./Salud'))
+const Alpaca = lazy(() => import('./Alpaca'))
+const BotTortugasAcciones = lazy(() => import('./BotTortugasAcciones'))
 
 // Los bots de la demo de IG bajo una sola pestaña, cada uno en su vista, como el Diario. Todos
 // operan desde el servidor que tenga BOT_OPERA=1 (en la nube) y comparten la cuenta, el
@@ -56,7 +57,7 @@ export default function Bots({ inicial = null }) {
       </div>
 
       {/* la clave hace que cambiar de bot monte la vista desde cero, sin datos del anterior */}
-      <div key={vista.id}>{vista.render()}</div>
+      <div key={vista.id}><Suspense fallback={<p className="cargando-pestana">Cargando…</p>}>{vista.render()}</Suspense></div>
     </div>
   )
 }

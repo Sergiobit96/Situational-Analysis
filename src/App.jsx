@@ -1,20 +1,22 @@
-import { useState, useEffect } from 'react'
-import FiltroGap from './FiltroGap'
-import SubirDatos from './SubirDatos'
-import Calendario from './Calendario'
-import Pipeline from './Pipeline'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import QuoteBar from './QuoteBar'
-import Operaciones from './Operaciones'
-import Diario from './Diario'
-import Seguimiento from './Seguimiento'
-import Fotos from './Fotos'
-import Charts from './Charts'
-import Book from './Book'
-import Estrategias from './Estrategias.jsx'
-import Grafico from './Grafico'
-import Estadisticas from './Estadisticas.jsx'
-import Bots from './Bots'
-import ResumenBots from './ResumenBots'
+// Cada pestaña se descarga al abrirla: así la primera carga (y la de Resumen bots, que es
+// pública) no se trae el código de todas las demás
+const FiltroGap = lazy(() => import('./FiltroGap'))
+const SubirDatos = lazy(() => import('./SubirDatos'))
+const Calendario = lazy(() => import('./Calendario'))
+const Pipeline = lazy(() => import('./Pipeline'))
+const Operaciones = lazy(() => import('./Operaciones'))
+const Diario = lazy(() => import('./Diario'))
+const Seguimiento = lazy(() => import('./Seguimiento'))
+const Fotos = lazy(() => import('./Fotos'))
+const Charts = lazy(() => import('./Charts'))
+const Book = lazy(() => import('./Book'))
+const Estrategias = lazy(() => import('./Estrategias.jsx'))
+const Grafico = lazy(() => import('./Grafico'))
+const Estadisticas = lazy(() => import('./Estadisticas.jsx'))
+const Bots = lazy(() => import('./Bots'))
+const ResumenBots = lazy(() => import('./ResumenBots'))
 import './App.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
@@ -154,24 +156,26 @@ export default function App() {
         </header>
 
         <main className={`contenido ${tab === 'graf' ? 'contenido-ancho' : ''}`}>
-          {tab === 'gap'      && <FiltroGap />}
-          {tab === 'graf'     && <Grafico />}
-          {tab === 'datos'    && <SubirDatos />}
-          {tab === 'cal'      && <Calendario />}
-          {tab === 'ops'      && <Operaciones abrir={irATrade} onAbierto={() => setIrATrade(null)} />}
-          {tab === 'diario'   && <Diario />}
-          {tab === 'seg'      && (
-            <Seguimiento onIrATrade={p => { setIrATrade(p); setTab('ops') }} />
-          )}
-          {tab === 'estr'     && <Estrategias />}
-          {tab === 'stats'    && <Estadisticas />}
-          {tab === 'bots'     && <Bots inicial={BOTS_ANTES[pedida] ?? null} />}
-          {tab === 'resumen'  && <ResumenBots />}
-          {tab === 'pipeline' && <Pipeline />}
-          {tab === 'fotos'    && <Fotos />}
-          {tab === 'charts'   && <Charts />}
-          {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}
-          {tab === 'glory'    && <Book key="glory"  book="glory"  nombre="Book of Glory"  icono="📗" />}
+          <Suspense fallback={<p className="cargando-pestana">Cargando…</p>}>
+            {tab === 'gap'      && <FiltroGap />}
+            {tab === 'graf'     && <Grafico />}
+            {tab === 'datos'    && <SubirDatos />}
+            {tab === 'cal'      && <Calendario />}
+            {tab === 'ops'      && <Operaciones abrir={irATrade} onAbierto={() => setIrATrade(null)} />}
+            {tab === 'diario'   && <Diario />}
+            {tab === 'seg'      && (
+              <Seguimiento onIrATrade={p => { setIrATrade(p); setTab('ops') }} />
+            )}
+            {tab === 'estr'     && <Estrategias />}
+            {tab === 'stats'    && <Estadisticas />}
+            {tab === 'bots'     && <Bots inicial={BOTS_ANTES[pedida] ?? null} />}
+            {tab === 'resumen'  && <ResumenBots />}
+            {tab === 'pipeline' && <Pipeline />}
+            {tab === 'fotos'    && <Fotos />}
+            {tab === 'charts'   && <Charts />}
+            {tab === 'horror'   && <Book key="horror" book="horror" nombre="Book of Horror" icono="📕" />}
+            {tab === 'glory'    && <Book key="glory"  book="glory"  nombre="Book of Glory"  icono="📗" />}
+          </Suspense>
         </main>
       </div>
     </div>

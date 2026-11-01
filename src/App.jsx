@@ -93,7 +93,7 @@ function tabPedida() {
     const guardada = localStorage.getItem('sa.tab')
     if (TABS.some(t => t.id === guardada) || BOTS_ANTES[guardada]) return guardada
   } catch { /* sin almacenamiento */ }
-  return TABS[0].id
+  return import.meta.env.DEV ? 'gap' : 'bots'
 }
 
 export default function App() {

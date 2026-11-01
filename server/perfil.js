@@ -4,7 +4,17 @@
 // en cada uno, y las funciones que más tiempo se llevan en total. El perfilador de V8 muestrea
 // desde otro hilo, así que ve también los bloqueos.
 
-import { Session } from 'inspector/promises'
+import { Session } from 'inspector'
+
+// Railway corre Node 18, que no tiene inspector/promises: la sesión de siempre, con promesas
+function sesionConPromesas() {
+  const s = new Session()
+  s.connect()
+  return {
+    post: (metodo, params) => new Promise((ok, mal) => s.post(metodo, params ?? {}, (err, r) => (err ? mal(err) : ok(r)))),
+    disconnect: () => s.disconnect(),
+  }
+}
 
 const LIBRE = new Set(['(idle)'])
 const NUESTRO = /\/(server|src|api)\//
@@ -79,8 +89,7 @@ export function crearPerfilador({ log = console.log } = {}) {
   async function empezar(segundos) {
     if (enCurso) throw new Error('Ya hay un perfil en marcha')
     const s = Math.min(900, Math.max(10, Math.round(Number(segundos) || 120)))
-    const sesion = new Session()
-    sesion.connect()
+    const sesion = sesionConPromesas()
     await sesion.post('Profiler.enable')
     await sesion.post('Profiler.setSamplingInterval', { interval: 1000 })
     await sesion.post('Profiler.start')

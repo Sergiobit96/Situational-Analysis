@@ -1,7 +1,7 @@
 // Tests del perfil de CPU (server/perfil.js)
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { Session } from 'inspector/promises'
+import { Session } from 'inspector'
 
 import { resumirPerfil } from '../server/perfil.js'
 
@@ -13,8 +13,9 @@ function bloquear(ms) {
 }
 
 test('un bloqueo de 300 ms sale como tramo largo, con la función que lo causó', async () => {
-  const sesion = new Session()
-  sesion.connect()
+  const s = new Session()
+  s.connect()
+  const sesion = { post: (m, p = {}) => new Promise((ok, mal) => s.post(m, p, (e, r) => (e ? mal(e) : ok(r)))), disconnect: () => s.disconnect() }
   await sesion.post('Profiler.enable')
   await sesion.post('Profiler.setSamplingInterval', { interval: 1000 })
   await sesion.post('Profiler.start')

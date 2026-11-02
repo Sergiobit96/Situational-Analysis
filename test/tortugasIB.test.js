@@ -249,3 +249,36 @@ test('cerrar a mano un mercado y sistema: vende a mercado y apunta la operación
     assert.deepEqual(await tib.operar.posiciones(), [])
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
+
+test('IB: una horquilla imposible (la subasta de Xetra) no hace velas ni deja entrar; el stop va al escalón de su regla; un stop rechazado cancela la madre', async () => {
+  const ib = ibFalso()
+  ib.reglaPrecio = async () => [{ desde: 0, paso: 0.001 }, { desde: 10, paso: 0.005 }, { desde: 100, paso: 0.05 }]
+  DETALLES.SXR8 = [{ contract: { conId: 41, symbol: 'SXR8', secType: 'STK', exchange: 'SMART', primaryExch: 'IBIS', currency: 'EUR', localSymbol: 'SXR8' }, minTick: 0.0001, marketRuleIds: '9,1', validExchanges: 'SMART,IBIS' }]
+  const t = ny(11, 3, 4)
+  const tib = crearTortugasIB({ ib, ahora: () => t, log: () => {}, mercados: { '^GSPC': { ...MERCADOS_IB['^GSPC'], simbolos: ['SXR8'] } } })
+  try {
+    await tib.arrancar()
+    ib.precio('SXR8', 733, 1200)
+    assert.deepEqual(tib.precios.velas('^GSPC', 5), [])
+    const m = await tib.operar.datosMercado('^GSPC')
+    assert.equal(m.oferta, null)
+    // con ese precio, el stop quedaría por encima del de verdad: no se manda
+    ib.precio('SXR8', 733, 733.2)
+    assert.equal((await tib.operar.abrir({ ticker: '^GSPC', epic: 'SXR8', lado: 'largo', tamano: 10, stop: 1179.8553, referencia: 'TIB1-GSPC-x' })).aceptada, false)
+    assert.equal(ib.mandadas.length, 0)
+    const r = await tib.operar.abrir({ ticker: '^GSPC', epic: 'SXR8', lado: 'largo', tamano: 10, stop: 712.8553, referencia: 'TIB1-GSPC-y' })
+    assert.equal(r.stop, 712.85)
+    // si IB rechaza el stop, la madre se cancela y la entrada cuenta como rechazada
+    const mandar = ib.mandarPatas
+    ib.mandarPatas = async patas => {
+      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'MKT' ? 'LMT' : p.orden.orderType } })))
+      Object.assign(ib.ordenes.get(ids[1]), { estadoIB: null, motivo: 'The price does not conform to the minimum price variation' })
+      Object.assign(ib.ordenes.get(ids[0]), { estadoIB: null })
+      return ids
+    }
+    const rechazada = await tib.operar.abrir({ ticker: '^GSPC', epic: 'SXR8', lado: 'largo', tamano: 10, stop: 712.85, referencia: 'TIB1-GSPC-z' })
+    assert.equal(rechazada.aceptada, false)
+    assert.match(rechazada.motivo, /rechaza su stop/)
+    assert.equal(ib.mandadas.at(-2).estadoIB, 'Cancelled')
+  } finally { delete DETALLES.SXR8 }
+})

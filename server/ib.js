@@ -98,7 +98,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null,
+    sigPeticion: 100_000_000, peticiones: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -158,6 +158,8 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       e.ejecuciones.set(x.execId, { permId: x.permId, orderId: x.orderId, orderRef: x.orderRef ?? null, precio: x.price, cantidad: x.shares, lado: x.side, hora: x.time, conId: c.conId, simbolo: c.localSymbol || c.symbol })
     })
     api.on(EventName.execDetailsEnd, id => { e.peticiones.get(id)?.ok(null) })
+    // los escalones de precio de una regla de mercado: [{ lowEdge, increment }]
+    api.on(EventName.marketRule, (id, escalones) => { e.reglas.get(id)?.ok(escalones) })
     // los precios en directo (o con retraso: 66 a 68 son los mismos con 15 min de retraso)
     const CAMPOS = { 1: 'bid', 2: 'ask', 4: 'last', 66: 'bid', 67: 'ask', 68: 'last' }
     api.on(EventName.tickPrice, (id, campo, valor) => {
@@ -387,6 +389,21 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       if (e.conectado && e.api) e.api.reqMktData(id, contrato, '', false, false)
       else conectar().catch(() => {})   // al conectar se suscriben todas
       return q
+    },
+    // los escalones de precio de una regla de mercado (las de un contrato, en sus detalles:
+    // marketRuleIds), ordenados de menor a mayor precio
+    async reglaPrecio(id) {
+      await conectar()
+      const ya = e.reglas.get(Number(id))
+      if (ya) return ya.promesa
+      const r = {}
+      r.promesa = new Promise((ok, mal) => {
+        const t = setTimeout(() => { e.reglas.delete(Number(id)); mal(new Error(`IB no da la regla de precios ${id}`)) }, 10_000)
+        r.ok = escalones => { clearTimeout(t); ok([...escalones].map(x => ({ desde: Number(x.lowEdge), paso: Number(x.increment) })).sort((a, b) => a.desde - b.desde)) }
+      })
+      e.reglas.set(Number(id), r)
+      e.api.reqMarketRule(Number(id))
+      return r.promesa
     },
     async ejecuciones() {
       await conectar()

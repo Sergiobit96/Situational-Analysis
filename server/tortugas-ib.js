@@ -29,6 +29,10 @@ export const ROLAR_DIAS = 10          // días antes del primer aviso o del últ
 const ESPERA_ORDEN_MS = 20_000        // lo que se espera a que IB rellene una orden a mercado
 const ESPERA_STOP_MS = 5_000          // y a que confirme un stop movido o cancelado
 const ESPERA_PRECIO_MS = 3_000        // y el primer precio de un contrato recién suscrito
+// Más separación que esta parte del precio entre la compra y la venta no es un precio de verdad:
+// en la subasta de apertura de Xetra, IB llegó a dar una oferta de 1.200 € en un ETF de 733 €
+// (2-nov-2026), y el bot vio una ruptura que no había
+export const HORQUILLA_MAX = 0.01
 const VIGENTE_VALE_S = 6 * 3600       // cada cuánto se vuelve a mirar qué vencimiento toca
 const LETRAS = 'FGHJKMNQUVXZ'         // los meses de los futuros, de enero a diciembre
 
@@ -143,6 +147,12 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       valorPunto: k.secType === 'FUT' ? Number(k.multiplier) / (d.priceMagnifier || 1) : 1,
     }
     c.q = ib.cotizar(epic, contrato, q => alPrecio(c, q))
+    // los escalones de precio del contrato en su bolsa (en los ETF de Xetra dependen del precio):
+    // sin ellos, IB rechaza un stop que no cae en uno
+    const reglas = String(d.marketRuleIds ?? '').split(',')
+    const bolsas = String(d.validExchanges ?? '').split(',')
+    const regla = reglas[Math.max(0, bolsas.indexOf(k.primaryExch || k.exchange))]
+    c.escalones = regla ? Promise.resolve(ib.reglaPrecio?.(regla)).catch(() => null) : Promise.resolve(null)
     contratos.set(epic, c)
     return epic
   }
@@ -204,7 +214,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
 
   // ── Precios en directo: velas de 1 min con el precio medio (o el último) de cada contrato ──
   function alPrecio(c, q) {
-    const precio = q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : q.last
+    const precio = precioDe(q)
     if (!(precio > 0)) return
     const minuto = Math.floor(ahora() / 60) * 60
     const vs = velas.get(c.epic) ?? []
@@ -217,6 +227,10 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     velas.set(c.epic, vs)
     for (const fn of oyentes.get(c.ticker) ?? []) fn()
   }
+  // la compra y la venta, si las dos están y la horquilla es creíble
+  const horquilla = q => (q.bid > 0 && q.ask > 0 && q.ask >= q.bid && q.ask - q.bid <= HORQUILLA_MAX * (q.ask + q.bid) / 2 ? { bid: q.bid, ask: q.ask } : null)
+  // el precio de ahora: el medio de una horquilla creíble o, sin ella, el último
+  const precioDe = q => { const h = horquilla(q); return h ? (h.bid + h.ask) / 2 : q.last ?? null }
   const precioMedio = epic => {
     const q = contratos.get(epic)?.q
     return q?.bid > 0 && q?.ask > 0 ? (q.bid + q.ask) / 2 : q?.last ?? null
@@ -243,7 +257,11 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
   }
 
   // ── Órdenes ──
-  const alTick = (precio, c) => Number((Math.round(precio / c.tick) * c.tick).toFixed(c.decimales))
+  // un precio en el escalón del contrato (el de su regla de mercado a ese precio, o su tick)
+  const alTick = (precio, c, escalones = null) => {
+    const paso = escalones?.findLast(x => precio >= x.desde)?.paso ?? c.tick
+    return Number((Math.round(precio / paso) * paso).toFixed(decimalesTick(paso)))
+  }
   const ordenStop = (o, nivel, { conPadre = true } = {}) => ({
     action: o.action, orderType: 'STP', auxPrice: nivel, totalQuantity: Number(o.totalQuantity), tif: 'GTC', outsideRth: true, orderRef: o.orderRef,
     ...(conPadre && o.parentId ? { parentId: o.parentId } : {}),
@@ -262,9 +280,12 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       const c = await contratoDe(ticker, epic ?? await resolver(ticker))
       const q = await cotizacionFresca(c)
       const divisa = c.tipo === 'divisa'
+      // con una horquilla imposible no hay precio para entrar: el bot espera
+      const h = horquilla(q)
+      const sinHorquilla = !(q.bid > 0 && q.ask > 0)
       return {
-        epic: c.epic, moneda: c.moneda, conPrecio: q.bid > 0 || q.last > 0,
-        oferta: q.ask ?? q.last ?? null, bid: q.bid ?? q.last ?? null, retrasado: q.retrasado, error: q.error,
+        epic: c.epic, moneda: c.moneda, conPrecio: precioDe(q) > 0,
+        oferta: h?.ask ?? (sinHorquilla ? q.last ?? null : null), bid: h?.bid ?? (sinHorquilla ? q.last ?? null : null), retrasado: q.retrasado, error: q.error,
         valorPunto: c.valorPunto, cambioAEur: cambioAEur(c.moneda), decimales: c.decimales, aMercado: true,
         // IDEALPRO admite cualquier cantidad, pero por debajo de unos 25.000 $ va como lote suelto
         tamanoMin: divisa ? 1000 : 1, paso: divisa ? 1000 : 1,
@@ -277,12 +298,26 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     async abrir({ ticker, epic, lado, tamano, stop, referencia }) {
       const c = await contratoDe(ticker, epic)
       const compra = lado === 'largo'
-      const nivel = alTick(stop, c)
-      const [id] = await ib.mandarPatas([
+      const nivel = alTick(stop, c, await c.escalones)
+      // un stop al otro lado del precio es que el precio no era bueno: no se manda
+      const precioAhora = compra ? horquilla(c.q)?.bid : horquilla(c.q)?.ask
+      if (precioAhora != null && (compra ? nivel >= precioAhora : nivel <= precioAhora)) return { aceptada: false, motivo: `el stop (${nivel}) queda al otro lado del precio (${precioAhora})` }
+      const [id, idStop] = await ib.mandarPatas([
         { contrato: c.contrato, orden: { action: compra ? 'BUY' : 'SELL', orderType: 'MKT', totalQuantity: tamano, tif: 'DAY', orderRef: referencia, transmit: false } },
         { contrato: c.contrato, orden: { action: compra ? 'SELL' : 'BUY', orderType: 'STP', auxPrice: nivel, totalQuantity: tamano, tif: 'GTC', outsideRth: true, orderRef: `${referencia}-stop`, transmit: true } },
       ])
-      const o = await ib.esperarOrden(id, ESPERA_ORDEN_MS)
+      // si IB rechaza el stop, la madre no sale nunca (va con transmit=false): se cancela y no entra
+      const t0 = Date.now()
+      let o = ib.orden(id)
+      while (Date.now() - t0 < ESPERA_ORDEN_MS && !['Filled', 'Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
+        const s = ib.orden(idStop)
+        if (s?.motivo && !['Submitted', 'PreSubmitted', 'Filled'].includes(s.estadoIB)) {
+          await ib.cancelar(id).catch(() => {})
+          return { aceptada: false, motivo: `IB rechaza su stop: ${s.motivo}` }
+        }
+        await new Promise(r => setTimeout(r, 100))
+        o = ib.orden(id)
+      }
       if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: o.rellena || tamano, stop: nivel }
       if (['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) return { aceptada: false, motivo: o.motivo ?? 'IB la ha cancelado' }
       // sin respuesta: el bot mira después en las órdenes abiertas si entró (por su referencia)
@@ -312,7 +347,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       if (!x) return { aceptada: false, motivo: 'IB no tiene abierto su stop' }
       if (!(x.id > 0)) return { aceptada: false, motivo: 'su stop lo puso otro cliente de la API' }
       const c = await contratoDe(ticker ?? tickerDe(x.c), epicDe(x.c)).catch(() => null)
-      const nivel = c ? alTick(stop, c) : stop
+      const nivel = c ? alTick(stop, c, await c.escalones) : stop
       await ib.modificar(x.id, c?.contrato ?? x.c, ordenStop(x.o, nivel))
       const t0 = Date.now()
       let o = ib.orden(x.id)

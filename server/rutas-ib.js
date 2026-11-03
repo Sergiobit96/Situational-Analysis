@@ -5,10 +5,10 @@
 
 import { crearIB } from './ib.js'
 
-export function registrarIB({ app }) {
+export function registrarIB({ app, avisar }) {
   const ib = crearIB({
     host: process.env.IB_HOST || '127.0.0.1', port: process.env.IB_PORT,
-    clientId: process.env.IB_CLIENT_ID || 17, real: process.env.IB_REAL === '1',
+    clientId: process.env.IB_CLIENT_ID || 17, real: process.env.IB_REAL === '1', avisarCaida: avisar,
   })
   const conIB = hacer => async (req, res) => {
     if (!ib) return res.status(404).json({ error: 'IB no está configurado en este servidor (falta IB_PORT: 4002 para el IB Gateway paper de este PC, 4004 para el servicio ib-gateway de Railway)' })

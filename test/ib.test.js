@@ -147,3 +147,37 @@ test('crearIB: sin Gateway contesta que no está conectado', async () => {
   assert.match(e.error, /No hay IB Gateway/)
   ib.cerrar()
 })
+
+test('crearIB: avisa una vez si IB sigue caído pasado el umbral, y otra al volver', async t => {
+  // solo setTimeout (el reintento) va con reloj de mentira; el sondeo de conectar() es de verdad
+  // (Node 18, el de Railway, lo pide como lista)
+  try { t.mock.timers.enable({ apis: ['setTimeout'] }) } catch { t.mock.timers.enable(['setTimeout']) }
+  const hasta = cond => new Promise(r => { const i = setInterval(() => { if (cond()) { clearInterval(i); r() } }, 10) })
+  let intentos = 0
+  const Vuelve = class extends apiFalsa('DU999') {
+    connect() {
+      if (++intentos < 3) return setImmediate(() => this.emit('error', new Error('connect ECONNREFUSED'), 502, -1))
+      super.connect()
+    }
+  }
+  let reloj = 0
+  const avisos = []
+  const ib = crearIB({ port: 4002, Api: Vuelve, host: 'ib-gateway.railway.internal', avisarCaida: x => avisos.push(x), ahora: () => reloj })
+  assert.equal((await ib.estado()).conectado, false)
+  assert.equal(avisos.length, 0)
+
+  reloj = 20 * 60_000
+  t.mock.timers.tick(5_000)
+  await hasta(() => intentos === 2 && avisos.length)
+  assert.equal(avisos.length, 1)
+  assert.match(avisos[0], /Llevo 20 min sin poder hablar con Interactive Brokers/)
+  assert.match(avisos[0], /Restart del servicio ib-gateway/)
+  assert.match(avisos[0], /Detalle: No hay IB Gateway/)
+
+  reloj = 50 * 60_000
+  t.mock.timers.tick(10_000)
+  await hasta(() => avisos.length === 2)
+  assert.match(avisos[1], /Vuelvo a estar conectado con Interactive Brokers \(cuenta DU999\), tras 50 min/)
+  assert.equal((await ib.estado()).conectado, true)
+  ib.cerrar()
+})

@@ -11,6 +11,7 @@
 // DU) salvo con IB_REAL=1, que no está puesto en ningún sitio.
 
 import IB from '@stoqey/ib'
+import { duracion } from './vigilancia.js'
 const { IBApi, EventName } = IB
 
 const TIPOS = { market: 'MKT', limit: 'LMT', stop: 'STP', stop_limit: 'STP LMT' }
@@ -89,12 +90,15 @@ export function ordenParaIB(o, { referencia = `SA-${Date.now()}` } = {}) {
 
 const nombreContrato = c => [c.localSymbol || c.symbol, c.secType !== 'STK' ? c.secType : null, c.lastTradeDateOrContractMonth || null].filter(Boolean).join(' ')
 
-export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false, Api = IBApi, log = console } = {}) {
+// avisarCaida(texto): Telegram, una vez cuando lleva caidaMs sin poder conectar y otra al volver.
+// Hace falta porque el Gateway de Railway puede quedarse muerto con el puerto abierto (su reinicio
+// de cada noche, si la sesión se perdió de día, deja el Gateway parado y solo responde el socat)
+export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false, Api = IBApi, log = console, avisarCaida = () => {}, caidaMs = 15 * 60_000, ahora = Date.now } = {}) {
   if (!port) return null
   const e = {
     api: null, conectado: false, conectando: null, siguienteId: null, cuenta: null, cuentas: [],
     valores: {}, cartera: new Map(), ordenes: new Map(), avisos: [], ultimoError: null, desde: null,
-    reintento: null, esperaReintento: 5_000, listaCuenta: false, cerrado: false,
+    reintento: null, esperaReintento: 5_000, listaCuenta: false, cerrado: false, caidoDesde: null, caidaAvisada: false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
@@ -190,6 +194,25 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     return api
   }
 
+  const enRailway = host.endsWith('.railway.internal')
+  function revisarCaida(conectado) {
+    if (conectado) {
+      if (e.caidaAvisada) avisarCaida(`✅ Vuelvo a estar conectado con Interactive Brokers (cuenta ${e.cuenta ?? '?'}), tras ${duracion(ahora() - e.caidoDesde)} sin conexión.`)
+      e.caidoDesde = null; e.caidaAvisada = false
+      return
+    }
+    e.caidoDesde ??= ahora()
+    if (e.caidaAvisada || ahora() - e.caidoDesde < caidaMs) return
+    e.caidaAvisada = true
+    avisarCaida([
+      `⚠️ Llevo ${duracion(ahora() - e.caidoDesde)} sin poder hablar con Interactive Brokers: Tortugas IB no puede abrir, cerrar ni mover stops (los stops ya puestos siguen en IB).`,
+      enRailway
+        ? 'Lo primero: en Railway, Restart del servicio ib-gateway y mirar sus registros (si sale «Unrecognized Username or Password», revisar TWS_PASSWORD).'
+        : 'Lo primero: abrir el IB Gateway del PC e iniciar sesión.',
+      `Detalle: ${e.ultimoError ?? 'sin conexión'}`,
+    ].join('\n'))
+  }
+
   function programarReintento() {
     if (e.reintento || e.cerrado) return
     e.reintento = setTimeout(() => { e.reintento = null; conectar().catch(() => {}) }, e.esperaReintento)
@@ -206,10 +229,10 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       try {
         if (!e.api) e.api = montar()
         if (!e.api.isConnected) e.api.connect()
-      } catch (err) { e.ultimoError = err.message; e.conectando = null; programarReintento(); return mal(err) }
+      } catch (err) { e.ultimoError = err.message; e.conectando = null; programarReintento(); revisarCaida(false); return mal(err) }
       const t0 = Date.now()
       const mirar = setInterval(() => {
-        if (e.conectado && e.siguienteId != null && (e.listaCuenta || Date.now() - t0 > 4_000)) { clearInterval(mirar); e.conectando = null; ok() }
+        if (e.conectado && e.siguienteId != null && (e.listaCuenta || Date.now() - t0 > 4_000)) { clearInterval(mirar); e.conectando = null; revisarCaida(true); ok() }
         else if ((!e.conectado && e.ultimoError) || Date.now() - t0 > 8_000) {
           clearInterval(mirar); e.conectando = null
           if (!e.conectado) {
@@ -224,6 +247,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
             api?.controller?.socket?.client?.destroy()
             try { api?.removeAllListeners(); api?.disconnect() } catch { /* ya cerrado */ }
             programarReintento()
+            revisarCaida(false)
           }
           mal(new Error(e.ultimoError))
         }

@@ -180,7 +180,7 @@ export default function IB() {
   // lo que quedaría desde la entrada si saltan sus stops a su precio (sin deslizamiento), y
   // cuánta posición cubren
   const siSaltaStop = p => {
-    if (p.entrada == null) return null
+    if (p.entrada == null || p.aumentoPrecio == null) return null
     const signo = p.lado === 'largo' ? 1 : -1
     let total = 0, cubierta = 0
     for (const o of stopsDe(p)) {
@@ -224,10 +224,10 @@ export default function IB() {
                     <td className="tor-num">{cantidad(p.cantidad)}</td>
                     <td className="tor-num">{num(p.entrada)}</td>
                     <td className="tor-num">{num(p.precio)}</td>
-                    <td className={`tor-num ${stopsDe(p).length ? '' : 'bot-neg'}`}>{stopsDe(p).length ? stopsDe(p).map(o => num(o.stop / (p.aumentoPrecio ?? 1), p.aumentoPrecio > 1 ? 4 : 2)).join(' · ') : 'sin stop'}</td>
+                    <td className={`tor-num ${stopsDe(p).length ? '' : 'bot-neg'}`}>{stopsDe(p).length ? stopsDe(p).map(o => p.aumentoPrecio == null ? `${num(o.stop)} (en las unidades de la orden)` : num(o.stop / p.aumentoPrecio, p.aumentoPrecio > 1 ? 4 : 2)).join(' · ') : 'sin stop'}</td>
                     <td className="tor-num">{num(Math.abs(p.valor ?? 0))}</td>
                     <td className={`tor-num ${tono(p.resultado)}`}>{dinero(p.resultado)} {p.resultadoPct != null && <small>({num(p.resultadoPct)} %)</small>}</td>
-                    {(s => <td className={`tor-num ${s ? tono(s.total) : 'bot-neg'}`}>{s ? dinero(s.total) : 'sin stop'}{s && s.cubierta < p.cantidad && <small> (solo {cantidad(s.cubierta)} de {cantidad(p.cantidad)})</small>}</td>)(siSaltaStop(p))}
+                    {(s => <td className={`tor-num ${s ? tono(s.total) : p.aumentoPrecio == null ? '' : 'bot-neg'}`} title={p.aumentoPrecio == null ? 'Faltan los detalles del contrato (IB aún no los ha dado)' : undefined}>{s ? dinero(s.total) : p.aumentoPrecio == null ? '—' : 'sin stop'}{s && s.cubierta < p.cantidad && <small> (solo {cantidad(s.cubierta)} de {cantidad(p.cantidad)})</small>}</td>)(siSaltaStop(p))}
                     <td>{puedeOperar && <button className="diario-boton bot-peligro" disabled={ocupado === p.id}
                       onClick={() => accion(p.id, `¿Cerrar a mercado ${cantidad(p.cantidad)} ${p.simbolo}${p.nombre ? ` (${p.nombre})` : ''}? Se cancelan antes sus órdenes pendientes (su stop).`, `/api/bot/ib/posicion/${p.id}`)}>Cerrar</button>}</td>
                   </tr>

@@ -102,7 +102,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: 0, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
+    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: 0, mudoDesde: null, mudoAvisado: false, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -276,7 +276,9 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     return {
       id: c.conId, simbolo: nombreContrato(c), nombre: e.nombres.get(c.conId)?.nombre ?? null, instrumento: c.secType, moneda: c.currency, multiplicador: mult,
       // por cuánto dividir el precio de sus órdenes para tenerlo en las unidades de esta posición
-      aumentoPrecio: e.nombres.get(c.conId)?.aumento ?? 1,
+      // (null mientras no han llegado los detalles del contrato: sin él, un stop en centavos
+      // saldría cien veces más lejos)
+      aumentoPrecio: e.nombres.get(c.conId)?.aumento ?? (c.secType === 'FUT' || c.secType === 'FOP' ? null : 1),
       lado: pos < 0 ? 'corto' : 'largo', cantidad: Math.abs(pos), entrada: coste != null ? coste / mult : null,
       precio: precio(mercado), valor: precio(v), resultado: precio(latente), realizado: precio(realizado),
       resultadoPct: coste && latente != null ? (latente / Math.abs(coste * pos)) * 100 : null,
@@ -311,12 +313,33 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       .catch(() => e.nombres.delete(c.conId))
   }
 
+  // Conectado pero sin contestar a nada (el Gateway ha perdido la sesión con IB y deja la API
+  // abierta; la cuenta sigue llegando, los contratos, el histórico y las ejecuciones no):
+  // avisa como la caída, una vez pasado caidaMs desde la primera petición sin respuesta
+  function revisarMudo(contesta) {
+    if (contesta) {
+      if (e.mudoAvisado) avisarCaida(`✅ IB vuelve a contestar, tras ${duracion(ahora() - e.mudoDesde)} callado.`)
+      e.mudoDesde = null; e.mudoAvisado = false
+      return
+    }
+    e.mudoDesde ??= ahora()
+    if (e.mudoAvisado || ahora() - e.mudoDesde < caidaMs) return
+    e.mudoAvisado = true
+    avisarCaida([
+      `⚠️ El IB Gateway sigue conectado pero lleva ${duracion(ahora() - e.mudoDesde)} sin contestar (ni contratos, ni precios, ni ejecuciones): Tortugas IB no puede operar ni revisar sus posiciones (los stops ya puestos siguen en IB).`,
+      enRailway
+        ? 'Lo primero: en Railway, Restart del servicio ib-gateway y mirar sus registros (suele ser que ha perdido la sesión con IB, p. ej. porque se ha entrado con el mismo usuario en otro sitio).'
+        : 'Lo primero: mirar el IB Gateway del PC; si ha perdido la sesión, volver a entrar.',
+    ].join('\n'))
+  }
+
   // Una petición con respuesta: `lanzar(id)` la manda, y los eventos de arriba la terminan
   function pedir(que, lanzar, ms = 15_000) {
     return new Promise((ok, mal) => {
       const id = e.sigPeticion++
-      const t = setTimeout(() => { e.peticiones.delete(id); mal(new Error(`IB no contesta (${que})`)) }, ms)
-      const fin = f => x => { clearTimeout(t); e.peticiones.delete(id); f(x) }
+      const t = setTimeout(() => { e.peticiones.delete(id); revisarMudo(false); mal(new Error(`IB no contesta (${que})`)) }, ms)
+      // un error de IB también es una respuesta: solo el silencio cuenta como mudo
+      const fin = f => x => { clearTimeout(t); e.peticiones.delete(id); revisarMudo(true); f(x) }
       e.peticiones.set(id, { filas: [], ok: fin(ok), mal: fin(mal) })
       lanzar(id)
     })

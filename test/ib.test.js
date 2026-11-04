@@ -220,3 +220,28 @@ test('crearIB: si IB no termina la lista de órdenes abiertas, falla en vez de d
   await assert.rejects(p, /órdenes abiertas/)
   ib.cerrar()
 })
+
+test('crearIB: conectado pero sin contestar, avisa pasado el umbral y otra vez cuando vuelve a contestar', async t => {
+  const Callada = class extends apiFalsa('DU999') { reqContractDetails(id, c) { if (!this.callada) super.reqContractDetails(id, c) } }
+  let reloj = 0
+  const avisos = []
+  const ib = crearIB({ port: 4002, Api: Callada, host: 'ib-gateway.railway.internal', avisarCaida: x => avisos.push(x), ahora: () => reloj })
+  await ib.estado()
+  await new Promise(r => setTimeout(r, 20))
+  FalsaUltima.api.callada = true
+  try { t.mock.timers.enable({ apis: ['setTimeout'] }) } catch { t.mock.timers.enable(['setTimeout']) }
+  const pide = async () => { const p = ib.detalles({ symbol: 'MGC', secType: 'FUT' }); await new Promise(r => setImmediate(r)); t.mock.timers.tick(15_000); await assert.rejects(p, /IB no contesta/) }
+  await pide()
+  assert.equal(avisos.length, 0)
+  reloj = 20 * 60_000
+  await pide()
+  await pide()
+  assert.equal(avisos.length, 1)
+  assert.match(avisos[0], /sigue conectado pero lleva 20 min sin contestar/)
+  FalsaUltima.api.callada = false
+  reloj = 30 * 60_000
+  await ib.detalles({ symbol: 'MGC', secType: 'FUT' })
+  assert.equal(avisos.length, 2)
+  assert.match(avisos[1], /IB vuelve a contestar, tras 30 min callado/)
+  ib.cerrar()
+})

@@ -102,7 +102,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
+    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: 0, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -115,6 +115,8 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     api.on(EventName.disconnected, () => {
       const estaba = e.conectado
       e.conectado = false; e.siguienteId = null; e.listaCuenta = false
+      e.finesPendientes = 0
+      e.abiertas?.mal(new Error('Desconectado del IB Gateway'))
       if (estaba) avisar('Desconectado del IB Gateway')
       programarReintento()
     })
@@ -123,7 +125,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       e.cuentas = String(lista).split(',').map(s => s.trim()).filter(Boolean)
       e.cuenta = process.env.IB_CUENTA && e.cuentas.includes(process.env.IB_CUENTA) ? process.env.IB_CUENTA : e.cuentas[0] ?? null
       if (e.cuenta) api.reqAccountUpdates(true, e.cuenta)
-      api.reqAllOpenOrders()
+      pedirTodas(api)
       // sin suscripción a un mercado, IB da sus precios con 15 min de retraso en vez de nada
       api.reqMarketDataType(3)
       for (const [id, q] of e.cotizaciones) api.reqMktData(id, q.contrato, '', false, false)
@@ -145,7 +147,12 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       e.ordenes.set(id, { ...antes, id, c, o, estadoIB: st?.status ?? antes.estadoIB, permId: o.permId, actualizada: Date.now() })
       e.abiertas?.lista.push({ id, c, o, estadoIB: st?.status ?? null })
     })
-    api.on(EventName.openOrderEnd, () => { e.abiertas?.fin() })
+    // cada reqAllOpenOrders acaba en su openOrderEnd, y van en orden: la lista del bot termina
+    // con el de su petición, no con el de una de la vista que ya estaba en camino
+    api.on(EventName.openOrderEnd, () => {
+      e.finesPendientes = Math.max(0, e.finesPendientes - 1)
+      if (e.abiertas && e.abiertas.saltar-- <= 0) e.abiertas.fin()
+    })
     api.on(EventName.orderStatus, (id, estado, rellena, quedan, medio, permId, padre) => {
       const antes = e.ordenes.get(id)
       if (!antes) return
@@ -317,14 +324,27 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
 
   // Las órdenes abiertas ahora mismo en IB, pidiéndoselas: las que se rellenaron o cancelaron
   // sin que este proceso lo viera (con la conexión caída) ya no salen
+  function pedirTodas(api = e.api) {
+    e.finesPendientes++
+    api.reqAllOpenOrders()
+  }
+
+  // Las órdenes abiertas de verdad. Si IB no termina la lista, falla: una lista a medias haría
+  // creer a los bots que sus stops (y sus posiciones) ya no están
   function pedirAbiertas() {
     if (e.abiertas) return e.abiertas.promesa
-    let fin
-    const promesa = new Promise(ok => { fin = ok })
+    let ok, mal
+    const promesa = new Promise((si, no) => { ok = si; mal = no })
     const lista = []
-    const t = setTimeout(() => e.abiertas?.fin(), 5_000)
-    e.abiertas = { lista, promesa, fin: () => { clearTimeout(t); e.abiertas = null; fin(lista.filter(x => !ACABADA.has(x.estadoIB))) } }
-    e.api.reqAllOpenOrders()
+    const t = setTimeout(() => e.abiertas?.mal(new Error('IB no contesta (órdenes abiertas)')), 15_000)
+    const acabar = () => { clearTimeout(t); e.abiertas = null }
+    e.abiertas = {
+      lista, promesa, saltar: e.finesPendientes,
+      // la misma orden puede llegar también en la respuesta de otra petición: vale la última
+      fin: () => { acabar(); ok([...new Map(lista.map(x => [x.id, x])).values()].filter(x => !ACABADA.has(x.estadoIB))) },
+      mal: err => { acabar(); mal(err) },
+    }
+    pedirTodas()
     return promesa
   }
 
@@ -364,7 +384,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       let error = e.reintento && !e.conectado ? e.ultimoError : null
       if (!error) try { await conectar() } catch (err) { error = err.message }
       if (!e.conectado) return { conectado: false, error, host, port: Number(port), clientId: Number(clientId), avisos: e.avisos.slice(0, 10) }
-      if (e.api) e.api.reqAllOpenOrders()
+      if (e.api) pedirTodas()
       return {
         conectado: true, desde: e.desde, host, port: Number(port), clientId: Number(clientId),
         cuenta: e.cuenta, cuentas: e.cuentas, paper: esPaper(e.cuenta), puedeOperar: esPaper(e.cuenta) || real,

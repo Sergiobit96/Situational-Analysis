@@ -916,6 +916,8 @@ export function crearBotTortugas({
     const idas = pendientes.filter(u => !ids.has(u.dealId))
     if (!idas.length) {
       pos.vista = ahora()
+      // si estaba buscando su cierre, era un fallo del broker: las búsquedas vuelven a empezar
+      delete pos.busquedasCierre
       if (!cruce) { delete pos.cruce; return }
       if (!pos.cruce || ahora() - pos.cruceVisto > 5) pos.cruce = ahora()
       pos.cruceVisto = ahora()

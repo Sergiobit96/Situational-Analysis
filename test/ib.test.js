@@ -184,3 +184,39 @@ test('crearIB: avisa una vez si IB sigue caído pasado el umbral, y otra al volv
   assert.equal((await ib.estado()).conectado, true)
   ib.cerrar()
 })
+
+test('crearIB: la lista de órdenes abiertas del bot no la cierra el final de una petición de la vista', async () => {
+  const stop = { action: 'BUY', orderType: 'STP', auxPrice: 6.564, totalQuantity: 6, orderRef: 'TIB1-COPPER-x-stop' }
+  let modo = 'normal', n = 0
+  const Cruce = class extends apiFalsa('DU999') {
+    reqAllOpenOrders() {
+      if (modo === 'normal') return void setImmediate(() => this.emit('openOrderEnd'))
+      // la de la vista: su orden llega antes de que pregunte el bot, y su final, después
+      if (++n === 1) { this.emit('openOrder', 43, { conId: 1, symbol: 'MHG' }, stop, { status: 'Submitted' }); setTimeout(() => this.emit('openOrderEnd'), 10); return }
+      setTimeout(() => { this.emit('openOrder', 43, { conId: 1, symbol: 'MHG' }, stop, { status: 'Submitted' }); this.emit('openOrderEnd') }, 30)
+    }
+  }
+  const ib = crearIB({ port: 4002, Api: Cruce })
+  await ib.estado()
+  await new Promise(r => setTimeout(r, 20))
+  modo = 'cruce'
+  const vista = ib.estado()
+  const abiertas = await ib.abiertas()
+  await vista
+  assert.deepEqual(abiertas.map(x => x.o.orderRef), ['TIB1-COPPER-x-stop'])
+  ib.cerrar()
+})
+
+test('crearIB: si IB no termina la lista de órdenes abiertas, falla en vez de darla vacía', async t => {
+  const Lenta = class extends apiFalsa('DU999') { reqAllOpenOrders() { if (!this.callada) setImmediate(() => this.emit('openOrderEnd')) } }
+  const ib = crearIB({ port: 4002, Api: Lenta })
+  await ib.estado()
+  await new Promise(r => setTimeout(r, 20))
+  FalsaUltima.api.callada = true
+  try { t.mock.timers.enable({ apis: ['setTimeout'] }) } catch { t.mock.timers.enable(['setTimeout']) }
+  const p = ib.abiertas()
+  await new Promise(r => setImmediate(r))
+  t.mock.timers.tick(15_000)
+  await assert.rejects(p, /órdenes abiertas/)
+  ib.cerrar()
+})

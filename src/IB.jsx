@@ -177,6 +177,20 @@ export default function IB() {
   const { cuenta, paper, puedeOperar, resumen: r, posiciones, ordenes, avisos } = datos
   const abiertas = ordenes.filter(o => ABIERTA.has(o.estado))
   const stopsDe = p => abiertas.filter(o => o.conId === p.id && (o.tipo === 'stop' || o.tipo === 'stop_limit') && o.lado === (p.lado === 'largo' ? 'venta' : 'compra'))
+  // lo que quedaría desde la entrada si saltan sus stops a su precio (sin deslizamiento), y
+  // cuánta posición cubren
+  const siSaltaStop = p => {
+    if (p.entrada == null) return null
+    const signo = p.lado === 'largo' ? 1 : -1
+    let total = 0, cubierta = 0
+    for (const o of stopsDe(p)) {
+      const q = Math.min((o.cantidad ?? 0) - (o.rellena ?? 0), p.cantidad - cubierta)
+      if (!(q > 0) || o.stop == null) continue
+      total += signo * (o.stop / (p.aumentoPrecio ?? 1) - p.entrada) * q * (p.multiplicador ?? 1)
+      cubierta += q
+    }
+    return cubierta ? { total, cubierta } : null
+  }
 
   return (
     <div className="bot-page">
@@ -201,20 +215,21 @@ export default function IB() {
         {posiciones.length === 0 ? <p className="bot-nota">No hay ninguna posición abierta.</p> : (
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla">
-              <thead><tr><th>Contrato</th><th>Lado</th><th className="tor-num">Cantidad</th><th className="tor-num">Entrada</th><th className="tor-num">Ahora</th><th className="tor-num">Stop</th><th className="tor-num">Valor</th><th className="tor-num">Resultado</th><th /></tr></thead>
+              <thead><tr><th>Contrato</th><th>Lado</th><th className="tor-num">Cantidad</th><th className="tor-num">Entrada</th><th className="tor-num">Ahora</th><th className="tor-num">Stop</th><th className="tor-num">Valor</th><th className="tor-num" title="Ganancia o pérdida abierta que calcula IB con el precio de ahora">Resultado</th><th className="tor-num" title="Lo que quedaría desde la entrada si saltan los stops a su precio, sin deslizamiento">Si salta el stop</th><th /></tr></thead>
               <tbody>
                 {posiciones.map(p => (
                   <tr key={p.id}>
-                    <td className="bot-celda-texto"><b>{p.simbolo}</b> <small className="bot-nota">{p.moneda}</small></td>
+                    <td className="bot-celda-texto"><b>{p.simbolo}</b> <small className="bot-nota">{p.moneda}</small>{p.nombre && <><br /><small className="bot-nota">{p.nombre}</small></>}</td>
                     <td className="bot-celda-texto"><span className={`bot-pill ${p.lado}`}>{p.lado === 'largo' ? 'Compra' : 'Venta'}</span></td>
                     <td className="tor-num">{cantidad(p.cantidad)}</td>
                     <td className="tor-num">{num(p.entrada)}</td>
                     <td className="tor-num">{num(p.precio)}</td>
-                    <td className={`tor-num ${stopsDe(p).length ? '' : 'bot-neg'}`}>{stopsDe(p).length ? stopsDe(p).map(o => num(o.stop)).join(' · ') : 'sin stop'}</td>
+                    <td className={`tor-num ${stopsDe(p).length ? '' : 'bot-neg'}`}>{stopsDe(p).length ? stopsDe(p).map(o => num(o.stop / (p.aumentoPrecio ?? 1), p.aumentoPrecio > 1 ? 4 : 2)).join(' · ') : 'sin stop'}</td>
                     <td className="tor-num">{num(Math.abs(p.valor ?? 0))}</td>
                     <td className={`tor-num ${tono(p.resultado)}`}>{dinero(p.resultado)} {p.resultadoPct != null && <small>({num(p.resultadoPct)} %)</small>}</td>
+                    {(s => <td className={`tor-num ${s ? tono(s.total) : 'bot-neg'}`}>{s ? dinero(s.total) : 'sin stop'}{s && s.cubierta < p.cantidad && <small> (solo {cantidad(s.cubierta)} de {cantidad(p.cantidad)})</small>}</td>)(siSaltaStop(p))}
                     <td>{puedeOperar && <button className="diario-boton bot-peligro" disabled={ocupado === p.id}
-                      onClick={() => accion(p.id, `¿Cerrar a mercado ${cantidad(p.cantidad)} ${p.simbolo}? Se cancelan antes sus órdenes pendientes (su stop).`, `/api/bot/ib/posicion/${p.id}`)}>Cerrar</button>}</td>
+                      onClick={() => accion(p.id, `¿Cerrar a mercado ${cantidad(p.cantidad)} ${p.simbolo}${p.nombre ? ` (${p.nombre})` : ''}? Se cancelan antes sus órdenes pendientes (su stop).`, `/api/bot/ib/posicion/${p.id}`)}>Cerrar</button>}</td>
                   </tr>
                 ))}
               </tbody>

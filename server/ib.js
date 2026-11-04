@@ -102,7 +102,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
+    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -137,6 +137,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       if (cuenta && cuenta !== e.cuenta) return
       if (!pos) return void e.cartera.delete(c.conId)
       e.cartera.set(c.conId, { c, pos, mercado, valor, coste, latente, realizado })
+      pedirNombre(c)
     })
     api.on(EventName.accountDownloadEnd, () => { e.listaCuenta = true })
     api.on(EventName.openOrder, (id, c, o, st) => {
@@ -266,7 +267,9 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
   const posiciones = () => [...e.cartera.values()].map(({ c, pos, mercado, valor: v, coste, latente, realizado }) => {
     const mult = Number(c.multiplier) || 1
     return {
-      id: c.conId, simbolo: nombreContrato(c), instrumento: c.secType, moneda: c.currency,
+      id: c.conId, simbolo: nombreContrato(c), nombre: e.nombres.get(c.conId)?.nombre ?? null, instrumento: c.secType, moneda: c.currency, multiplicador: mult,
+      // por cuánto dividir el precio de sus órdenes para tenerlo en las unidades de esta posición
+      aumentoPrecio: e.nombres.get(c.conId)?.aumento ?? 1,
       lado: pos < 0 ? 'corto' : 'largo', cantidad: Math.abs(pos), entrada: coste != null ? coste / mult : null,
       precio: precio(mercado), valor: precio(v), resultado: precio(latente), realizado: precio(realizado),
       resultadoPct: coste && latente != null ? (latente / Math.abs(coste * pos)) * 100 : null,
@@ -287,6 +290,18 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
   function comprobarQueSePuedeOperar() {
     if (!e.cuenta) throw new Error('IB no ha dicho todavía qué cuenta es')
     if (!esPaper(e.cuenta) && !real) throw new Error(`La cuenta ${e.cuenta} es real: las órdenes solo salen a una paper (DU…) salvo con IB_REAL=1`)
+  }
+
+  // el nombre largo de un contrato de la cartera («Micro Gold», «iShares Core DAX UCITS ETF»),
+  // que la cartera no trae, y su priceMagnifier: la cartera da el precio en dólares, pero las
+  // órdenes de los que cotizan en centavos (granos y blandas) van en centavos. Una vez por
+  // contrato; si falla, se vuelve a pedir en la siguiente actualización de la cartera
+  function pedirNombre(c) {
+    if (!c.conId || e.nombres.has(c.conId)) return
+    e.nombres.set(c.conId, null)
+    pedir(`nombre de ${c.localSymbol || c.symbol}`, id => e.api.reqContractDetails(id, { conId: c.conId, exchange: c.exchange || c.primaryExch || '' }))
+      .then(([d]) => { if (d) e.nombres.set(c.conId, { nombre: d.longName || null, aumento: d.priceMagnifier > 1 ? d.priceMagnifier : 1 }); else e.nombres.delete(c.conId) })
+      .catch(() => e.nombres.delete(c.conId))
   }
 
   // Una petición con respuesta: `lanzar(id)` la manda, y los eventos de arriba la terminan

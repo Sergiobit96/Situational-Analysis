@@ -74,7 +74,7 @@ function apiFalsa(cuenta) {
     reqContractDetails(id, c) {
       setImmediate(() => {
         if (c.symbol === 'NADA') return this.emit('error', new Error('No security definition has been found for the request'), 200, id)
-        this.emit('contractDetails', id, { contract: { ...c, conId: 5, localSymbol: 'MGCZ6' }, minTick: 0.1 })
+        this.emit('contractDetails', id, c.conId === 756733 ? { contract: c, longName: 'SPDR S&P 500 ETF TRUST' } : { contract: { ...c, conId: 5, localSymbol: 'MGCZ6' }, minTick: 0.1, longName: 'Micro Gold' })
         this.emit('contractDetailsEnd', id)
       })
     }
@@ -99,6 +99,9 @@ test('crearIB: conecta, lee la cuenta y manda un bracket con la hija colgada de 
   assert.equal(e.resumen.moneda, 'USD')
   assert.equal(e.posiciones[0].simbolo, 'SPY')
   assert.equal(e.posiciones[0].resultado, 50)
+  // el nombre largo llega aparte, con los detalles del contrato
+  await new Promise(r => setTimeout(r, 20))
+  assert.equal((await ib.estado()).posiciones[0].nombre, 'SPDR S&P 500 ETF TRUST')
 
   const r = await ib.enviarOrden({ simbolo: 'AAPL', lado: 'compra', tipo: 'limit', limite: 200, cantidad: 2, stopLoss: 190 })
   const [madre, hija] = FalsaUltima.api.mandadas

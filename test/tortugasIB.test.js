@@ -282,3 +282,19 @@ test('IB: una horquilla imposible (la subasta de Xetra) no hace velas ni deja en
     assert.equal(ib.mandadas.at(-2).estadoIB, 'Cancelled')
   } finally { delete DETALLES.SXR8 }
 })
+
+test('IB: en los que cotizan en centavos (priceMagnifier 100) la regla de mercado va en dólares y se pasa a centavos', async () => {
+  const ib = ibFalso()
+  ib.reglaPrecio = async () => [{ desde: 0, paso: 0.0001 }]
+  DETALLES.CT = [{
+    contract: { conId: 51, symbol: 'CT', secType: 'FUT', exchange: 'NYBOT', currency: 'USD', localSymbol: 'CTZ6', lastTradeDateOrContractMonth: '20261208', multiplier: '50000' },
+    contractMonth: '202612', minTick: 0.01, priceMagnifier: 100, marketRuleIds: '87', validExchanges: 'NYBOT',
+  }]
+  const tib = crearTortugasIB({ ib, ahora: () => ny(11, 3, 4), log: () => {}, mercados: { COTTON: MERCADOS_IB.COTTON } })
+  try {
+    await tib.arrancar()
+    ib.precio('CTZ6', 76.8, 76.82)
+    const r = await tib.operar.abrir({ ticker: 'COTTON', epic: 'CTZ6', lado: 'corto', tamano: 2, stop: 79.623, referencia: 'TIB1-COTTON-x' })
+    assert.equal(r.stop, 79.62)
+  } finally { delete DETALLES.CT }
+})

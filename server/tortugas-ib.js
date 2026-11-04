@@ -152,7 +152,14 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     const reglas = String(d.marketRuleIds ?? '').split(',')
     const bolsas = String(d.validExchanges ?? '').split(',')
     const regla = reglas[Math.max(0, bolsas.indexOf(k.primaryExch || k.exchange))]
-    c.escalones = regla ? Promise.resolve(ib.reglaPrecio?.(regla)).catch(() => null) : Promise.resolve(null)
+    // la regla va en dólares aunque el contrato cotice en centavos (granos y blandas, con
+    // priceMagnifier 100): sus bordes y escalones se pasan a las unidades del precio
+    const aumento = d.priceMagnifier > 1 ? d.priceMagnifier : 1
+    c.escalones = regla
+      ? Promise.resolve(ib.reglaPrecio?.(regla))
+        .then(xs => xs?.map(x => ({ desde: x.desde * aumento, paso: x.paso * aumento })) ?? null)
+        .catch(() => null)
+      : Promise.resolve(null)
     contratos.set(epic, c)
     return epic
   }
@@ -259,7 +266,8 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
   // ── Órdenes ──
   // un precio en el escalón del contrato (el de su regla de mercado a ese precio, o su tick)
   const alTick = (precio, c, escalones = null) => {
-    const paso = escalones?.findLast(x => precio >= x.desde)?.paso ?? c.tick
+    // nunca más fino que el tick del contrato
+    const paso = Math.max(escalones?.findLast(x => precio >= x.desde)?.paso ?? 0, c.tick)
     return Number((Math.round(precio / paso) * paso).toFixed(decimalesTick(paso)))
   }
   const ordenStop = (o, nivel, { conPadre = true } = {}) => ({

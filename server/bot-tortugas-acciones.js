@@ -170,17 +170,24 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
 
   // ── Órdenes ──
   const referencia = (sistema, simbolo) => `${PREFIJO}${sistema}-${simbolo}-`
+  const ACABADA = ['filled', 'canceled', 'expired', 'rejected']
   async function esperarRelleno(id) {
     let o
     for (let i = 0; i < ESPERA_RELLENO_S; i++) {
       o = await alpaca.orden(id)
-      if (['filled', 'canceled', 'expired', 'rejected'].includes(o.estado)) break
+      if (ACABADA.includes(o.estado)) break
       await esperarMs(1000)
     }
-    if (!['filled', 'canceled', 'expired', 'rejected'].includes(o.estado)) {
-      // lo que no se ha llenado en medio minuto se cancela; vale lo que haya entrado
+    if (!ACABADA.includes(o.estado)) {
+      // lo que no se ha llenado en medio minuto se cancela; vale lo que haya entrado, pero
+      // cuando la cancelación acaba: en pending_cancel aún puede llenarse (el 4-nov, una entrada
+      // de DELL leída así con 0 acciones acabó con 5, que se quedaron sin stop ni bot)
       try { await alpaca.cancelarOrden(o.id) } catch { /* puede que se acabe de llenar */ }
-      o = await alpaca.orden(id)
+      for (let i = 0; i < 20; i++) {
+        o = await alpaca.orden(id)
+        if (ACABADA.includes(o.estado)) break
+        await esperarMs(500)
+      }
     }
     return o
   }

@@ -263,3 +263,31 @@ test('si Alpaca no llena la salida, la posición sigue con su stop y la salida s
   assert.equal(a.qty.AAA, 0)
   assert.equal(bot._datos().operaciones[0].motivo, 'canal')
 })
+
+test('una entrada que Alpaca llena mientras se cancela cuenta con lo que entró, y lleva su stop', async () => {
+  const a = alpacaDeMentira()
+  a.px = { AAA: 100, BBB: 100 }
+  const { bot } = await botCon(a, { sistemas: [1] })
+  // la compra se queda sin llenar; al cancelarla pasa por pending_cancel y acaba con 5 acciones
+  const enviar = a.enviarOrden
+  a.enviarOrden = async (o, op) => {
+    if ((o.tipo ?? 'market') !== 'market') return enviar(o, op)
+    const id = `o${++a.n}`
+    a.enviadas.push({ ...o, ...op })
+    a.ordenes.set(id, { id, simbolo: o.simbolo, lado: o.lado, estado: 'accepted', rellena: 0, lecturas: 0 })
+    return { id }
+  }
+  a.cancelarOrden = async id => { const o = a.ordenes.get(id); if (o.estado === 'accepted') o.estado = 'pending_cancel'; else if (o.estado === 'new') o.estado = 'canceled' }
+  const orden = a.orden
+  a.orden = async id => {
+    const o = a.ordenes.get(id)
+    if (o.estado === 'pending_cancel' && ++o.lecturas > 2) { Object.assign(o, { estado: 'canceled', rellena: 5, precioMedio: 105.2 }); a.qty[o.simbolo] = (a.qty[o.simbolo] ?? 0) + 5 }
+    return orden(id)
+  }
+  a.px.AAA = 105.1
+  await bot._paso()
+  const pos = bot._datos().posiciones.AAA
+  assert.ok(pos, 'la posición está en el registro')
+  assert.equal(pos.unidades[0].acciones, 5)
+  assert.equal(a.ordenes.get(pos.stopId)?.cantidad, 5)
+})

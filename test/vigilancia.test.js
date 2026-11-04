@@ -39,7 +39,7 @@ test('un bot colgado avisa una sola vez, y otra cuando vuelve', () => {
   vigilancia.revisar()
   assert.equal(avisos.length, 1)
   assert.equal(avisos[0], [
-    '⚠️ El bot SRS lleva 2 min parado, seguramente porque IG no contesta.',
+    '⚠️ El bot SRS lleva 2 min parado, seguramente porque IG no contesta o va lento.',
     'Mientras siga así no abriré ni cerraré operaciones. Los stops que ya están puestos en IG siguen funcionando.',
     'Te aviso cuando vuelva.',
   ].join('\n'))

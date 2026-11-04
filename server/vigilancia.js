@@ -15,6 +15,10 @@ import { monitorEventLoopDelay } from 'perf_hooks'
 // "SRS", "SRS y Tortugas", "SRS, Rule of 4 y Tortugas"
 const enumerar = nombres => (nombres.length < 2 ? nombres.join('') : `${nombres.slice(0, -1).join(', ')} y ${nombres.at(-1)}`)
 
+// el broker de cada bot, para decir quién no contesta (los demás bots van con IG)
+const BROKER = { 'Tortugas IB': 'IB', 'Tortugas acciones': 'Alpaca' }
+const brokerDe = nombre => BROKER[nombre] ?? 'IG'
+
 // "2 min", "1 h", "1 h 5 min"
 export function duracion(ms) {
   const min = Math.max(1, Math.round(ms / 60_000))
@@ -47,9 +51,10 @@ export function crearVigilancia({ bots, avisar = () => {}, ahora = Date.now, umb
       for (const b of nuevos) parados.set(b.nombre, t - b.segundosSinVuelta * 1000)
       const uno = nuevos.length === 1
       const cuanto = duracion(Math.max(...nuevos.map(b => b.segundosSinVuelta)) * 1000)
+      const brokers = enumerar([...new Set(nuevos.map(b => brokerDe(b.nombre)))])
       avisar([
-        `⚠️ ${uno ? 'El bot' : 'Los bots'} ${enumerar(nuevos.map(b => b.nombre))} ${uno ? 'lleva' : 'llevan'} ${cuanto} ${uno ? 'parado' : 'parados'}, seguramente porque IG no contesta.`,
-        'Mientras siga así no abriré ni cerraré operaciones. Los stops que ya están puestos en IG siguen funcionando.',
+        `⚠️ ${uno ? 'El bot' : 'Los bots'} ${enumerar(nuevos.map(b => b.nombre))} ${uno ? 'lleva' : 'llevan'} ${cuanto} ${uno ? 'parado' : 'parados'}, seguramente porque ${brokers} no contesta o va lento.`,
+        `Mientras siga así no abriré ni cerraré operaciones. Los stops que ya están puestos en ${brokers} siguen funcionando.`,
         'Te aviso cuando vuelva.',
       ].join('\n'))
     }

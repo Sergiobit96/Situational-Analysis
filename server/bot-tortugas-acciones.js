@@ -56,6 +56,7 @@ const PLAN_TRAS_CIERRE_MIN = 90   // el plan de mañana, a las 17:30 de Nueva Yo
 const APERTURA_MIN = 3            // en los primeros minutos tras la apertura entra aunque el precio haya saltado lejos del nivel (un hueco)
 const ESPERA_ERROR_S = 600        // un error al entrar en una acción no se repite hasta pasado este rato
 const ESPERA_RELLENO_S = 30
+const REINTENTO_SALIDA_S = 60    // una salida que Alpaca no ha llenado se vuelve a intentar pasado este rato
 const AÑOS_DIARIO = 2             // velas de Yahoo para los niveles (con el filtro del S1, más no cambia nada)
 const MAX_EVENTOS = 1000, MAX_OPERACIONES = 1000, MAX_SIN_ENTRAR = 2000
 const PREFIJO = 'TA'
@@ -249,10 +250,18 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     const texto = { stop: 'Salta el stop', canal: `Sale por el canal de ${pos.sistema === 1 ? 10 : 20}`, manual: 'Cierro a mano', fuera: 'La posición ya no está en Alpaca (cerrada fuera del bot)' }[motivo] ?? motivo
     apuntar(pos.simbolo, `${texto}: ${acciones} acciones${precio != null ? ` a ${num(precio)}` : ''}${resultado != null ? `, ${resultado >= 0 ? '+' : ''}${num(resultado)} $` : ''}`, { sistema: pos.sistema })
   }
+  // Sin llenarse del todo, la posición sigue (cerrarPosicion ya le ha quitado el stop): queda en
+  // el registro, la conciliación le pone el stop por lo que quede y la salida se reintenta. Antes
+  // se daba por cerrada igual: el 4-nov, en la apertura, 99 TRMB se quedaron sin stop ni bot
   async function salir(pos, motivo) {
     const o = await alpaca.cerrarPosicion(pos.simbolo)
     const hecho = await esperarRelleno(o.id)
     pos.stopId = null
+    if (!(hecho.rellena >= totalDe(pos))) {
+      pos.reintentoSalida = ahora() + REINTENTO_SALIDA_S
+      throw new Error(`la orden de cierre ha quedado ${hecho.estado} con ${hecho.rellena ?? 0} de ${totalDe(pos)} acciones: la posición sigue abierta y lo reintento en ${REINTENTO_SALIDA_S} s`)
+    }
+    delete pos.reintentoSalida
     cerrarEnRegistro(pos, hecho.precioMedio, motivo)
   }
 
@@ -325,7 +334,10 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
       if (!niv || !p) continue
       const sal = nivelesSistema(niv, pos.sistema, cfg.filtroS1).salida[pos.lado]
       try {
-        if (dir(pos.lado) * (p - sal) <= 0) { await salir(pos, 'canal'); continue }
+        if (dir(pos.lado) * (p - sal) <= 0) {
+          if (!(pos.reintentoSalida > t)) await salir(pos, 'canal')
+          continue
+        }
         const siguiente = pos.unidades.at(-1).entrada + dir(pos.lado) * PASO_N * pos.n0
         if (pos.unidades.length < cfg.maxUnidades && dir(pos.lado) * (p - siguiente) >= 0) {
           const motivo = limite(pos.simbolo, pos.lado, pos.anadido, p * Math.round(pos.unidad * pos.anadido), cuenta)

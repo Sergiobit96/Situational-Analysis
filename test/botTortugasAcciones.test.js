@@ -223,3 +223,43 @@ test('cortos solo con lados ambos o cortos', async () => {
   assert.equal(bot._datos().posiciones.AAA.lado, 'corto')
   assert.ok(a.qty.AAA < 0)
 })
+
+test('si Alpaca no llena la salida, la posición sigue con su stop y la salida se reintenta al minuto', async () => {
+  const a = alpacaDeMentira()
+  a.px = { AAA: 100, BBB: 100 }
+  const { bot, niv } = await botCon(a, { sistemas: [1] })
+  const { bajo } = niv('AAA')
+  a.px.AAA = 105.1
+  await bot._paso()
+  const acciones = a.qty.AAA
+
+  // como en la apertura del 4-nov: la orden de cierre no se llena y acaba cancelada
+  const cerrar = a.cerrarPosicion
+  let intentos = 0
+  a.cerrarPosicion = async simbolo => {
+    intentos++
+    for (const o of a.ordenes.values()) if (o.simbolo === simbolo && o.estado === 'new') o.estado = 'canceled'
+    const id = `o${++a.n}`
+    a.ordenes.set(id, { id, simbolo, lado: 'venta', estado: 'canceled', rellena: 0 })
+    return { id }
+  }
+  a.px.AAA = bajo[10] - 0.01
+  await bot._paso()
+  const pos = bot._datos().posiciones.AAA
+  assert.ok(pos, 'sigue en el registro')
+  assert.equal(a.qty.AAA, acciones)
+  assert.match(bot._datos().eventos.map(e => e.texto).join(' | '), /cierre ha quedado canceled con 0 de \d+ acciones: la posición sigue abierta/)
+
+  // la siguiente vuelta le vuelve a poner el stop, y no reintenta la salida antes del minuto
+  a.ahora += 10
+  await bot._paso()
+  assert.equal(intentos, 1)
+  assert.equal(a.ordenes.get(bot._datos().posiciones.AAA.stopId)?.estado, 'new')
+
+  a.cerrarPosicion = cerrar
+  a.ahora += 60
+  await bot._paso()
+  assert.equal(bot._datos().posiciones.AAA, undefined)
+  assert.equal(a.qty.AAA, 0)
+  assert.equal(bot._datos().operaciones[0].motivo, 'canal')
+})

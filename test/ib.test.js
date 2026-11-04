@@ -245,3 +245,17 @@ test('crearIB: conectado pero sin contestar, avisa pasado el umbral y otra vez c
   assert.match(avisos[1], /IB vuelve a contestar, tras 30 min callado/)
   ib.cerrar()
 })
+
+test('crearIB: un aviso 21xx de IB sobre una orden (el 2109 de fuera de horario) no la da por rechazada', async () => {
+  const ConAviso = class extends apiFalsa('DU999') {
+    placeOrder(id, c, o) {
+      if (o.orderType === 'STP') this.emit('error', new Error("Order Event Warning:Attribute 'Outside Regular Trading Hours' is ignored based on the order type and destination. PlaceOrder is now being processed."), 2109, id)
+      super.placeOrder(id, c, o)
+    }
+  }
+  const ib = crearIB({ port: 4002, Api: ConAviso })
+  const r = await ib.enviarOrden({ simbolo: 'XDUK', lado: 'compra', cantidad: 10, stopLoss: 20 })
+  assert.deepEqual(r.map(o => [o.estado, o.motivo]), [['pendiente', null], ['pendiente', null]])
+  assert.equal((await ib.estado()).avisos.some(a => a.codigo === 2109), true)
+  ib.cerrar()
+})

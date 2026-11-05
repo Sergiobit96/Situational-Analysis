@@ -95,6 +95,76 @@ function Ticket({ alEnviar, cuenta }) {
   )
 }
 
+const QUE = { ejecucion: 'Ejecución', puesta: 'Orden puesta', modificada: 'Orden movida', cancelada: 'Cancelada', rechazada: 'Rechazada' }
+const FILTROS = { todo: 'Todo', ejecucion: 'Ejecuciones', ordenes: 'Órdenes', cancelada: 'Cancelaciones y rechazos' }
+const fechaLarga = iso => (iso ? new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—')
+// quién mandó la orden: un bot (por el prefijo de su referencia) o a mano
+const quien = ref => (!ref ? 'fuera del servidor' : /^TIB/.test(ref) ? 'Tortugas IB' : /^SA-/.test(ref) ? 'a mano (esta vista)' : ref)
+
+// Lo que ha pasado en la cuenta (server/historial-ib.js): se guarda en el servidor, así que no
+// se pierde con los reinicios; IB solo da las ejecuciones del día
+function Historial() {
+  const [lista, setLista] = useState(null)
+  const [error, setError] = useState(null)
+  const [filtro, setFiltro] = useState('todo')
+  const [cuantas, setCuantas] = useState(100)
+
+  useEffect(() => {
+    let vivo = true
+    const cargar = () => pedir('/api/bot/ib/historial?limite=5000')
+      .then(j => { if (vivo) { setLista(j.historial); setError(null) } })
+      .catch(err => { if (vivo) setError(err.message) })
+    cargar()
+    const reloj = setInterval(cargar, 15000)
+    return () => { vivo = false; clearInterval(reloj) }
+  }, [])
+
+  if (!lista) return <section className="bot-bloque"><h3>Historial</h3>{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</section>
+  const filtradas = lista.filter(x => filtro === 'todo' || (filtro === 'ordenes' ? x.tipo !== 'ejecucion' : filtro === 'cancelada' ? x.tipo === 'cancelada' || x.tipo === 'rechazada' : x.tipo === filtro))
+  return (
+    <section className="bot-bloque">
+      <h3>Historial <small className="bot-nota">({lista.length} apuntes)</small></h3>
+      <p className="bot-nota">
+        Desde el 5-nov-2026: ejecuciones con su comisión y resultado realizado, y las órdenes puestas, movidas, canceladas y rechazadas.
+        En una cancelación, «servidor» es que la pidió un bot o esta vista; «fuera», que vino de la app o la web de IB (u otro programa).
+      </p>
+      <div className="estrategias-nav pos-vistas">
+        {Object.entries(FILTROS).map(([k, t]) => <button key={k} className={`estrategia-chip ${filtro === k ? 'activo' : ''}`} onClick={() => setFiltro(k)}>{t}</button>)}
+      </div>
+      {error && <p className="bot-error">{error}</p>}
+      {filtradas.length === 0 ? <p className="bot-nota">Nada apuntado todavía.</p> : <>
+        <div className="velas-tabla-wrap tor-tabla-wrap">
+          <table className="velas-tabla bot-tabla tor-tabla">
+            <thead><tr><th>Hora</th><th>Qué</th><th>Contrato</th><th>Lado</th><th className="tor-num">Cantidad</th><th className="tor-num">Precio</th><th>De</th><th>Detalle</th></tr></thead>
+            <tbody>
+              {filtradas.slice(0, cuantas).map((x, i) => (
+                <tr key={`${x.tipo}-${x.execId ?? x.orderId}-${x.hora}-${i}`}>
+                  <td className="bot-celda-texto">{fechaLarga(x.hora)}</td>
+                  <td className={`bot-celda-texto ${x.tipo === 'ejecucion' ? 'bot-pos' : x.tipo === 'rechazada' || (x.tipo === 'cancelada' && x.origen === 'fuera') ? 'bot-neg' : ''}`}>{QUE[x.tipo] ?? x.tipo}{x.orden && x.tipo !== 'ejecucion' ? <small className="bot-nota"> · {TIPOS[x.orden]?.toLowerCase() ?? x.orden}</small> : null}</td>
+                  <td className="bot-celda-texto"><b>{x.simbolo ?? '—'}</b>{x.orderId != null && <small className="bot-nota"> #{x.orderId}</small>}</td>
+                  <td className="bot-celda-texto">{x.lado ?? '—'}</td>
+                  <td className="tor-num">{cantidad(x.cantidad)}</td>
+                  <td className="tor-num">{x.precio != null ? num(x.precio, x.precio < 20 ? 4 : 2) : '—'}</td>
+                  <td className="bot-celda-texto" title={x.referencia ?? ''}>{quien(x.referencia)}</td>
+                  <td className="bot-celda-texto">
+                    {x.tipo === 'ejecucion' && <>
+                      {x.comision != null && <>comisión {num(x.comision)} {x.moneda ?? ''}</>}
+                      {x.realizado != null && <> · <span className={tono(x.realizado)}>realizado {dinero(x.realizado, x.moneda ?? '')}</span></>}
+                    </>}
+                    {x.tipo === 'cancelada' && <span className={x.origen === 'fuera' ? 'bot-neg' : ''}>{x.origen === 'fuera' ? 'fuera (app/web de IB)' : 'servidor'}</span>}
+                    {x.motivo && <small className="bot-nota"> {x.motivo}</small>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filtradas.length > cuantas && <div className="bot-botones"><button className="diario-boton" onClick={() => setCuantas(c => c + 200)}>Ver más ({filtradas.length - cuantas})</button></div>}
+      </>}
+    </section>
+  )
+}
+
 function SinConexion({ datos }) {
   const local = /^(127\.0\.0\.1|localhost|::1)$/.test(datos.host)
   return (
@@ -197,7 +267,7 @@ export default function IB() {
       <section className="bot-bloque">
         <h3>Interactive Brokers {paper ? '· cuenta paper' : '· CUENTA REAL'}</h3>
         <p className="bot-nota">
-          Cuenta {cuenta}, conectada al IB Gateway en {datos.host}:{datos.port} desde el {fechaHora(datos.desde)}. Ningún bot opera aquí: las órdenes son las que mandes a mano. Se refresca cada 5 s.
+          Cuenta {cuenta}, conectada al IB Gateway en {datos.host}:{datos.port} desde el {fechaHora(datos.desde)}. Aquí operan Tortugas IB (referencias TIB…) y las órdenes que mandes a mano. Se refresca cada 5 s.
         </p>
         {!paper && <p className="bot-error"><b>Ojo: es una cuenta real.</b> {puedeOperar ? 'IB_REAL=1 está puesto: las órdenes salen con dinero de verdad.' : 'Las órdenes están bloqueadas (solo salen con IB_REAL=1).'}</p>}
         {error && <p className="bot-error">{error}</p>}
@@ -273,6 +343,8 @@ export default function IB() {
           </div>
         )}
       </section>
+
+      <Historial />
 
       {avisos.length > 0 && (
         <section className="bot-bloque">

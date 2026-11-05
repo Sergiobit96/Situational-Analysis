@@ -93,7 +93,7 @@ const nombreContrato = c => [c.localSymbol || c.symbol, c.secType !== 'STK' ? c.
 // avisarCaida(texto): Telegram, una vez cuando lleva caidaMs sin poder conectar y otra al volver.
 // Hace falta porque el Gateway de Railway puede quedarse muerto con el puerto abierto (su reinicio
 // de cada noche, si la sesión se perdió de día, deja el Gateway parado y solo responde el socat)
-export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false, Api = IBApi, log = console, avisarCaida = () => {}, caidaMs = 15 * 60_000, ahora = Date.now } = {}) {
+export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false, Api = IBApi, log = console, avisarCaida = () => {}, caidaMs = 15 * 60_000, ahora = Date.now, historial = null } = {}) {
   if (!port) return null
   const e = {
     api: null, conectado: false, conectando: null, siguienteId: null, cuenta: null, cuentas: [],
@@ -102,7 +102,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: [], mudoDesde: null, mudoAvisado: false, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
+    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: [], mudoDesde: null, mudoAvisado: false, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(), cancelaEste: new Set(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -146,6 +146,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       const antes = e.ordenes.get(id) ?? {}
       e.ordenes.set(id, { ...antes, id, c, o, estadoIB: st?.status ?? antes.estadoIB, permId: o.permId, actualizada: Date.now() })
       e.abiertas?.lista.push({ id, c, o, estadoIB: st?.status ?? null })
+      alEstado(id)
     })
     // cada reqAllOpenOrders acaba en su openOrderEnd, y van en orden: la lista del bot termina
     // con el de su petición, no con el de una de la vista que ya estaba en camino
@@ -157,7 +158,9 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       const antes = e.ordenes.get(id)
       if (!antes) return
       e.ordenes.set(id, { ...antes, estadoIB: estado, rellena, quedan, medio, padre, permId: permId || antes.permId, actualizada: Date.now() })
+      alEstado(id)
     })
+    api.on(EventName.commissionReport, r => { if (r?.execId) historial?.comision(r) })
     api.on(EventName.contractDetails, (id, d) => { e.peticiones.get(id)?.filas.push(d) })
     api.on(EventName.contractDetailsEnd, id => { const p = e.peticiones.get(id); p?.ok(p.filas) })
     api.on(EventName.historicalData, (id, hora, open, high, low, close) => {
@@ -168,6 +171,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     })
     api.on(EventName.execDetails, (_id, c, x) => {
       e.ejecuciones.set(x.execId, { permId: x.permId, orderId: x.orderId, orderRef: x.orderRef ?? null, precio: x.price, cantidad: x.shares, lado: x.side, hora: x.time, conId: c.conId, simbolo: c.localSymbol || c.symbol })
+      historial?.ejecucion({ execId: x.execId, orderId: x.orderId, referencia: x.orderRef, simbolo: nombreContrato(c), conId: c.conId, lado: x.side, cantidad: x.shares, precio: x.price, hora: x.time })
     })
     api.on(EventName.execDetailsEnd, id => { e.peticiones.get(id)?.ok(null) })
     // los escalones de precio de una regla de mercado: [{ lowEdge, increment }]
@@ -391,6 +395,23 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     return e.ordenes.get(id)
   }
 
+  // ── Historial (server/historial-ib.js) ──
+  const datosOrden = (id, x) => ({
+    orderId: id, referencia: x.o?.orderRef ?? null, simbolo: x.c ? nombreContrato(x.c) : null, conId: x.c?.conId ?? null,
+    lado: x.o?.action === 'SELL' ? 'venta' : 'compra', orden: TIPOS_INV[x.o?.orderType] ?? x.o?.orderType ?? null,
+    cantidad: n(x.o?.totalQuantity), precio: n(x.o?.auxPrice) || n(x.o?.lmtPrice) || null,
+  })
+  // una orden que acaba cancelada o rechazada se apunta una vez, con quién la canceló
+  function alEstado(id) {
+    const x = e.ordenes.get(id)
+    if (!historial || !x || x.apuntada || !['Cancelled', 'ApiCancelled', 'Inactive'].includes(x.estadoIB)) return
+    x.apuntada = true
+    const padre = x.padre || x.o?.parentId
+    const pedida = e.cancelaEste.has(id) || (padre && e.cancelaEste.has(padre))
+    const tipo = !pedida && (x.estadoIB === 'Inactive' || x.motivo) ? 'rechazada' : 'cancelada'
+    historial.orden(tipo, { ...datosOrden(id, x), origen: pedida ? 'servidor' : 'fuera', motivo: x.motivo ?? null })
+  }
+
   function mandar(patas) {
     let padre = null
     const ids = []
@@ -399,6 +420,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       const o = { ...orden, account: e.cuenta, ...(padre != null ? { parentId: padre } : {}) }
       e.ordenes.set(id, { id, c: contrato, o, estadoIB: null, actualizada: Date.now() })
       e.api.placeOrder(id, contrato, o)
+      historial?.orden('puesta', datosOrden(id, { c: contrato, o }))
       ids.push(id)
       padre ??= id
     }
@@ -439,6 +461,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     async cancelarOrden(id) {
       await conectar()
       if (!e.ordenes.has(Number(id))) throw new Error(`No conozco la orden ${id}`)
+      e.cancelaEste.add(Number(id))
       e.api.cancelOrder(Number(id))
       return { ok: true }
     },
@@ -449,7 +472,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       comprobarQueSePuedeOperar()
       const p = e.cartera.get(Number(conId))
       if (!p) throw new Error('No hay ninguna posición abierta con ese contrato')
-      for (const o of ordenes()) if (o.conId === p.c.conId && ABIERTA.has(o.estado)) e.api.cancelOrder(o.id)
+      for (const o of ordenes()) if (o.conId === p.c.conId && ABIERTA.has(o.estado)) { e.cancelaEste.add(o.id); e.api.cancelOrder(o.id) }
       const contrato = { conId: p.c.conId, exchange: p.c.secType === 'STK' ? 'SMART' : p.c.exchange || p.c.primaryExch }
       const ids = mandar([{ contrato, orden: { action: p.pos > 0 ? 'SELL' : 'BUY', orderType: 'MKT', totalQuantity: Math.abs(p.pos), tif: 'DAY', orderRef: `SA-cierre-${Date.now()}`, transmit: true } }])
       return (await respuesta(ids))[0]
@@ -515,6 +538,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       return mandar(patas)
     },
     orden: id => e.ordenes.get(id) ?? null,
+    historial: (limite = 500) => historial?.lista(limite) ?? [],
     // lo que hay en la cartera, por contrato (null mientras IB no la ha mandado entera)
     cartera: () => (e.listaCuenta ? [...e.cartera.values()].map(x => ({ conId: x.c.conId, pos: Number(x.pos) })) : null),
     esperarOrden,
@@ -525,9 +549,11 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       const o = { ...orden, account: e.cuenta, transmit: true }
       e.ordenes.set(id, { ...e.ordenes.get(id), id, c: contrato, o, motivo: null, estadoIB: null, actualizada: Date.now() })
       e.api.placeOrder(id, contrato, o)
+      historial?.orden('modificada', datosOrden(id, { c: contrato, o }))
     },
     async cancelar(id) {
       await conectar()
+      e.cancelaEste.add(id)
       e.api.cancelOrder(id)
     },
 

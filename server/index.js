@@ -1856,7 +1856,7 @@ app.delete('/api/bot/alpaca/posicion/:simbolo', conAlpaca(req => alpaca.cerrarPo
 
 // ── Interactive Brokers (server/rutas-ib.js): donde haya IB Gateway e IB_PORT (en local, el de
 // este PC; en producción, el servicio ib-gateway de Railway). Lo usan la vista de IB y las tortugas en IB ──
-const { ib } = registrarIB({ app, avisar: avisarServidor })
+const { ib } = registrarIB({ app, avisar: avisarServidor, archivoHistorial: join(dirname(BOT_PATH), PRODUCCION ? 'ib-historial.json' : 'IB historial.json') })
 
 // ── Tortugas en las acciones del S&P 500, en la cuenta paper de Alpaca (server/bot-tortugas-acciones.js) ──
 // Los niveles salen del diario de Yahoo del backtest (accionesEeuu); opera donde BOT_OPERA=1 y nace apagado.

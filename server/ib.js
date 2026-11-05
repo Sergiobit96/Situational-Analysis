@@ -102,7 +102,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que piden los bots: peticiones con respuesta (contratos, histórico, ejecuciones), precios
     // en directo y ejecuciones. Sus ids, muy por encima de los de las órdenes: IB avisa de los
     // errores de las dos cosas con el mismo número
-    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: 0, mudoDesde: null, mudoAvisado: false, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
+    sigPeticion: 100_000_000, peticiones: new Map(), nombres: new Map(), finesPendientes: [], mudoDesde: null, mudoAvisado: false, cotizaciones: new Map(), ejecuciones: new Map(), abiertas: null, reglas: new Map(),
   }
   const avisar = (texto, codigo = null, id = null) => {
     e.avisos.unshift({ hora: new Date().toISOString(), codigo, id, texto })
@@ -115,7 +115,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     api.on(EventName.disconnected, () => {
       const estaba = e.conectado
       e.conectado = false; e.siguienteId = null; e.listaCuenta = false
-      e.finesPendientes = 0
+      e.finesPendientes = []
       e.abiertas?.mal(new Error('Desconectado del IB Gateway'))
       if (estaba) avisar('Desconectado del IB Gateway')
       programarReintento()
@@ -150,7 +150,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // cada reqAllOpenOrders acaba en su openOrderEnd, y van en orden: la lista del bot termina
     // con el de su petición, no con el de una de la vista que ya estaba en camino
     api.on(EventName.openOrderEnd, () => {
-      e.finesPendientes = Math.max(0, e.finesPendientes - 1)
+      e.finesPendientes.shift()
       if (e.abiertas && e.abiertas.saltar-- <= 0) e.abiertas.fin()
     })
     api.on(EventName.orderStatus, (id, estado, rellena, quedan, medio, permId, padre) => {
@@ -351,9 +351,16 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
 
   // Las órdenes abiertas ahora mismo en IB, pidiéndoselas: las que se rellenaron o cancelaron
   // sin que este proceso lo viera (con la conexión caída) ya no salen
+  // Se apunta cuándo salió cada petición: si IB se come el final de alguna, esa cuenta no puede
+  // quedarse para siempre (la lista del bot esperaría un final de más y no acabaría nunca)
   function pedirTodas(api = e.api) {
-    e.finesPendientes++
+    e.finesPendientes.push(Date.now())
     api.reqAllOpenOrders()
+  }
+  const FIN_PERDIDO_MS = 15_000
+  function olvidarFinesPerdidos() {
+    const limite = Date.now() - FIN_PERDIDO_MS
+    while (e.finesPendientes.length && e.finesPendientes[0] < limite) e.finesPendientes.shift()
   }
 
   // Las órdenes abiertas de verdad. Si IB no termina la lista, falla: una lista a medias haría
@@ -363,10 +370,11 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     let ok, mal
     const promesa = new Promise((si, no) => { ok = si; mal = no })
     const lista = []
+    olvidarFinesPerdidos()
     const t = setTimeout(() => e.abiertas?.mal(new Error('IB no contesta (órdenes abiertas)')), 15_000)
     const acabar = () => { clearTimeout(t); e.abiertas = null }
     e.abiertas = {
-      lista, promesa, saltar: e.finesPendientes,
+      lista, promesa, saltar: e.finesPendientes.length,
       // la misma orden puede llegar también en la respuesta de otra petición: vale la última
       fin: () => { acabar(); ok([...new Map(lista.map(x => [x.id, x])).values()].filter(x => !ACABADA.has(x.estadoIB))) },
       mal: err => { acabar(); mal(err) },

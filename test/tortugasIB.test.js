@@ -78,7 +78,13 @@ function ibFalso() {
     orden: n => ordenes.get(n),
     esperarOrden: async n => ordenes.get(n),
     async modificar(n, c, o) { Object.assign(ordenes.get(n), { c, o, estadoIB: 'Submitted' }) },
-    async cancelar(n) { const x = ordenes.get(n); if (x.estadoIB !== 'Filled') x.estadoIB = 'Cancelled' },
+    // como IB: cancelar una madre sin rellenar se lleva sus hijas
+    async cancelar(n) {
+      const x = ordenes.get(n)
+      if (x.estadoIB === 'Filled') return
+      x.estadoIB = 'Cancelled'
+      if (!x.rellena) for (const h of ordenes.values()) if (h.o.parentId === n && h.estadoIB !== 'Filled') h.estadoIB = 'Cancelled'
+    },
     // salta el stop de una unidad a su precio
     saltar(referencia) { const x = [...ordenes.values()].find(o => o.o.orderRef === `${referencia}-stop` && o.estadoIB === 'Submitted'); ejecutar(x, x.o.auxPrice) },
   }
@@ -297,4 +303,44 @@ test('IB: en los que cotizan en centavos (priceMagnifier 100) la regla de mercad
     const r = await tib.operar.abrir({ ticker: 'COTTON', epic: 'CTZ6', lado: 'corto', tamano: 2, stop: 79.623, referencia: 'TIB1-COTTON-x' })
     assert.equal(r.stop, 79.62)
   } finally { delete DETALLES.CT }
+})
+
+test('IB: una entrada a mercado que no se rellena se cancela; a medias se queda lo rellenado; el stop de una madre sin rellenar no es una posición', async () => {
+  const ib = ibFalso()
+  DETALLES.XDUK = [{ contract: { conId: 42, symbol: 'XDUK', secType: 'STK', exchange: 'SMART', primaryExch: 'IBIS', currency: 'EUR', localSymbol: 'XDUK' }, minTick: 0.001, marketRuleIds: '9', validExchanges: 'SMART,IBIS' }]
+  const t = ny(11, 5, 4)
+  const tib = crearTortugasIB({ ib, ahora: () => t, log: () => {}, esperaOrdenMs: 300, mercados: { '^FTSE': { ...MERCADOS_IB['^FTSE'], simbolos: ['XDUK'] } } })
+  try {
+    await tib.arrancar()
+    ib.precio('XDUK', 21.25, 21.26)
+    // la madre a mercado se queda sin rellenar (como en la cuenta paper con los ETF de Xetra)
+    const mandar = ib.mandarPatas
+    let parcial = 0
+    ib.mandarPatas = async patas => {
+      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'MKT' ? 'LMT' : p.orden.orderType } })))
+      Object.assign(ib.ordenes.get(ids[0]), { rellena: parcial, medio: parcial ? 21.26 : 0 })
+      return ids
+    }
+    // antes de cancelarla, sus patas abiertas no cuentan como posición
+    const cancelar = ib.cancelar
+    let vistas = null
+    ib.cancelar = async n => { vistas ??= await tib.operar.posiciones(); return cancelar(n) }
+    const r = await tib.operar.abrir({ ticker: '^FTSE', epic: 'XDUK', lado: 'largo', tamano: 9667, stop: 20.922, referencia: 'TIB1-FTSE-a' })
+    assert.deepEqual(vistas, [])
+    assert.equal(r.aceptada, false)
+    assert.match(r.motivo, /no la ha rellenado .* cancelado/)
+    assert.equal(ib.mandadas.at(-2).estadoIB, 'Cancelled')
+
+    // a medias: se queda lo que entró y su stop baja a esa cantidad
+    parcial = 868
+    vistas = null
+    ib.cancelar = async n => {
+      vistas ??= await tib.operar.posiciones()
+      return cancelar(n)
+    }
+    const m = await tib.operar.abrir({ ticker: '^FTSE', epic: 'XDUK', lado: 'largo', tamano: 9667, stop: 20.922, referencia: 'TIB1-FTSE-b' })
+    assert.deepEqual(vistas.map(p => [p.dealId, p.tamano]), [['TIB1-FTSE-b', 868]])
+    assert.deepEqual([m.aceptada, m.tamano, m.nivel], [true, 868, 21.26])
+    assert.equal(ib.mandadas.at(-1).o.totalQuantity, 868)
+  } finally { delete DETALLES.XDUK }
 })

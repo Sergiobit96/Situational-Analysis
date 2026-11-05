@@ -120,7 +120,7 @@ const horaEjecucion = h => {
   return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : null
 }
 
-export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math.floor(Date.now() / 1000), prefijo = PREFIJO_IB, log = console.log }) {
+export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math.floor(Date.now() / 1000), prefijo = PREFIJO_IB, log = console.log, esperaOrdenMs = ESPERA_ORDEN_MS }) {
   const contratos = new Map()   // epic → { ticker, epic, contrato, valorPunto, tick, decimales, moneda, tipo, q }
   const vigentes = new Map()    // ticker → { epic, hasta }
   const velas = new Map()       // epic → velas de 1 min de su precio en directo
@@ -317,7 +317,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       // si IB rechaza el stop, la madre no sale nunca (va con transmit=false): se cancela y no entra
       const t0 = Date.now()
       let o = ib.orden(id)
-      while (Date.now() - t0 < ESPERA_ORDEN_MS && !['Filled', 'Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
+      while (Date.now() - t0 < esperaOrdenMs && !['Filled', 'Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
         const s = ib.orden(idStop)
         if (s?.motivo && !['Submitted', 'PreSubmitted', 'Filled'].includes(s.estadoIB)) {
           await ib.cancelar(id).catch(() => {})
@@ -328,8 +328,26 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       }
       if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: o.rellena || tamano, stop: nivel }
       if (['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) return { aceptada: false, motivo: o.motivo ?? 'IB la ha cancelado' }
+      // Sin rellenar en ese rato (en la cuenta paper, un ETF de Xetra puede pasarse horas así): se
+      // cancela la madre, que se lleva su stop. Una entrada a mercado que se queda colgada puede
+      // entrar cuando el precio ya no es el de la ruptura, y el bot no sabría de ella
+      if (o?.estadoIB !== 'Filled') {
+        await ib.cancelar(id).catch(() => {})
+        o = await ib.esperarOrden(id, ESPERA_STOP_MS)
+      }
+      if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: o.rellena || tamano, stop: nivel }
+      const rellena = Number(o?.rellena) || 0
+      if (['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
+        if (!rellena) return { aceptada: false, motivo: `IB no la ha rellenado en ${esperaOrdenMs / 1000} s y se ha cancelado` }
+        // a medias: se queda lo que entró, con su stop solo por esa cantidad
+        const s = ib.orden(idStop)
+        if (s?.o && !['Cancelled', 'ApiCancelled', 'Inactive', 'Filled'].includes(s.estadoIB)) {
+          await ib.modificar(idStop, c.contrato, { ...s.o, totalQuantity: rellena }).catch(() => {})
+          return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: rellena, stop: nivel }
+        }
+      }
       // sin respuesta: el bot mira después en las órdenes abiertas si entró (por su referencia)
-      throw new Error(`IB no ha rellenado la orden en ${ESPERA_ORDEN_MS / 1000} s${o?.motivo ? ` (${o.motivo})` : ''}`)
+      throw new Error(`IB no ha rellenado la orden en ${esperaOrdenMs / 1000} s${o?.motivo ? ` (${o.motivo})` : ''}`)
     },
 
     // Cancela su stop y la cierra a mercado; si IB no la cierra, vuelve a poner el stop
@@ -371,12 +389,17 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     // Las unidades abiertas de este bot: los stops abiertos con su prefijo
     async posiciones() {
       const [abiertas, ejecuciones] = await Promise.all([ib.abiertas(), ib.ejecuciones().catch(() => [])])
-      return abiertas.filter(delBot).map(x => {
+      const abiertasPorId = new Map(abiertas.map(x => [x.id, x]))
+      return abiertas.filter(delBot).flatMap(x => {
         const referencia = x.o.orderRef.slice(0, -'-stop'.length)
+        // el stop de una entrada que IB aún no ha rellenado no es una posición: solo cuenta lo rellenado
+        const madre = x.o.parentId ? abiertasPorId.get(x.o.parentId) : null
+        const rellena = madre ? Number(ib.orden(madre.id)?.rellena) || 0 : null
+        if (rellena === 0) return []
         const entrada = mediaDe(ejecuciones.filter(j => j.orderRef === referencia))
         return {
           dealId: referencia, referencia, ticker: tickerDe(x.c), epic: epicDe(x.c),
-          lado: x.o.action === 'SELL' ? 'largo' : 'corto', tamano: Number(x.o.totalQuantity), stop: x.o.auxPrice,
+          lado: x.o.action === 'SELL' ? 'largo' : 'corto', tamano: rellena ?? Number(x.o.totalQuantity), stop: x.o.auxPrice,
           nivel: entrada?.precio ?? null, abierta: horaEjecucion(entrada?.hora) ?? isoSinZ(ahora()),
         }
       })

@@ -221,6 +221,29 @@ test('crearIB: si IB no termina la lista de órdenes abiertas, falla en vez de d
   ib.cerrar()
 })
 
+test('crearIB: si IB se come el final de una petición, la lista del bot no se queda esperándolo para siempre', async t => {
+  const Lenta = class extends apiFalsa('DU999') { reqAllOpenOrders() { if (!this.callada) setImmediate(() => this.emit('openOrderEnd')) } }
+  const ib = crearIB({ port: 4002, Api: Lenta })
+  await ib.estado()
+  await new Promise(r => setTimeout(r, 20))
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() })
+  // la petición de la vista se queda sin final
+  FalsaUltima.api.callada = true
+  await ib.estado()
+  FalsaUltima.api.callada = false
+  const p = ib.abiertas()
+  await new Promise(r => setImmediate(r))
+  t.mock.timers.tick(15_000)
+  await assert.rejects(p, /órdenes abiertas/)
+  // pasado ese rato, el final perdido ya no se espera
+  t.mock.timers.tick(1_000)
+  const q = ib.abiertas()
+  await new Promise(r => setImmediate(r))
+  await new Promise(r => setImmediate(r))
+  assert.deepEqual(await q, [])
+  ib.cerrar()
+})
+
 test('crearIB: conectado pero sin contestar, avisa pasado el umbral y otra vez cuando vuelve a contestar', async t => {
   const Callada = class extends apiFalsa('DU999') { reqContractDetails(id, c) { if (!this.callada) super.reqContractDetails(id, c) } }
   let reloj = 0

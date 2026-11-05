@@ -933,7 +933,26 @@ export function crearBotTortugas({
       const c = await operar.cierreDe({ ticker, dealId: u.dealId, lado: pos.lado, desdeMs: desde * 1000 })
       if (c) u.salida = { nivel: c.nivel, hora: ahora() }
     }
-    const sinPrecio = idas.filter(u => !u.salida)
+    let sinPrecio = idas.filter(u => !u.salida)
+    // sin ejecución de su stop ni de su cierre, puede que la unidad siga abierta y lo que falte sea
+    // el stop (IB a veces descarta uno en silencio): si el broker la ve en la cartera, se le vuelve
+    // a poner y no se da por cerrada
+    if (sinPrecio.length && operar.siguenSinStop) {
+      const sin = await operar.siguenSinStop({ ticker, epic: pos.epic, lado: pos.lado, unidades: sinPrecio })
+      for (const u of sin) {
+        const nivel = u.stop ?? pos.stop
+        const r = await operar.reponerStop({ ticker, epic: u.epic ?? pos.epic, lado: pos.lado, dealId: u.dealId, tamano: u.tamano, stop: nivel })
+          .catch(err => ({ aceptada: false, motivo: err.message }))
+        apuntar(ticker, r.aceptada
+          ? `La unidad ${u.dealId} sigue abierta en ${broker} pero se había quedado sin stop: puesto otra vez en ${px(r.stop ?? nivel)}`
+          : `La unidad ${u.dealId} sigue abierta en ${broker} SIN STOP y no he podido ponérselo (${r.motivo}): ponlo a mano en ${px(nivel)}`, { sistema })
+      }
+      if (sin.length) {
+        delete pos.busquedasCierre
+        sinPrecio = sinPrecio.filter(u => !sin.includes(u))
+        if (!sinPrecio.length && idas.every(u => sin.includes(u))) return
+      }
+    }
     if (sinPrecio.length && (pos.busquedasCierre = (pos.busquedasCierre ?? 0) + 1) < BUSQUEDAS_CIERRE) {
       if (pos.busquedasCierre === 1) apuntar(ticker, `La posición ya no está en ${broker}: buscando a qué precio se cerró`, { aviso: false, sistema })
       return
@@ -1215,6 +1234,35 @@ export function crearBotTortugas({
     })
   }
 
+  // Deshace un cierre apuntado por error (la posición sigue abierta en el broker): quita la
+  // operación del registro y vuelve a abrir la posición con sus unidades, sin las de `quitar` (que
+  // no existían) y con `cambios` por unidad ({ tamano, entrada, stop }). Si alguna no tiene stop en
+  // el broker, la revisión se lo pone
+  async function deshacerCierre({ ticker, sistema, quitar = [], cambios = {}, stop }) {
+    return encolar(async () => {
+      sistema = Number(sistema)
+      const clave = claveDe(ticker, sistema)
+      if (datos.posiciones[clave]) throw new Error(`El Sistema ${sistema} ya tiene posición en ${nombreDe(ticker)}`)
+      if (!(Number(stop) > 0)) throw new Error('Falta el stop de la posición')
+      const i = datos.operaciones.findIndex(op => op.ticker === ticker && (op.sistema ?? 1) === sistema)
+      if (i < 0) throw new Error(`No hay operación cerrada del Sistema ${sistema} en ${nombreDe(ticker)}`)
+      const op = datos.operaciones[i]
+      const unidades = op.detalle.filter(u => !quitar.includes(u.dealId)).map(u => ({
+        dealId: u.dealId, tamano: u.tamano, entrada: u.entrada, stop: Number(stop), hora: u.hora, referencia: u.dealId, nivel: null, deslizamiento: null,
+        ...cambios[u.dealId],
+      }))
+      if (!unidades.length) throw new Error('No queda ninguna unidad')
+      datos.operaciones.splice(i, 1)
+      datos.posiciones[clave] = {
+        ticker, sistema, lado: op.lado, n0: op.n0, ruptura: op.ruptura, abierta: op.abierta, abiertaHora: op.abiertaHora,
+        epic: op.epic, moneda: datos.planes[ticker]?.unidad?.moneda ?? null, valorPunto: op.valorPunto, cambioAEur: op.cambioAEur, stop: Number(stop), unidades,
+      }
+      apuntar(ticker, `Cierre del ${op.cerrada} deshecho a mano: la posición sigue abierta con ${unidades.map(u => `${num(u.tamano, 2)} a ${px(u.entrada)}`).join(' y ')}, stop en ${px(Number(stop))}`, { sistema })
+      guardar()
+      return datos.posiciones[clave]
+    })
+  }
+
   // Apaga el bot y cierra todo lo que tenga abierto
   async function pararYCerrar() {
     datos.config.activo = false
@@ -1254,7 +1302,7 @@ export function crearBotTortugas({
   }
 
   return {
-    arrancar, parar, estado, cambiarConfig, pararYCerrar, apretarStop, cerrarMercado,
+    arrancar, parar, estado, cambiarConfig, pararYCerrar, apretarStop, cerrarMercado, deshacerCierre,
     latido: () => ({ enMarcha: reloj !== null, desde: arrancadoEn, ultimaVuelta }),
     // un paso del bucle sin el temporizador (para las pruebas): por la misma cola y guardando
     _paso: () => encolar(async () => { try { await paso() } finally { guardar() } }),

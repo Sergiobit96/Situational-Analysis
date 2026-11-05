@@ -28,6 +28,10 @@ export const PREFIJO_IB = 'TIB'      // + el sistema: TIB1-…, TIB2-…
 export const ROLAR_DIAS = 10          // días antes del primer aviso o del último día en los que se pasa al siguiente vencimiento
 const ESPERA_ORDEN_MS = 20_000        // lo que se espera a que IB rellene una orden a mercado
 const ESPERA_STOP_MS = 5_000          // y a que confirme un stop movido o cancelado
+// En la cuenta paper, IB no rellena órdenes a mercado de los ETF de Xetra (se quedan sin
+// rellenar horas; una límite al otro lado del precio entra al momento): en los ETF, la entrada y
+// el cierre van con límite a este tanto por uno del precio, por el lado que entra seguro
+const HOLGURA_ETF = 0.01
 const ESPERA_PRECIO_MS = 3_000        // y el primer precio de un contrato recién suscrito
 // Más separación que esta parte del precio entre la compra y la venta no es un precio de verdad:
 // en la subasta de apertura de Xetra, IB llegó a dar una oferta de 1.200 € en un ETF de 733 €
@@ -274,6 +278,31 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     action: o.action, orderType: 'STP', auxPrice: nivel, totalQuantity: Number(o.totalQuantity), tif: 'GTC', outsideRth: true, orderRef: o.orderRef,
     ...(conPadre && o.parentId ? { parentId: o.parentId } : {}),
   })
+  // el límite de una orden que tiene que entrar ya (null: a mercado)
+  async function limiteDe(c, compra) {
+    if (c.tipo !== 'etf') return null
+    const h = horquilla(c.q)
+    const p = (compra ? h?.ask : h?.bid) ?? c.q?.last
+    if (!(p > 0)) return null
+    return alTick(p * (compra ? 1 + HOLGURA_ETF : 1 - HOLGURA_ETF), c, await c.escalones)
+  }
+  const ordenYa = (accion, lmt) => (lmt != null ? { action: accion, orderType: 'LMT', lmtPrice: lmt } : { action: accion, orderType: 'MKT' })
+
+  // Manda un stop y espera a que IB lo tenga de verdad (Submitted o PreSubmitted): uno que IB
+  // descarta en silencio deja la posición sin protección
+  async function ponerStop(contrato, orden) {
+    const [id] = await ib.mandarPatas([{ contrato, orden: { ...orden, transmit: true } }])
+    const t0 = Date.now()
+    let o = ib.orden(id)
+    while (Date.now() - t0 < ESPERA_STOP_MS && !['Submitted', 'PreSubmitted', 'Filled', 'Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
+      await new Promise(r => setTimeout(r, 100))
+      o = ib.orden(id)
+    }
+    if (['Submitted', 'PreSubmitted', 'Filled'].includes(o?.estadoIB)) return { aceptada: true, id }
+    if (!['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) await ib.cancelar(id).catch(() => {})
+    return { aceptada: false, motivo: o?.motivo ?? 'IB no confirma el stop' }
+  }
+
   const delBot = x => x.o.orderType === 'STP' && x.o.orderRef?.startsWith(prefijo) && x.o.orderRef.endsWith('-stop')
   const stopDe = async dealId => (await ib.abiertas()).find(x => x.o.orderRef === `${dealId}-stop`) ?? null
 
@@ -310,8 +339,9 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       // un stop al otro lado del precio es que el precio no era bueno: no se manda
       const precioAhora = compra ? horquilla(c.q)?.bid : horquilla(c.q)?.ask
       if (precioAhora != null && (compra ? nivel >= precioAhora : nivel <= precioAhora)) return { aceptada: false, motivo: `el stop (${nivel}) queda al otro lado del precio (${precioAhora})` }
+      const lmt = await limiteDe(c, compra)
       const [id, idStop] = await ib.mandarPatas([
-        { contrato: c.contrato, orden: { action: compra ? 'BUY' : 'SELL', orderType: 'MKT', totalQuantity: tamano, tif: 'DAY', orderRef: referencia, transmit: false } },
+        { contrato: c.contrato, orden: { ...ordenYa(compra ? 'BUY' : 'SELL', lmt), totalQuantity: tamano, tif: 'DAY', orderRef: referencia, transmit: false } },
         { contrato: c.contrato, orden: { action: compra ? 'SELL' : 'BUY', orderType: 'STP', auxPrice: nivel, totalQuantity: tamano, tif: 'GTC', outsideRth: true, orderRef: `${referencia}-stop`, transmit: true } },
       ])
       // si IB rechaza el stop, la madre no sale nunca (va con transmit=false): se cancela y no entra
@@ -350,7 +380,8 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       throw new Error(`IB no ha rellenado la orden en ${esperaOrdenMs / 1000} s${o?.motivo ? ` (${o.motivo})` : ''}`)
     },
 
-    // Cancela su stop y la cierra a mercado; si IB no la cierra, vuelve a poner el stop
+    // Cancela su stop y la cierra a mercado (con límite en los ETF); si IB no la cierra, vuelve a
+    // poner el stop, y comprueba que IB lo tiene
     async cerrar({ ticker, dealId }) {
       const x = await stopDe(dealId)
       if (!x) return { aceptada: false, motivo: 'la unidad ya no tiene stop abierto en IB' }
@@ -360,12 +391,45 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       const cancelada = await ib.esperarOrden(x.id, ESPERA_STOP_MS)
       if (cancelada?.estadoIB === 'Filled') return { aceptada: false, motivo: 'acaba de saltar su stop' }
       if (!['Cancelled', 'ApiCancelled'].includes(cancelada?.estadoIB)) throw new Error('IB no confirma que haya cancelado el stop')
-      const [id] = await ib.mandarPatas([{ contrato, orden: { action: x.o.action, orderType: 'MKT', totalQuantity: Number(x.o.totalQuantity), tif: 'DAY', orderRef: `${dealId}-cierre`, transmit: true } }])
-      const o = await ib.esperarOrden(id, ESPERA_ORDEN_MS)
+      const total = Number(x.o.totalQuantity)
+      const lmt = c ? await limiteDe(c, x.o.action === 'BUY') : null
+      const [id] = await ib.mandarPatas([{ contrato, orden: { ...ordenYa(x.o.action, lmt), totalQuantity: total, tif: 'DAY', orderRef: `${dealId}-cierre`, transmit: true } }])
+      let o = await ib.esperarOrden(id, ESPERA_ORDEN_MS)
       if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: o.medio }
-      await ib.cancelar(id)
-      await ib.mandarPatas([{ contrato, orden: ordenStop(x.o, x.o.auxPrice, { conPadre: false }) }])
-      return { aceptada: false, motivo: o?.motivo ?? 'IB no la ha cerrado a mercado; el stop vuelve a estar puesto' }
+      // antes de volver a poner el stop, la orden de cierre tiene que estar cancelada de verdad
+      await ib.cancelar(id).catch(() => {})
+      o = await ib.esperarOrden(id, ESPERA_STOP_MS)
+      if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: o.medio }
+      const quedan = total - (Number(o?.rellena) || 0)
+      const r = await ponerStop(contrato, { ...ordenStop(x.o, x.o.auxPrice, { conPadre: false }), totalQuantity: quedan })
+      if (!r.aceptada) throw new Error(`IB no la ha cerrado y no confirma el stop repuesto en ${x.o.auxPrice} (${r.motivo}): puede estar SIN STOP, revísala`)
+      return { aceptada: false, motivo: o?.motivo ?? `IB no la ha cerrado${lmt != null ? ` con límite en ${lmt}` : ' a mercado'}; el stop vuelve a estar puesto` }
+    },
+
+    // Vuelve a poner el stop de una unidad que sigue abierta en IB pero se ha quedado sin él
+    async reponerStop({ ticker, epic, lado, dealId, tamano, stop }) {
+      const c = await contratoDe(ticker, epic ?? await resolver(ticker))
+      const nivel = alTick(stop, c, await c.escalones)
+      const r = await ponerStop(c.contrato, { action: lado === 'largo' ? 'SELL' : 'BUY', orderType: 'STP', auxPrice: nivel, totalQuantity: tamano, tif: 'GTC', outsideRth: true, orderRef: `${dealId}-stop` })
+      return r.aceptada ? { aceptada: true, stop: nivel } : r
+    },
+
+    // De estas unidades sin stop, las que siguen en la cartera de IB: lo que hay en ese contrato y
+    // sentido y no cubre ningún stop del bot
+    async siguenSinStop({ ticker, epic, lado, unidades }) {
+      const cartera = ib.cartera?.()
+      if (!cartera) return []
+      const c = await contratoDe(ticker, epic ?? await resolver(ticker))
+      const conId = c.contrato.conId
+      const d = lado === 'largo' ? 1 : -1
+      const pos = cartera.find(p => p.conId === conId)?.pos ?? 0
+      if (!(d * pos > 0)) return []
+      const cubierto = (await ib.abiertas()).filter(x => delBot(x) && x.c.conId === conId && x.o.action === (d > 0 ? 'SELL' : 'BUY'))
+        .reduce((sum, x) => sum + Number(x.o.totalQuantity), 0)
+      let libres = Math.abs(pos) - cubierto
+      const sin = []
+      for (const u of unidades) if (u.tamano <= libres) { sin.push(u); libres -= u.tamano }
+      return sin
     },
 
     async moverStop({ ticker, dealId, stop }) {

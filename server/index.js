@@ -2326,6 +2326,11 @@ app.post('/api/bot/tortugas-ib/cerrar', async (req, res) => {
   try { res.json(await botTortugasIB.cerrarMercado(ticker, sistema)) }
   catch (err) { res.status(400).json({ error: err.message }) }
 })
+app.post('/api/bot/tortugas-ib/deshacer-cierre', async (req, res) => {
+  if (!botTortugasIB) return sinBotIB(res)
+  try { res.json(await botTortugasIB.deshacerCierre(req.body ?? {})) }
+  catch (err) { res.status(400).json({ error: err.message }) }
+})
 app.post('/api/bot/tortugas-ib/parar', async (req, res) => {
   if (!botTortugasIB) return sinBotIB(res)
   try { res.json(await botTortugasIB.pararYCerrar()) }

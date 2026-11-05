@@ -515,6 +515,8 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       return mandar(patas)
     },
     orden: id => e.ordenes.get(id) ?? null,
+    // lo que hay en la cartera, por contrato (null mientras IB no la ha mandado entera)
+    cartera: () => (e.listaCuenta ? [...e.cartera.values()].map(x => ({ conId: x.c.conId, pos: Number(x.pos) })) : null),
     esperarOrden,
     // cambia una orden abierta (con su misma id, que tiene que ser de este cliente)
     async modificar(id, contrato, orden) {

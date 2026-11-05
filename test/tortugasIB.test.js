@@ -41,7 +41,7 @@ function ibFalso() {
     ejecuciones.push({ orderRef: x.o.orderRef, precio, cantidad: x.o.totalQuantity, hora: '20261103 15:00:00' })
   }
   const f = {
-    ordenes, mandadas: [], historicos: [],
+    ordenes, mandadas: [], historicos: [], limites: [],
     cuentaBot: async () => ({ moneda: 'EUR', saldo: 1_000_000, disponible: 1_000_000 }),
     cambio: () => null,
     detalles: async c => (c.localSymbol ? Object.values(DETALLES).flat().filter(d => d.contract.localSymbol === c.localSymbol) : DETALLES[c.symbol] ?? []),
@@ -60,6 +60,9 @@ function ibFalso() {
     },
     iniciales: {},
     ejecuciones: async () => ejecuciones,
+    // la cartera (null: sin datos, como si IB aún no la hubiera mandado)
+    carteraFalsa: null,
+    cartera: () => f.carteraFalsa,
     abiertas: async () => [...ordenes.values()].filter(x => x.estadoIB === 'Submitted'),
     async mandarPatas(patas) {
       const ids = []
@@ -68,9 +71,12 @@ function ibFalso() {
         ordenes.set(x.id, x)
         f.mandadas.push(x)
         ids.push(x.id)
-        if (orden.orderType === 'MKT') {
-          const q = cotizaciones.get(contrato.localSymbol)
-          ejecutar(x, orden.action === 'BUY' ? q.ask : q.bid)
+        const q = cotizaciones.get(contrato.localSymbol)
+        const precio = orden.action === 'BUY' ? q?.ask : q?.bid
+        // a mercado, o con un límite que cruza el precio
+        if (orden.orderType === 'MKT' || (orden.orderType === 'LMT' && orden.lmtPrice != null && (orden.action === 'BUY' ? orden.lmtPrice >= precio : orden.lmtPrice <= precio))) {
+          f.limites.push(orden.lmtPrice ?? null)
+          ejecutar(x, precio)
         }
       }
       return ids
@@ -277,7 +283,7 @@ test('IB: una horquilla imposible (la subasta de Xetra) no hace velas ni deja en
     // si IB rechaza el stop, la madre se cancela y la entrada cuenta como rechazada
     const mandar = ib.mandarPatas
     ib.mandarPatas = async patas => {
-      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'MKT' ? 'LMT' : p.orden.orderType } })))
+      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'STP' ? 'STP' : 'LMT', lmtPrice: undefined } })))
       Object.assign(ib.ordenes.get(ids[1]), { estadoIB: null, motivo: 'The price does not conform to the minimum price variation' })
       Object.assign(ib.ordenes.get(ids[0]), { estadoIB: null })
       return ids
@@ -317,7 +323,7 @@ test('IB: una entrada a mercado que no se rellena se cancela; a medias se queda 
     const mandar = ib.mandarPatas
     let parcial = 0
     ib.mandarPatas = async patas => {
-      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'MKT' ? 'LMT' : p.orden.orderType } })))
+      const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'STP' ? 'STP' : 'LMT', lmtPrice: undefined } })))
       Object.assign(ib.ordenes.get(ids[0]), { rellena: parcial, medio: parcial ? 21.26 : 0 })
       return ids
     }
@@ -343,4 +349,78 @@ test('IB: una entrada a mercado que no se rellena se cancela; a medias se queda 
     assert.deepEqual([m.aceptada, m.tamano, m.nivel], [true, 868, 21.26])
     assert.equal(ib.mandadas.at(-1).o.totalQuantity, 868)
   } finally { delete DETALLES.XDUK }
+})
+
+test('el bot en IB: una unidad que sigue en la cartera pero ha perdido su stop no se da por cerrada: se le vuelve a poner', async () => {
+  const ib = ibFalso()
+  let t = ny(11, 3, 10)
+  const tib = crearTortugasIB({ ib, ahora: () => t, log: () => {} })
+  const dir = mkdtempSync(join(tmpdir(), 'tortugas-ib-'))
+  const bot = crearBotTortugas({
+    archivo: join(dir, 'bot.json'), ahora: () => t, log: () => {}, revisarCadaMs: 0,
+    mercados: tib.mercados, operar: tib.operar, precios: tib.precios, epicsDe: tib.epicsDe, velasDiarias: tib.velasDiarias,
+    broker: 'IB', nombre: 'Tortugas IB', prefijo: tib.prefijo,
+  })
+  try {
+    await tib.arrancar()
+    ib.precio('EUR.USD', 1.0999, 1.1001)
+    ib.precio('MGCZ6', 4000, 4000.2)
+    ib.diarios.MGCZ6 = diarioPlano(4000, 30, '2026-11-02')
+    bot.cambiarConfig({ activo: true, sistemas: [1], instrumentos: Object.fromEntries(Object.keys(MERCADOS_IB).map(k => [k, k === 'XAUUSD'])) })
+    await bot._paso()
+    t += 60
+    ib.precio('MGCZ6', 4031, 4031.2)
+    await bot._paso()
+    const u = bot.estado().mercados.find(x => x.ticker === 'XAUUSD').posiciones[1].unidades[0]
+
+    // IB descarta su stop sin ejecutarlo; la cartera sigue con los 3 contratos
+    const stop = [...ib.ordenes.values()].find(o => o.o.orderRef === `${u.dealId}-stop`)
+    stop.estadoIB = 'Cancelled'
+    ib.carteraFalsa = [{ conId: 11, pos: 3 }]
+    t += 60
+    await bot._paso()
+    const pos = bot.estado().mercados.find(x => x.ticker === 'XAUUSD').posiciones[1]
+    assert.ok(pos, 'la posición sigue abierta')
+    const nuevo = [...ib.ordenes.values()].filter(o => o.o.orderRef === `${u.dealId}-stop` && o.estadoIB === 'Submitted')
+    assert.deepEqual(nuevo.map(o => [o.o.action, o.o.auxPrice, o.o.totalQuantity]), [['SELL', 3911.2, 3]])
+    assert.ok(bot.estado().eventos.some(e => /se había quedado sin stop: puesto otra vez en 3911,2/.test(e.texto)))
+    assert.equal(bot.estado().operaciones.length, 0)
+
+    // y sin la cartera de su lado (la cerró el stop sin que llegara la ejecución) sí se da por cerrada
+    ;[...ib.ordenes.values()].find(o => o.o.orderRef === `${u.dealId}-stop` && o.estadoIB === 'Submitted').estadoIB = 'Cancelled'
+    ib.carteraFalsa = []
+    for (let i = 0; i < 6; i++) { t += 60; await bot._paso() }
+    assert.equal(bot.estado().mercados.find(x => x.ticker === 'XAUUSD').posiciones[1], null)
+    assert.equal(bot.estado().operaciones[0].aproximado, true)
+
+    // deshacer ese cierre: vuelve la posición y la revisión le pone el stop
+    ib.carteraFalsa = [{ conId: 11, pos: 3 }]
+    await bot.deshacerCierre({ ticker: 'XAUUSD', sistema: 1, stop: 3920 })
+    assert.equal(bot.estado().operaciones.length, 0)
+    t += 60
+    await bot._paso()
+    const otra = bot.estado().mercados.find(x => x.ticker === 'XAUUSD').posiciones[1]
+    assert.deepEqual(otra.unidades.map(x => [x.dealId, x.tamano, x.stop]), [[u.dealId, 3, 3920]])
+    assert.ok([...ib.ordenes.values()].some(o => o.o.orderRef === `${u.dealId}-stop` && o.estadoIB === 'Submitted' && o.o.auxPrice === 3920))
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('IB: en los ETF la entrada y el cierre van con límite al 1 % del precio; si el stop repuesto tras un cierre fallido no lo confirma IB, avisa', async () => {
+  const ib = ibFalso()
+  const t = ny(11, 5, 4)
+  const tib = crearTortugasIB({ ib, ahora: () => t, log: () => {}, mercados: { '^GDAXI': { ...MERCADOS_IB['^GDAXI'], simbolos: ['EXS1'] } } })
+  await tib.arrancar()
+  ib.precio('EXS1', 219.2, 219.3)
+  const r = await tib.operar.abrir({ ticker: '^GDAXI', epic: 'EXS1', lado: 'largo', tamano: 737, stop: 214.19, referencia: 'TIB1-GDAXI-a' })
+  assert.equal(r.aceptada, true)
+  const madre = ib.mandadas.at(-2)
+  assert.deepEqual([madre.o.orderType, madre.o.lmtPrice], ['LMT', 221.49])
+  // cierre que no entra, y el stop repuesto que IB no confirma
+  const mandar = ib.mandarPatas
+  ib.mandarPatas = async patas => {
+    const ids = await mandar(patas.map(p => ({ ...p, orden: { ...p.orden, orderType: p.orden.orderType === 'STP' ? 'STP' : 'LMT', lmtPrice: undefined } })))
+    if (patas[0].orden.orderType === 'STP') ib.ordenes.get(ids[0]).estadoIB = null
+    return ids
+  }
+  await assert.rejects(tib.operar.cerrar({ ticker: '^GDAXI', dealId: 'TIB1-GDAXI-a' }), /SIN STOP/)
 })

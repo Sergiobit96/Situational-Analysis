@@ -57,6 +57,8 @@ const APERTURA_MIN = 3            // en los primeros minutos tras la apertura en
 const ESPERA_ERROR_S = 600        // un error al entrar en una acción no se repite hasta pasado este rato
 const ESPERA_RELLENO_S = 30
 const REINTENTO_SALIDA_S = 60    // una salida que Alpaca no ha llenado se vuelve a intentar pasado este rato
+const REINTENTO_ANADIDO_S = 120  // y un añadido que no ha podido hacerse
+const ESPERA_CANCELAR_S = 30     // lo que se espera a que Alpaca confirme la cancelación del stop (en la apertura tarda)
 const AÑOS_DIARIO = 2             // velas de Yahoo para los niveles (con el filtro del S1, más no cambia nada)
 const MAX_EVENTOS = 1000, MAX_OPERACIONES = 1000, MAX_SIN_ENTRAR = 2000
 const PREFIJO = 'TA'
@@ -197,20 +199,39 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     if (!(hecho.rellena > 0)) throw new Error(`la orden a mercado ha quedado ${hecho.estado}`)
     return hecho
   }
+  // Cancela el stop y espera a que Alpaca lo dé por cancelado: hasta entonces, una orden del
+  // lado contrario es «wash trade». Da el estado final (null si no había stop o ya no está), o
+  // lanza si Alpaca no lo confirma a tiempo. El 5-nov, en la apertura, la cancelación tardó más
+  // de 5 s, la compra del añadido se rechazó y 14 posiciones se quedaron sin stop
   async function quitarStop(pos) {
-    if (!pos.stopId) return
-    try { await alpaca.cancelarOrden(pos.stopId) } catch { /* ya no estaba */ }
-    for (let i = 0; i < 10; i++) {
-      const o = await alpaca.orden(pos.stopId).catch(() => null)
-      if (!o || !['new', 'accepted', 'pending_new', 'held', 'pending_cancel'].includes(o.estado)) break
+    const id = pos.stopId
+    if (!id) return null
+    try { await alpaca.cancelarOrden(id) } catch { /* ya no estaba */ }
+    let o = null
+    for (let i = 0; i < ESPERA_CANCELAR_S * 2; i++) {
+      o = await alpaca.orden(id).catch(() => null)
+      if (!o || !['new', 'accepted', 'pending_new', 'held', 'pending_cancel', 'pending_replace'].includes(o.estado)) {
+        pos.stopId = null
+        return o?.estado ?? null
+      }
       await esperarMs(500)
     }
-    pos.stopId = null
+    throw new Error(`Alpaca no confirma la cancelación del stop en ${ESPERA_CANCELAR_S} s (está ${o?.estado})`)
   }
   async function ponerStop(pos, cantidad) {
     const o = await alpaca.enviarOrden({ simbolo: pos.simbolo, lado: pos.lado === 'largo' ? 'venta' : 'compra', tipo: 'stop', stop: pos.stop, cantidad, validez: 'gtc' },
       { prefijo: `${referencia(pos.sistema, pos.simbolo)}stop-`, ahora: () => Date.now() })
     pos.stopId = o.id
+  }
+  // con unos reintentos: justo tras cancelar, Alpaca a veces aún lo toma por «wash trade»
+  async function conReintentos(fn, veces = 5) {
+    for (let i = 0; ; i++) {
+      try { return await fn() }
+      catch (err) {
+        if (i >= veces - 1 || !/40310000|wash/i.test(err.message)) throw err
+        await esperarMs(1000)
+      }
+    }
   }
 
   const unidadAhora = { riesgoN: null, capital: null }
@@ -232,13 +253,24 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
   }
   async function anadir(pos) {
     const cantidad = Math.max(1, Math.round(pos.unidad * pos.anadido))
-    await quitarStop(pos)
+    pos.reintentoAnadido = ahora() + REINTENTO_ANADIDO_S
+    // si Alpaca no confirma la cancelación, no se compra: el stop sigue (o la conciliación lo repone)
+    const quitado = await quitarStop(pos)
+    // el stop acaba de saltar: no hay nada a lo que añadir (la conciliación lo apunta)
+    if (quitado === 'filled') return
     let o
-    try { o = await aMercado(pos, pos.lado, cantidad) }
-    finally { if (!o) await ponerStop(pos, totalDe(pos)).catch(() => {}) }   // si no entra, vuelve el stop de antes
+    try { o = await conReintentos(() => aMercado(pos, pos.lado, cantidad)) }
+    finally {
+      // si no entra, vuelve el stop de antes; y si tampoco se puede, que se sepa
+      if (!o) {
+        try { await conReintentos(() => ponerStop(pos, totalDe(pos))) }
+        catch (err) { apuntar(pos.simbolo, `Ojo: SIN STOP. No he podido volver a poner el stop en ${num(pos.stop)} (${err.message}); lo reintento en la siguiente vuelta`, { sistema: pos.sistema }) }
+      }
+    }
+    delete pos.reintentoAnadido
     pos.unidades.push({ acciones: o.rellena, entrada: o.precioMedio, hora: o.rellenaEn ?? hora() })
     pos.stop = centimos(o.precioMedio - dir(pos.lado) * STOP_N * pos.n0)
-    try { await ponerStop(pos, totalDe(pos)) } catch (err) { apuntar(pos.simbolo, `Ojo: no he podido mover el stop a ${num(pos.stop)} (${err.message}); lo reintento en la siguiente vuelta`, { sistema: pos.sistema }) }
+    try { await conReintentos(() => ponerStop(pos, totalDe(pos))) } catch (err) { apuntar(pos.simbolo, `Ojo: no he podido mover el stop a ${num(pos.stop)} (${err.message}); lo reintento en la siguiente vuelta`, { sistema: pos.sistema }) }
     apuntar(pos.simbolo, `Añado ${o.rellena} acciones a ${num(o.precioMedio)} (unidad ${pos.unidades.length}). Stop de todas en ${num(pos.stop)}`, { sistema: pos.sistema })
   }
   const totalDe = pos => pos.unidades.reduce((s, u) => s + u.acciones, 0)
@@ -349,7 +381,7 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
         if (pos.unidades.length < cfg.maxUnidades && dir(pos.lado) * (p - siguiente) >= 0) {
           const motivo = limite(pos.simbolo, pos.lado, pos.anadido, p * Math.round(pos.unidad * pos.anadido), cuenta)
           if (motivo) noEntro(pos.simbolo, pos.sistema, pos.lado, `añadido: ${motivo}`)
-          else await anadir(pos)
+          else if (!(pos.reintentoAnadido > t)) await anadir(pos)
         }
       } catch (err) { apuntar(pos.simbolo, `Error: ${err.message}`, { sistema: pos.sistema }) }
       guardar()

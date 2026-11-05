@@ -291,3 +291,52 @@ test('una entrada que Alpaca llena mientras se cancela cuenta con lo que entró,
   assert.equal(pos.unidades[0].acciones, 5)
   assert.equal(a.ordenes.get(pos.stopId)?.cantidad, 5)
 })
+
+test('añadido con Alpaca lenta (la apertura del 5-nov): espera a que se cancele el stop, y si no lo confirma no compra ni deja la posición sin stop', async () => {
+  const a = alpacaDeMentira()
+  a.px = { AAA: 105.1 }
+  const { bot, niv } = await botCon(a, { sistemas: [1] })
+  const { n } = niv('AAA')
+  await bot._paso()
+  const pos = bot._datos().posiciones.AAA
+  const stop1 = a.ordenes.get(pos.stopId)
+
+  // la cancelación pasa por pending_cancel unas cuantas lecturas antes de acabar
+  let lecturas = 0
+  a.cancelarOrden = async id => { const o = a.ordenes.get(id); if (o.estado === 'new') { o.estado = 'pending_cancel'; lecturas = 6 } }
+  const leer = a.orden
+  a.orden = async id => {
+    const o = a.ordenes.get(id)
+    if (o?.estado === 'pending_cancel' && --lecturas <= 0) o.estado = 'canceled'
+    return leer(id)
+  }
+  // mientras tanto, la orden contraria aún cuenta para el «wash trade»
+  const enviar = a.enviarOrden
+  a.enviarOrden = async (o, op) => {
+    if ([...a.ordenes.values()].some(x => x.estado === 'pending_cancel' && x.simbolo === o.simbolo && x.lado !== o.lado)) throw new Error('Alpaca 403: potential wash trade detected. use complex orders')
+    return enviar(o, op)
+  }
+  a.px.AAA = 105.1 + 0.5 * n + 0.01
+  await bot._paso()
+  assert.equal(pos.unidades.length, 2)
+  assert.equal(stop1.estado, 'canceled')
+  const stop2 = a.ordenes.get(pos.stopId)
+  assert.deepEqual([stop2.estado, stop2.cantidad], ['new', a.qty.AAA])
+
+  // ahora la cancelación no acaba nunca: no compra, y el stop sigue puesto
+  a.cancelarOrden = async id => { const o = a.ordenes.get(id); if (o.estado === 'new') o.estado = 'pending_cancel' }
+  a.orden = leer
+  // como la de verdad: status=open incluye las que están cancelándose
+  a.ordenesAbiertas = async () => [...a.ordenes.values()].filter(o => ['new', 'pending_cancel'].includes(o.estado))
+  const antes = a.qty.AAA
+  a.px.AAA = stop2.stop + 2.5 * n + 0.5 * n
+  await bot._paso()
+  assert.equal(a.qty.AAA, antes)
+  assert.equal(pos.unidades.length, 2)
+  assert.ok(pos.stopId)
+  assert.ok(bot._datos().eventos.some(e => /no confirma la cancelación del stop/.test(e.texto)))
+  // y no lo vuelve a intentar en cada vuelta
+  const enviadas = a.enviadas.length
+  await bot._paso()
+  assert.equal(a.enviadas.length, enviadas)
+})

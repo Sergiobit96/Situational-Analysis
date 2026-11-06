@@ -2088,6 +2088,7 @@ if (botTortugasIB) console.log(`[tortugas ib] registro en ${BOT_TORTUGAS_IB_PATH
 // enseña nada más que esto.
 const vigilancia = crearVigilancia({
   bots: Object.fromEntries([['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn], ['Tortugas', botTortugas], ['Tortugas IB', botTortugasIB], ['Tortugas acciones', botTortugasAcciones]].filter(([, b]) => b).map(([nombre, b]) => [nombre, b.latido])),
+  callados: ib ? { 'Tortugas IB': () => ib.sinContestar() } : {},
   avisar: avisarServidor,
 })
 if (BOT_OPERA) setInterval(vigilancia.revisar, 30_000)

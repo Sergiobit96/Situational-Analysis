@@ -27,8 +27,12 @@ export function duracion(ms) {
 }
 
 // `bots`: { nombre: () => ({ enMarcha, desde, ultimaVuelta }) }, con las horas en ms; el nombre
-// es el de su chip en la pestaña Bots (SRS, Rule of 4, Tortugas)
-export function crearVigilancia({ bots, avisar = () => {}, ahora = Date.now, umbralMs = 120_000 }) {
+// es el de su chip en la pestaña Bots (SRS, Rule of 4, Tortugas).
+// `callados`: { nombre: () => bool }, si su broker ya se sabe caído o mudo. Entonces el bot va
+// lento porque cada petición agota su espera, y sus vueltas pasan de los 2 min a ratos: avisaría
+// de parado y de vuelta una y otra vez. Ese aviso ya lo da el broker (server/ib.js), así que
+// mientras tanto no se avisa de ese bot
+export function crearVigilancia({ bots, callados = {}, avisar = () => {}, ahora = Date.now, umbralMs = 120_000 }) {
   const parados = new Map()   // nombre → desde cuándo está parado
 
   function estado() {
@@ -45,7 +49,7 @@ export function crearVigilancia({ bots, avisar = () => {}, ahora = Date.now, umb
   function revisar() {
     const t = ahora()
     const e = estado()
-    const nuevos = e.bots.filter(b => b.parado && !parados.has(b.nombre))
+    const nuevos = e.bots.filter(b => b.parado && !parados.has(b.nombre) && !callados[b.nombre]?.())
     const vuelven = e.bots.filter(b => !b.parado && parados.has(b.nombre))
     if (nuevos.length) {
       for (const b of nuevos) parados.set(b.nombre, t - b.segundosSinVuelta * 1000)

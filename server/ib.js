@@ -540,6 +540,8 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     orden: id => e.ordenes.get(id) ?? null,
     historial: (limite = 500) => historial?.lista(limite) ?? [],
     // lo que hay en la cartera, por contrato (null mientras IB no la ha mandado entera)
+    // sin conexión o conectado sin contestar, desde la primera petición fallida (avisa a los caidaMs)
+    sinContestar: () => e.caidoDesde != null || e.mudoDesde != null,
     cartera: () => (e.listaCuenta ? [...e.cartera.values()].map(x => ({ conId: x.c.conId, pos: Number(x.pos) })) : null),
     esperarOrden,
     // cambia una orden abierta (con su misma id, que tiene que ser de este cliente)

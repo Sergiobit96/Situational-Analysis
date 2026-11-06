@@ -104,3 +104,27 @@ test('la medida del bucle ve un bloqueo de 200 ms', async () => {
   assert.ok(peorRecienteMs >= 150, `peorRecienteMs = ${peorRecienteMs}`)
   assert.ok(peorDesdeArranqueMs >= peorRecienteMs)
 })
+
+test('con su broker caído o mudo, un bot lento no avisa (ya avisa el broker); al volver IB, sí', () => {
+  const r = reloj()
+  const avisos = []
+  let ultimaVuelta = r.ahora()
+  let ibCallado = true
+  const vigilancia = crearVigilancia({
+    ahora: r.ahora, avisar: t => avisos.push(t), umbralMs: 120_000,
+    bots: { 'Tortugas IB': () => ({ enMarcha: true, desde: 0, ultimaVuelta }) },
+    callados: { 'Tortugas IB': () => ibCallado },
+  })
+  for (let i = 0; i < 5; i++) {
+    r.pasar(150_000)
+    assert.equal(vigilancia.revisar().ok, false)   // /healthz/bots lo sigue enseñando
+    ultimaVuelta = r.ahora()
+    vigilancia.revisar()
+  }
+  assert.deepEqual(avisos, [])
+  ibCallado = false
+  r.pasar(150_000)
+  vigilancia.revisar()
+  assert.equal(avisos.length, 1)
+  assert.match(avisos[0], /Tortugas IB lleva 3 min parado, seguramente porque IB/)
+})

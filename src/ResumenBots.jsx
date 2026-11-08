@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef } from 'react'
+import { useRefresco } from './refresco'
 import './Bot.css'
 
 // Cómo van los bots para quien no tiene la clave (/api/resumen-bots): primero la cuenta de IG
@@ -255,11 +256,7 @@ export default function ResumenBots() {
   }, [])
 
   // al abrir la pestaña y cada minuto (el servidor lo guarda medio minuto)
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 60000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 60000)
 
   if (!datos) {
     return <div className="bot-page">{error ? <p className="bot-error">{error}</p> : <p className="bot-nota">Cargando…</p>}</div>

@@ -154,3 +154,64 @@ test('la sincronización baja los zips que han cambiado y no los que no', async 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('un mes que está en el zip reciente sale de ese y no del completo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hist-rec-'))
+  try {
+    const despues = Date.UTC(2024, 1, 1, 6)
+    writeFileSync(join(dir, 'deuidxeur.zip'), hacerZip([
+      { nombre: 'deuidxeur/2023-12.csv', texto: 'completo', mtime: despues },
+      { nombre: 'deuidxeur/2024-01.csv', texto: 'viejo', mtime: Date.UTC(2024, 0, 10) },
+    ]))
+    writeFileSync(join(dir, 'deuidxeur-reciente.zip'), hacerZip([
+      { nombre: 'deuidxeur/2024-01.csv', texto: CSV, mtime: despues },
+    ]))
+    const fuente = fuenteZips(dir)
+    assert.equal(fuente('deuidxeur', '2024-01').leer(), CSV)
+    assert.equal(fuente('deuidxeur', '2024-01').mtimeMs, despues)
+    assert.equal(fuente('deuidxeur', '2023-12').leer(), 'completo')
+    assert.equal(fuente('deuidxeur', '2024-02'), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('con el reciente en el release, el completo solo se baja cuando el que hay se hace viejo', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hist-sync-rec-'))
+  const original = globalThis.fetch
+  const pedidos = []
+  let actualizado = '2026-11-08T05:00:00Z'
+  let reloj = Date.parse('2026-11-08T06:00:00Z')
+  globalThis.fetch = async url => {
+    pedidos.push(String(url))
+    if (String(url).includes('/releases/tags/')) {
+      return Response.json({ assets: [
+        { name: 'deuidxeur.zip', size: 4096, updated_at: actualizado, browser_download_url: 'https://x/deuidxeur.zip' },
+        { name: 'deuidxeur-reciente.zip', size: 2048, updated_at: actualizado, browser_download_url: 'https://x/deuidxeur-reciente.zip' },
+      ] })
+    }
+    return new Response(Buffer.alloc(String(url).includes('reciente') ? 2048 : 4096, 7))
+  }
+  const silencio = { log() {}, warn() {} }
+  const descargas = () => pedidos.filter(u => u.startsWith('https://x/')).sort()
+  try {
+    const s = crearSincronizacionHistorico(dir, { log: silencio, ahora: () => reloj })
+    await s.sincronizar()   // la primera vez, los dos
+    assert.deepEqual(descargas(), ['https://x/deuidxeur-reciente.zip', 'https://x/deuidxeur.zip'])
+
+    pedidos.length = 0
+    actualizado = '2026-11-09T05:00:00Z'
+    reloj += 86400_000
+    await s.sincronizar()   // al día siguiente, solo el reciente
+    assert.deepEqual(descargas(), ['https://x/deuidxeur-reciente.zip'])
+
+    pedidos.length = 0
+    actualizado = '2026-11-29T05:00:00Z'
+    reloj += 20 * 86400_000
+    await s.sincronizar()   // 21 días después del completo, los dos
+    assert.deepEqual(descargas(), ['https://x/deuidxeur-reciente.zip', 'https://x/deuidxeur.zip'])
+  } finally {
+    globalThis.fetch = original
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

@@ -1,4 +1,6 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
+import { conFirmas, juntarFirmas } from './firmas'
+import { useRefresco } from './refresco'
 import { analizarSesion } from './segundaVelaCore'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import { piernasDe, abiertoSrs, siguienteAnadidoSrs, acumulado, realFrenteABacktest } from './botCalculos'
@@ -100,9 +102,12 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   const [ahora, setAhora] = useState(() => Math.floor(Date.now() / 1000))
   const [abierto, setAbierto] = useState(null)   // la sesión del historial con el gráfico desplegado
 
+  const previo = useRef(null)   // la última respuesta, para no volver a pedir lo que no cambia
   const cargar = useCallback(async () => {
     try {
-      setDatos(await pedir(api))
+      const nuevo = juntarFirmas(await pedir(conFirmas(api, previo.current)), previo.current)
+      previo.current = nuevo
+      setDatos(nuevo)
       setAhora(Math.floor(Date.now() / 1000))
       setError(null)
       setPideClave(false)
@@ -113,13 +118,12 @@ export default function Bot({ api = '/api/bot', nombre: nombreBot = 'SRS', notaD
   }, [api])
 
   // al abrir la pestaña y cada 5 s: el bot cambia solo (bracket, entrada, cierre)
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 5000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 5000)
 
-  const historial = useMemo(() => (datos?.historial ?? []).map(d => ({ ...d, backtest: backtestDe(d, datos.maxUnidades) })), [datos])
+  // solo se recalcula cuando cambia el historial (con las firmas, casi nunca)
+  const lista = datos?.historial
+  const maxUnidadesHist = datos?.maxUnidades
+  const historial = useMemo(() => (lista ?? []).map(d => ({ ...d, backtest: backtestDe(d, maxUnidadesHist) })), [lista, maxUnidadesHist])
 
   const accion = async fn => {
     setOcupado(true)

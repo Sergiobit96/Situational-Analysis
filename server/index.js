@@ -5,6 +5,7 @@ import { getHistoricalRates } from 'dukascopy-node'
 import { instalarTransporteDukascopy, estadoTransporteDukascopy, dukascopyLimitando } from './dukascopy-transport.js'
 import { crearHistoricoDukascopy, fuenteZips } from './historico-dukascopy.js'
 import { crearSincronizacionHistorico } from './historico-github.js'
+import { conFirmas } from './firmas.js'
 import {
   TEMPORALIDADES, YAHOO, agruparVelas, agruparPorSesion, paginaAnteriorA, inicioDiaMadrid, ventanaYahoo,
 } from './velas-grafico.js'
@@ -1776,7 +1777,7 @@ const sinBot = res => res.status(404).json({ error: ig ? 'El bot solo funciona c
 
 app.get('/api/bot', (req, res) => {
   if (!bot) return sinBot(res)
-  res.json({ archivo: BOT_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() })
+  res.json(conFirmas(req.query, { archivo: BOT_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...bot.estado() }, ['historial']))
 })
 
 app.put('/api/bot/config', (req, res) => {
@@ -1876,10 +1877,10 @@ const conTortugasAcciones = hacer => async (req, res) => {
   try { res.json(await hacer(req)) }
   catch (err) { res.status(400).json({ error: err.message }) }
 }
-app.get('/api/bot/tortugas-acciones', conTortugasAcciones(async () => {
+app.get('/api/bot/tortugas-acciones', conTortugasAcciones(async req => {
   // con el precio de ahora de lo abierto y de lo que está más cerca de romper
   const precios = await alpaca.precios(botTortugasAcciones.simbolosVistos()).catch(() => ({}))
-  return { archivo: BOT_TORTUGAS_ACCIONES_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ...botTortugasAcciones.estado({ precios }) }
+  return conFirmas(req.query, { archivo: BOT_TORTUGAS_ACCIONES_PATH, opera: BOT_OPERA, telegram: telegram.estado(), ...botTortugasAcciones.estado({ precios }) }, ['eventos', 'sinEntrar', 'operaciones'])
 }))
 app.put('/api/bot/tortugas-acciones/config', conTortugasAcciones(req => botTortugasAcciones.cambiarConfig(req.body ?? {})))
 app.post('/api/bot/tortugas-acciones/parar', conTortugasAcciones(() => botTortugasAcciones.pararYCerrar()))
@@ -1902,7 +1903,7 @@ if (botRule4) console.log(`[rule of 4] registro en ${BOT_RULE4_PATH}; ${BOT_OPER
 
 app.get('/api/bot/rule-of-4', (req, res) => {
   if (!botRule4) return sinBot(res)
-  res.json({ archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, calendario: calendarioFomc.estado(), ...botRule4.estado() })
+  res.json(conFirmas(req.query, { archivo: BOT_RULE4_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, calendario: calendarioFomc.estado(), ...botRule4.estado() }, ['historial']))
 })
 
 app.put('/api/bot/rule-of-4/config', (req, res) => {
@@ -1929,7 +1930,7 @@ if (botFbn) console.log(`[first bar negative] registro en ${BOT_FBN_PATH}; ${BOT
 
 app.get('/api/bot/first-bar-negative', (req, res) => {
   if (!botFbn) return sinBot(res)
-  res.json({ archivo: BOT_FBN_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botFbn.estado() })
+  res.json(conFirmas(req.query, { archivo: BOT_FBN_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botFbn.estado() }, ['historial']))
 })
 
 app.put('/api/bot/first-bar-negative/config', (req, res) => {
@@ -2228,7 +2229,7 @@ app.get('/api/resumen-bots', async (_req, res) => {
 
 app.get('/api/bot/tortugas', (req, res) => {
   if (!botTortugas) return sinBot(res)
-  res.json({ archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() })
+  res.json(conFirmas(req.query, { archivo: BOT_TORTUGAS_PATH, opera: BOT_OPERA, telegram: telegram.estado(), riesgoGrupoPct: cartera.estado().maxPct, noticias: noticias.estado(), ig: { sesion: ig.estado().sesion, streaming: ig.estado().streaming, cuenta: ig.estado().cuenta }, ...botTortugas.estado() }, ['eventos', 'sinEntrar', 'operaciones', 'cambiosConfig']))
 })
 
 // El diario de cada mercado del bot de las tortugas: el que usó el bot si es de hace menos de
@@ -2291,12 +2292,12 @@ const sinBotIB = res => res.status(404).json({ error: 'Las tortugas en IB necesi
 app.get('/api/bot/tortugas-ib', async (req, res) => {
   if (!botTortugasIB) return sinBotIB(res)
   const cuenta = await ib.estado().catch(err => ({ conectado: false, error: err.message }))
-  res.json({
+  res.json(conFirmas(req.query, {
     archivo: BOT_TORTUGAS_IB_PATH, opera: BOT_OPERA, telegram: telegram.estado(), noticias: noticias.estado(), broker: 'IB',
     ib: { conectado: cuenta.conectado, error: cuenta.error ?? null, cuenta: cuenta.cuenta ?? null, paper: cuenta.paper ?? null, moneda: cuenta.resumen?.moneda ?? null },
     contratos: tortugasIB.estado(),
     ...botTortugasIB.estado(),
-  })
+  }, ['eventos', 'sinEntrar', 'operaciones', 'cambiosConfig']))
 })
 app.get('/api/bot/tortugas-ib/diarios', async (req, res) => {
   if (!botTortugasIB) return sinBotIB(res)

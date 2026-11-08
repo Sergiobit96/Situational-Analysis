@@ -4,6 +4,12 @@
 // los que hayan cambiado a <dir>\<instrumento>.zip, de uno en uno y en streaming (sin
 // cargarlos en memoria), y server/historico-dukascopy.js lee los meses de dentro.
 //
+// El workflow rehace cada noche los zips enteros (1,7 GB entre los 15) aunque solo cambie el
+// último día; desde el 8-nov-2026 sube además <instrumento>-reciente.zip con el mes en curso y
+// el anterior (unos MB). Con el reciente en el release, el completo de un instrumento solo se
+// vuelve a bajar si el que hay tiene más de COMPLETO_CADA_MS (o no hay ninguno): los meses
+// que faltan en el completo están en el reciente mientras el completo tenga menos de un mes.
+//
 // Antes de bajar uno se mira que quepa en el volumen con margen; si no, se deja y queda
 // dicho en el estado. Un zip a medias nunca se ve: se baja a .tmp y se renombra al final.
 
@@ -16,8 +22,9 @@ const REPO = 'Sergiobit96/dukascopy-historico'
 const CADA_MS = 6 * 60 * 60_000
 const PRIMERA_TRAS_MS = 2 * 60_000   // que el arranque (bots, IG) vaya antes
 const MARGEN_LIBRE = 1024 ** 3       // lo que se deja libre en el volumen tras bajar un zip
+const COMPLETO_CADA_MS = 20 * 86400_000
 
-export function crearSincronizacionHistorico(dir, { repo = REPO, log = console } = {}) {
+export function crearSincronizacionHistorico(dir, { repo = REPO, log = console, ahora = () => Date.now(), completoCadaMs = COMPLETO_CADA_MS } = {}) {
   const ESTADO = join(dir, 'estado.json')
   let estado = { zips: {}, ultima: null, error: null }
   try { estado = { ...estado, ...JSON.parse(readFileSync(ESTADO, 'utf8')) } } catch { /* primera vez */ }
@@ -33,11 +40,14 @@ export function crearSincronizacionHistorico(dir, { repo = REPO, log = console }
       const r = await fetch(`https://api.github.com/repos/${repo}/releases/tags/historico`, { headers: { Accept: 'application/vnd.github+json' } })
       if (!r.ok) throw new Error(`GitHub contesta ${r.status} al pedir el release`)
       const { assets = [] } = await r.json()
+      const conReciente = new Set(assets.map(a => a.name.match(/^([a-z0-9]+)-reciente\.zip$/)?.[1]).filter(Boolean))
       for (const a of assets) {
         const instrumento = a.name.replace(/\.zip$/, '')
-        if (!/^[a-z0-9]+$/.test(instrumento) || a.size < 1024) continue
+        if (!/^[a-z0-9]+(-reciente)?$/.test(instrumento) || a.size < 1024) continue
         const visto = estado.zips[instrumento]
         if (visto?.actualizado === a.updated_at) continue
+        // el completo, con su reciente al lado, solo cuando el que hay se hace viejo
+        if (conReciente.has(instrumento) && visto?.bajado && ahora() - Date.parse(visto.bajado) < completoCadaMs) continue
         const { bavail, bsize } = statfsSync(dir)
         const libre = bavail * bsize + (visto?.bytes ?? 0)
         if (libre < a.size + MARGEN_LIBRE) {
@@ -56,7 +66,7 @@ export function crearSincronizacionHistorico(dir, { repo = REPO, log = console }
           rmSync(`${destino}.tmp`, { force: true })
           throw new Error(`${instrumento}: ${err.message}`, { cause: err })
         }
-        estado.zips[instrumento] = { actualizado: a.updated_at, bytes: a.size, bajado: new Date().toISOString() }
+        estado.zips[instrumento] = { actualizado: a.updated_at, bytes: a.size, bajado: new Date(ahora()).toISOString() }
         guardar()
         log.log(`[histórico] ${instrumento}: ${(a.size / 1024 ** 2).toFixed(0)} MB en ${((Date.now() - t0) / 1000).toFixed(0)} s`)
       }

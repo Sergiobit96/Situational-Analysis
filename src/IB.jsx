@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import './Bot.css'
 
@@ -115,7 +116,7 @@ function Historial() {
       .then(j => { if (vivo) { setLista(j.historial); setError(null) } })
       .catch(err => { if (vivo) setError(err.message) })
     cargar()
-    const reloj = setInterval(cargar, 15000)
+    const reloj = setInterval(() => { if (!document.hidden) cargar() }, 15000)
     return () => { vivo = false; clearInterval(reloj) }
   }, [])
 
@@ -210,11 +211,7 @@ export default function IB() {
   }, [])
 
   // al abrir la vista y cada 5 s (el servidor ya lo tiene en memoria: no gasta peticiones de IB)
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 5000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 5000)
 
   async function accion(clave, pregunta, url) {
     if (!window.confirm(pregunta)) return

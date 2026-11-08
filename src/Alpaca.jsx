@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import './Bot.css'
 
@@ -115,11 +116,7 @@ export default function Alpaca() {
   }, [])
 
   // al abrir la vista y cada 10 s
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 10000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 10000)
 
   async function accion(clave, pregunta, url) {
     if (!window.confirm(pregunta)) return

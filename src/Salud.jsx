@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import './Bot.css'
 
@@ -48,11 +49,7 @@ export default function Salud() {
   }, [])
 
   // al abrir la vista y cada 30 s (no pide nada a IG: es lo que el servidor ya sabe)
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 30000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 30000)
 
   if (pideClave) {
     return (

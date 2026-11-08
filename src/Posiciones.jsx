@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import Regla from './ReglaPosicion'
 import './Bot.css'
@@ -84,11 +85,7 @@ export default function Posiciones() {
   }, [])
 
   // al abrir la vista y cada 10 s (cada vuelta es una petición a IG)
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 10000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 10000)
 
   if (pideClave) {
     return (

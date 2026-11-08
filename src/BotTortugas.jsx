@@ -1,4 +1,6 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { conFirmas, juntarFirmas } from './firmas'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import { peorHastaStops, nHastaStop } from './tortugas'
 import { backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas } from './tortugasComparar'
@@ -61,9 +63,12 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
   const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
   const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.posiciones', v) } catch { /* sin almacenamiento */ } }
 
+  const previo = useRef(null)   // la última respuesta, para no volver a pedir lo que no cambia
   const cargar = useCallback(async () => {
     try {
-      setDatos(await pedir(api))
+      const nuevo = juntarFirmas(await pedir(conFirmas(api, previo.current)), previo.current)
+      previo.current = nuevo
+      setDatos(nuevo)
       setError(null)
       setPideClave(false)
     } catch (err) {
@@ -72,11 +77,7 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
     }
   }, [api])
 
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 5000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 5000)
 
   const accion = async fn => {
     setOcupado(true)

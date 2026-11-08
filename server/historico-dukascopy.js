@@ -130,23 +130,30 @@ export function leerEntradaZip(ruta, e) {
   }
 }
 
-// <dir>\<instrumento>.zip, con <instrumento>/<AAAA-MM>.csv dentro
+// <dir>\<instrumento>.zip, con <instrumento>/<AAAA-MM>.csv dentro. Un mes que esté también en
+// <instrumento>-reciente.zip (el mes en curso y el anterior, al día) sale de ese: el completo
+// puede tener días de retraso (server/historico-github.js)
 export function fuenteZips(dir) {
   const indices = new Map()   // ruta → { mtime, indice }
-  return (instrument, mes) => {
-    const ruta = join(dir, `${instrument}.zip`)
+  const buscar = (ruta, nombre) => {
     try {
       const mtime = statSync(ruta).mtimeMs
       let visto = indices.get(ruta)
       if (visto?.mtime !== mtime) indices.set(ruta, visto = { mtime, indice: leerIndiceZip(ruta) })
-      const e = visto.indice.get(`${instrument}/${mes}.csv`)
-      if (!e) return null
-      return {
-        id: `${ruta}|${mes}|${mtime}`, mtimeMs: e.mtimeMs, size: e.tamano,
-        leer: () => leerEntradaZip(ruta, e).toString('utf8'),
-      }
+      const e = visto.indice.get(nombre)
+      return e ? { ruta, mtime, e } : null
     } catch {
       return null
+    }
+  }
+  return (instrument, mes) => {
+    const nombre = `${instrument}/${mes}.csv`
+    const hallado = buscar(join(dir, `${instrument}-reciente.zip`), nombre) ?? buscar(join(dir, `${instrument}.zip`), nombre)
+    if (!hallado) return null
+    const { ruta, mtime, e } = hallado
+    return {
+      id: `${ruta}|${mes}|${mtime}`, mtimeMs: e.mtimeMs, size: e.tamano,
+      leer: () => leerEntradaZip(ruta, e).toString('utf8'),
     }
   }
 }

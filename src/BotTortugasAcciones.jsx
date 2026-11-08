@@ -1,4 +1,6 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
+import { conFirmas, juntarFirmas } from './firmas'
+import { useRefresco } from './refresco'
 import { conClaveBot, guardarClaveBot } from './claveBot'
 import Regla from './ReglaPosicion'
 import './Bot.css'
@@ -43,9 +45,12 @@ export default function BotTortugasAcciones() {
   const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
   const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.posiciones', v) } catch { /* sin almacenamiento */ } }
 
+  const previo = useRef(null)   // la última respuesta, para no volver a pedir lo que no cambia
   const cargar = useCallback(async () => {
     try {
-      setDatos(await pedir(API))
+      const nuevo = juntarFirmas(await pedir(conFirmas(API, previo.current)), previo.current)
+      previo.current = nuevo
+      setDatos(nuevo)
       setError(null)
       setPideClave(false)
     } catch (err) {
@@ -54,11 +59,7 @@ export default function BotTortugasAcciones() {
     }
   }, [])
 
-  useEffect(() => {
-    const primera = setTimeout(cargar, 0)
-    const reloj = setInterval(cargar, 15000)
-    return () => { clearTimeout(primera); clearInterval(reloj) }
-  }, [cargar])
+  useRefresco(cargar, 15000)
 
   async function accion(hacer) {
     setOcupado(true)

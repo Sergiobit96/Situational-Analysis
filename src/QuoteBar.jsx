@@ -42,7 +42,7 @@ export default function QuoteBar() {
         .catch(() => { if (alive) setError(true) })
     }
     load()
-    const id = setInterval(load, 30_000)
+    const id = setInterval(() => { if (!document.hidden) load() }, 30_000)
     return () => { alive = false; clearInterval(id) }
   }, [])
 

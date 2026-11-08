@@ -4,6 +4,7 @@ import { peorHastaStops, nHastaStop } from './tortugas'
 import { backtestPorTramos, tramosDeConfig, operacionesDelBot, compararTortugas } from './tortugasComparar'
 import { rupturaMasCercana, acumulado } from './botCalculos'
 import { Canal, Medidor, CurvaResultados, BarraResultado } from './botVisual'
+import Regla from './ReglaPosicion'
 import './Bot.css'
 
 // Pestaña Bot Tortugas: el bot de las tortugas que opera en la demo de IG o, con `api`
@@ -208,6 +209,13 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
         </div>
       </section>
 
+      {abiertas.length > 0 && (
+        <section className="bot-bloque">
+          <h3>Posiciones abiertas</h3>
+          <TarjetasPosiciones mercados={mercados} reglas={reglas} config={config} saldo={saldo} />
+        </section>
+      )}
+
       <section className="bot-bloque">
         <div className="tor-cab-tabla">
           <h3>Mercados</h3>
@@ -376,6 +384,111 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
           guardarConfig({ sistemas, filtroS1: !!filtroS1, s2ConS1: !!s2ConS1, lados: l, riesgoPct, anadido: anadido ?? 1, maxUnidades, maxGrupo, maxSentido, reduccionDD, margenNoticias: margenNoticias ?? null }).then(() => setForm(null))
         }}>Guardar configuración</button>
       </section>
+    </div>
+  )
+}
+
+// Las posiciones abiertas en tarjetas, como en Posiciones activas: las de los dos sistemas en el
+// mismo mercado y sentido, juntas como un solo trade (cada sistema con su stop en la regla)
+function TarjetasPosiciones({ mercados, reglas, config, saldo }) {
+  const trades = mercados.flatMap(m => ['largo', 'corto'].map(lado => {
+    const sistemas = reglas.sistemas.filter(s => m.posiciones[s]?.lado === lado)
+    if (!sistemas.length) return null
+    const piezas = sistemas.map(s => ({ s, pos: m.posiciones[s], c: cuentasDe(m.posiciones[s], m.precio) }))
+    const contratos = piezas.reduce((x, p) => x + p.c.contratos, 0)
+    const medio = piezas.reduce((x, p) => x + p.c.medio * p.c.contratos, 0) / contratos
+    const suma = campo => (piezas.some(p => p.c[campo] == null) ? null : piezas.reduce((x, p) => x + p.c[campo], 0))
+    const unidades = piezas.flatMap(p => p.pos.unidades.filter(u => !u.salida).map(u => ({ ...u, sistema: p.s, stop: u.stop ?? p.pos.stop })))
+    return {
+      clave: `${m.ticker}|${lado}`, m, lado, piezas, contratos, medio, unidades,
+      abierto: suma('abierto'), alStop: suma('alStop'),
+      stops: [...new Set(piezas.map(p => p.pos.stop).filter(Number.isFinite))],
+      sinStop: piezas.filter(p => p.pos.stop == null).length,
+    }
+  }).filter(Boolean))
+  const delSaldo = e => (e != null && saldo ? `${e > 0 ? '+' : ''}${num((100 * e) / saldo, 2)}% del saldo` : null)
+
+  return (
+    <div className="pos-tarjetas">
+      {trades.map(t => {
+        const { m, lado } = t
+        const signo = dir(lado)
+        const hoy = m.plan && !m.plan.error ? m.plan : null
+        const n = hoy?.n ?? t.piezas[0].pos.n0
+        const puntos = Number.isFinite(m.precio) ? signo * (m.precio - t.medio) : null
+        // el stop que saltaría primero: el más cercano al precio
+        const primerStop = t.stops.length ? t.stops.reduce((a, b) => (b * signo > a * signo ? b : a)) : null
+        const regla = { lado, nivel: t.medio, precio: m.precio, stops: t.stops, puntos, piezas: t.unidades }
+        const varias = t.unidades.length > 1
+        return (
+          <article key={t.clave} className={`pos-tarjeta ${lado}`}>
+            <div className="pos-tarjeta-cab">
+              <div className="pos-tarjeta-nombre">
+                <strong>{m.nombre}</strong>
+                <div className="bot-tarjeta-titulo">
+                  <span className={`bot-pill ${lado}`}>{lado === 'largo' ? 'Compra' : 'Venta'} · {num(t.contratos, 2)}</span>
+                  {t.piezas.map(p => <span key={p.s} className="bot-pill" title={`Sistema ${p.s}: ${p.pos.unidades.length} de ${config.maxUnidades} unidades, desde el ${p.pos.abierta}`}>S{p.s} ×{p.pos.unidades.length}</span>)}
+                  <span className="bot-pill">{m.grupo}</span>
+                  {!m.enSesion && <span className="bot-pill">fuera de sesión</span>}
+                  {t.sinStop > 0 && <span className="bot-pill pos-sin-stop">sin stop</span>}
+                </div>
+              </div>
+              <div className="bot-tarjeta-resultado">
+                <span className={`bot-grande ${tono(t.abierto)}`}>{eur(t.abierto)}</span>
+                <small>{[puntos != null && `${conSigno(puntos, decimalesPara(t.medio))} pts${varias ? ' de media' : ''}`, puntos != null && n && `${conSigno(puntos / n, 2)} N`, delSaldo(t.abierto)].filter(Boolean).join(' · ')}</small>
+              </div>
+            </div>
+            <Regla t={regla} />
+            <div className="bot-tarjeta-datos">
+              <div className="bot-dato" title="Lo que daría si saltaran los stops, desde la entrada (sin contar el deslizamiento)">
+                <span>{t.stops.length > 1 ? 'Si saltan los stops' : 'Si salta el stop'}</span>
+                <b className={t.sinStop ? 'bot-neg' : tono(t.alStop)}>{t.sinStop ? 'sin límite' : eur(t.alStop)}</b>
+                {!t.sinStop && delSaldo(t.alStop) && <small>{delSaldo(t.alStop)}</small>}
+              </div>
+              {primerStop != null && Number.isFinite(m.precio) && (
+                <div className="bot-dato" title="Lo que tiene que moverse el precio de ahora para tocar el stop más cercano">
+                  <span>Al stop</span><b>{n ? `${num(Math.abs(m.precio - primerStop) / n, 2)} N` : `${px(Math.abs(m.precio - primerStop))} pts`}</b>
+                  <small>{num((100 * Math.abs(m.precio - primerStop)) / m.precio, 2)}% del precio</small>
+                </div>
+              )}
+              {t.piezas.map(({ s, pos }) => {
+                const sp = hoy?.sistemas?.[s] ?? m.salidaAnterior?.sistemas?.[s] ?? null
+                const salida = sp ? salidaDe(pos, sp) : pos.stop
+                const llena = pos.unidades.length >= config.maxUnidades
+                return (
+                  <div key={s} className="bot-dato" title={`Sistema ${s}: dónde sale (el canal de salida o el stop, el más cercano) y dónde añade la siguiente unidad`}>
+                    <span>S{s} sale en</span><b>{px(salida)}</b>
+                    <small>{sp && salida !== pos.stop ? `canal de ${sp.kSalida}` : 'stop'} · {llena ? 'pirámide llena' : `añade en ${px(siguienteAnadido(pos, reglas.pasoN, ocupadosPorOtro(m, s, lado)))}`}</small>
+                  </div>
+                )
+              })}
+              <div className="bot-dato"><span>Abierta</span><b>{t.piezas.map(p => p.pos.abierta).sort()[0]}</b><small>N {px(n)}</small></div>
+            </div>
+            <details className="pos-piezas">
+              <summary>{varias ? `Las ${t.unidades.length} unidades` : 'La unidad'}</summary>
+              <table>
+                <thead><tr><th>Sistema</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th><th className="tor-num">Stop</th><th className="tor-num">Resultado</th><th>Hora</th></tr></thead>
+                <tbody>
+                  {t.unidades.map(u => {
+                    const { pos } = t.piezas.find(p => p.s === u.sistema)
+                    const r = Number.isFinite(m.precio) ? u.tamano * signo * (m.precio - u.entrada) * pos.valorPunto * pos.cambioAEur : null
+                    return (
+                      <tr key={u.dealId ?? `${u.sistema}-${u.hora}`}>
+                        <td>S{u.sistema}</td>
+                        <td className="tor-num">{num(u.tamano, 2)}</td>
+                        <td className="tor-num">{px(u.entrada)}</td>
+                        <td className={`tor-num ${u.stop == null ? 'bot-neg' : ''}`}>{u.stop == null ? 'sin stop' : px(u.stop)}</td>
+                        <td className={`tor-num ${tono(r)}`}>{eur(r)}</td>
+                        <td>{u.hora ? fechaHora(u.hora) : '—'}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </details>
+          </article>
+        )
+      })}
     </div>
   )
 }

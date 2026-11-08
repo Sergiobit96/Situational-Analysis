@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { conClaveBot, guardarClaveBot } from './claveBot'
+import Regla from './ReglaPosicion'
 import './Bot.css'
 
 // Las tortugas en las acciones del S&P 500, en la cuenta paper de Alpaca
@@ -39,6 +40,8 @@ export default function BotTortugasAcciones() {
   const [pideClave, setPideClave] = useState(false)
   const [clave, setClave] = useState('')
   const [ocupado, setOcupado] = useState(false)
+  const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.tortugas-acciones.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
+  const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.tortugas-acciones.posiciones', v) } catch { /* sin almacenamiento */ } }
 
   const cargar = useCallback(async () => {
     try {
@@ -130,7 +133,82 @@ export default function BotTortugasAcciones() {
 
       <section className="bot-bloque">
         <h3>Posiciones</h3>
-        {posiciones.length === 0 ? <p className="bot-nota">Ninguna abierta.</p> : (
+        {posiciones.length > 0 && (
+          <div className="estrategias-nav pos-vistas">
+            <button className={`estrategia-chip ${vista === 'tarjetas' ? 'activo' : ''}`} onClick={() => elegirVista('tarjetas')}>Tarjetas</button>
+            <button className={`estrategia-chip ${vista === 'tabla' ? 'activo' : ''}`} onClick={() => elegirVista('tabla')}>Tabla</button>
+          </div>
+        )}
+        {posiciones.length === 0 ? <p className="bot-nota">Ninguna abierta.</p> : vista === 'tarjetas' ? (
+          <div className="pos-tarjetas">
+            {posiciones.map(p => {
+              const signo = dirDe(p.lado)
+              const r = p.precio == null ? null : (p.precio - p.entradaMedia) * signo * p.acciones
+              const alStop = p.stop == null ? null : (p.stop - p.entradaMedia) * signo * p.acciones
+              const puntos = p.precio == null ? null : (p.precio - p.entradaMedia) * signo
+              const regla = { lado: p.lado, nivel: p.entradaMedia, precio: p.precio, stops: Number.isFinite(p.stop) ? [p.stop] : [], puntos, piezas: p.unidades }
+              const pct = x => (x == null || !p.entradaMedia ? null : `${x > 0 ? '+' : ''}${num((100 * x) / (p.entradaMedia * p.acciones))}%`)
+              return (
+                <article key={p.simbolo} className={`pos-tarjeta ${p.lado}`}>
+                  <div className="pos-tarjeta-cab">
+                    <div className="pos-tarjeta-nombre">
+                      <strong>{p.simbolo}</strong>
+                      <div className="bot-tarjeta-titulo">
+                        <span className={`bot-pill ${p.lado}`}>{p.lado === 'largo' ? 'Compra' : 'Venta'} · {p.acciones}</span>
+                        <span className="bot-pill" title={`Sistema ${p.sistema}, ruptura de ${p.k} sesiones: ${p.unidades.length} de ${config.maxUnidades} unidades`}>S{p.sistema} ×{p.unidades.length}</span>
+                        {p.sector && <span className="bot-pill">{p.sector}</span>}
+                        {!p.stopId && <span className="bot-pill pos-sin-stop" title="Sin orden stop en Alpaca: se pone en la siguiente vuelta">sin orden stop</span>}
+                      </div>
+                    </div>
+                    <div className="bot-tarjeta-resultado">
+                      <span className={`bot-grande ${tono(r)}`}>{dinero(r)}</span>
+                      <small>{[puntos != null && `${puntos > 0 ? '+' : ''}${num(puntos)} $ por acción`, puntos != null && p.n0 && `${puntos > 0 ? '+' : ''}${num(puntos / p.n0)} N`, pct(r)].filter(Boolean).join(' · ')}</small>
+                    </div>
+                  </div>
+                  <Regla t={regla} />
+                  <div className="bot-tarjeta-datos">
+                    <div className="bot-dato" title="Lo que daría si saltara el stop, desde la entrada media (sin contar el deslizamiento)">
+                      <span>Si salta el stop</span><b className={alStop == null ? 'bot-neg' : tono(alStop)}>{alStop == null ? 'sin stop' : dinero(alStop)}</b>
+                      {alStop != null && <small>{pct(alStop)}</small>}
+                    </div>
+                    {p.stop != null && p.precio != null && (
+                      <div className="bot-dato" title="Lo que tiene que moverse el precio de ahora para tocar el stop">
+                        <span>Al stop</span><b>{p.n0 ? `${num(Math.abs(p.precio - p.stop) / p.n0)} N` : `${num(Math.abs(p.precio - p.stop))} $`}</b>
+                        <small>{num((100 * Math.abs(p.precio - p.stop)) / p.precio)}% del precio</small>
+                      </div>
+                    )}
+                    <div className="bot-dato" title="Sale por el canal de salida de su sistema o por el stop, el que toque antes">
+                      <span>Salida canal</span><b>{num(p.salida)}</b>
+                      <small>{p.unidades.length < config.maxUnidades ? `añade en ${num(p.siguiente)}` : 'pirámide llena'}</small>
+                    </div>
+                    <div className="bot-dato"><span>Abierta</span><b>{fechaHora(p.abierta)}</b><small>N {num(p.n0)}</small></div>
+                  </div>
+                  {p.unidades.length > 1 && (
+                    <details className="pos-piezas">
+                      <summary>Las {p.unidades.length} unidades</summary>
+                      <table>
+                        <thead><tr><th className="tor-num">Acciones</th><th className="tor-num">Entrada</th><th className="tor-num">Resultado</th><th>Hora</th></tr></thead>
+                        <tbody>
+                          {p.unidades.map((u, i) => {
+                            const ru = p.precio == null ? null : (p.precio - u.entrada) * signo * u.acciones
+                            return (
+                              <tr key={i}>
+                                <td className="tor-num">{u.acciones}</td>
+                                <td className="tor-num">{num(u.entrada)}</td>
+                                <td className={`tor-num ${tono(ru)}`}>{dinero(ru)}</td>
+                                <td>{fechaHora(u.hora)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </details>
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        ) : (
           <div className="velas-tabla-wrap tor-tabla-wrap">
             <table className="velas-tabla bot-tabla tor-tabla">
               <thead><tr><th>Acción</th><th>Sistema</th><th>Lado</th><th className="tor-num">Unidades</th><th className="tor-num">Acciones</th><th className="tor-num">Entrada</th><th className="tor-num">Ahora</th><th className="tor-num">Stop</th><th className="tor-num">Salida canal</th><th className="tor-num">Añade en</th><th className="tor-num">Resultado</th></tr></thead>

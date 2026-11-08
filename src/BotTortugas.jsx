@@ -57,6 +57,9 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
   const [ocupado, setOcupado] = useState(false)
   const [orden, setOrden] = useState('grupo')   // 'grupo' o 'cercania' (a la ruptura más cercana)
   const [soloAbiertas, setSoloAbiertas] = useState(false)   // la tabla, solo con los mercados con posición
+  // las posiciones abiertas en tarjetas o en tabla, la misma elección que en Posiciones activas
+  const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
+  const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.posiciones', v) } catch { /* sin almacenamiento */ } }
 
   const cargar = useCallback(async () => {
     try {
@@ -212,7 +215,13 @@ export default function BotTortugas({ api = '/api/bot/tortugas' }) {
       {abiertas.length > 0 && (
         <section className="bot-bloque">
           <h3>Posiciones abiertas</h3>
-          <TarjetasPosiciones mercados={mercados} reglas={reglas} config={config} saldo={saldo} />
+          <div className="estrategias-nav pos-vistas">
+            <button className={`estrategia-chip ${vista === 'tarjetas' ? 'activo' : ''}`} onClick={() => elegirVista('tarjetas')}>Tarjetas</button>
+            <button className={`estrategia-chip ${vista === 'tabla' ? 'activo' : ''}`} onClick={() => elegirVista('tabla')}>Tabla</button>
+          </div>
+          {vista === 'tarjetas'
+            ? <TarjetasPosiciones mercados={mercados} reglas={reglas} config={config} saldo={saldo} />
+            : <TablaPosiciones mercados={mercados} reglas={reglas} config={config} saldo={saldo} />}
         </section>
       )}
 
@@ -489,6 +498,60 @@ function TarjetasPosiciones({ mercados, reglas, config, saldo }) {
           </article>
         )
       })}
+    </div>
+  )
+}
+
+// Las mismas posiciones en tabla, como en Posiciones activas: una fila por sistema
+function TablaPosiciones({ mercados, reglas, config, saldo }) {
+  const filas = mercados.flatMap(m => reglas.sistemas.filter(s => m.posiciones[s]).map(s => ({ m, s, pos: m.posiciones[s] })))
+  const delSaldo = e => (e != null && saldo ? `${e > 0 ? '+' : ''}${num((100 * e) / saldo, 2)}% del saldo` : null)
+  return (
+    <div className="velas-tabla-wrap tor-tabla-wrap">
+      <table className="velas-tabla bot-tabla tor-tabla tor-todas pos-tabla">
+        <thead>
+          <tr>
+            <th>Mercado</th><th>Sistema</th><th>Lado</th><th className="tor-num">Unidades</th><th className="tor-num">Tamaño</th><th className="tor-num">Entrada</th>
+            <th className="tor-num">Stop</th><th className="tor-num">Ahora</th><th className="tor-num">Puntos</th><th className="tor-num">Resultado</th>
+            <th className="tor-num" title="Lo que daría si saltara el stop, desde la entrada (sin contar el deslizamiento)">Si salta el stop</th>
+            <th className="tor-num">Sale en</th><th className="tor-num">Añade en</th><th>Abierta</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map(({ m, s, pos }) => {
+            const c = cuentasDe(pos, m.precio)
+            const puntos = Number.isFinite(m.precio) ? dir(pos.lado) * (m.precio - c.medio) : null
+            const hoy = m.plan && !m.plan.error ? m.plan : null
+            const sp = hoy?.sistemas?.[s] ?? m.salidaAnterior?.sistemas?.[s] ?? null
+            const salida = sp ? salidaDe(pos, sp) : pos.stop
+            const n = hoy?.n ?? pos.n0
+            return (
+              <tr key={`${m.ticker}|${s}`}>
+                <td className="bot-celda-texto"><b>{m.nombre}</b><small className="tor-sub">{m.grupo}{m.enSesion ? '' : ' · fuera de sesión'}</small></td>
+                <td className="bot-celda-texto">S{s}</td>
+                <td className={`bot-celda-texto ${pos.lado === 'largo' ? 'bot-pos' : 'bot-neg'}`}>{pos.lado === 'largo' ? 'Compra' : 'Venta'}</td>
+                <td className="tor-num">{pos.unidades.filter(u => !u.salida).length} de {config.maxUnidades}</td>
+                <td className="tor-num">{num(c.contratos, 2)}</td>
+                <td className="tor-num">{px(c.medio)}</td>
+                <td className={`tor-num ${pos.stop == null ? 'bot-neg' : ''}`}>{pos.stop == null ? 'sin stop' : px(pos.stop)}</td>
+                <td className="tor-num">{px(m.precio)}</td>
+                <td className={`tor-num ${tono(puntos)}`}>
+                  {conSigno(puntos, decimalesPara(c.medio))}
+                  {puntos != null && n ? <small className="tor-sub">{conSigno(puntos / n, 2)} N</small> : null}
+                </td>
+                <td className={`tor-num ${tono(c.abierto)}`}>{eur(c.abierto)}{delSaldo(c.abierto) && <small className="tor-sub">{delSaldo(c.abierto)}</small>}</td>
+                <td className={`tor-num ${pos.stop == null ? 'bot-neg' : tono(c.alStop)}`}>
+                  {pos.stop == null ? 'sin límite' : eur(c.alStop)}
+                  {pos.stop != null && delSaldo(c.alStop) && <small className="tor-sub">{delSaldo(c.alStop)}</small>}
+                </td>
+                <td className="tor-num">{px(salida)}<small className="tor-sub">{sp && salida !== pos.stop ? `canal de ${sp.kSalida}` : 'stop'}</small></td>
+                <td className="tor-num">{pos.unidades.length >= config.maxUnidades ? 'llena' : px(siguienteAnadido(pos, reglas.pasoN, ocupadosPorOtro(m, s, pos.lado)))}</td>
+                <td className="bot-celda-texto">{pos.abierta}{pos.recuperada ? <small className="tor-sub">recuperada</small> : null}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }

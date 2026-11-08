@@ -40,8 +40,8 @@ export default function BotTortugasAcciones() {
   const [pideClave, setPideClave] = useState(false)
   const [clave, setClave] = useState('')
   const [ocupado, setOcupado] = useState(false)
-  const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.tortugas-acciones.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
-  const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.tortugas-acciones.posiciones', v) } catch { /* sin almacenamiento */ } }
+  const [vista, setVista] = useState(() => { try { return localStorage.getItem('sa.posiciones') ?? 'tarjetas' } catch { return 'tarjetas' } })
+  const elegirVista = v => { setVista(v); try { localStorage.setItem('sa.posiciones', v) } catch { /* sin almacenamiento */ } }
 
   const cargar = useCallback(async () => {
     try {

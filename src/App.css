@@ -14,9 +14,10 @@
   --green: #22c55e;
   --green-light: #86efac;
   --red: #ef4444;
+  --accent-rgb: 109, 93, 252;
   --accent: #6d5dfc;
   --accent-2: #a39bff;
-  --accent-soft: rgba(109, 93, 252, 0.14);
+  --accent-soft: rgba(var(--accent-rgb), 0.14);
   --accent-entry: #60a5fa;
   --long: #3b82f6;
   --short: #f97316;
@@ -27,7 +28,7 @@
   --radius: 8px;
   --radius-lg: 12px;
   --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.18);
-  --focus: 0 0 0 3px rgba(109, 93, 252, 0.28);
+  --focus: 0 0 0 3px rgba(var(--accent-rgb), 0.28);
   --sidebar-w: 232px;
 }
 
@@ -48,7 +49,7 @@ body {
 
 button, input, select, textarea { font-family: inherit; }
 button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box-shadow: var(--focus); }
-::selection { background: rgba(109, 93, 252, 0.35); }
+::selection { background: rgba(var(--accent-rgb), 0.35); }
 
 /* Barras de desplazamiento discretas */
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
@@ -96,7 +97,7 @@ button:focus-visible, a:focus-visible, select:focus-visible { outline: none; box
   font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.02em;
-  box-shadow: 0 4px 14px rgba(109, 93, 252, 0.35), inset 0 1px 0 rgba(255,255,255,0.2);
+  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.35), inset 0 1px 0 rgba(255,255,255,0.2);
 }
 .marca-texto { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .marca-texto strong { font-size: 0.88rem; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
@@ -3377,7 +3378,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
 }
 .estrategias-page .estrategia-chip:hover { background: var(--surface-2); color: var(--text); }
 .estrategias-page .estrategia-chip.activo {
-  box-shadow: 0 1px 10px rgba(109, 93, 252, 0.35);
+  box-shadow: 0 1px 10px rgba(var(--accent-rgb), 0.35);
 }
 
 /* Encabezado con una barra de acento en degradado */
@@ -3473,7 +3474,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   font-size: 0.95rem;
   letter-spacing: 0.01em;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 2px 14px rgba(109, 93, 252, 0.3);
+  box-shadow: 0 2px 14px rgba(var(--accent-rgb), 0.3);
 }
 .estrategias-page .btn-filtrar:hover:not(:disabled) { opacity: 1; filter: brightness(1.1); }
 
@@ -3505,7 +3506,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   bottom: 0;
   margin-top: auto;
   z-index: 2;
-  box-shadow: 0 0 0 0.9rem var(--surface), 0 2px 14px rgba(109, 93, 252, 0.3);
+  box-shadow: 0 0 0 0.9rem var(--surface), 0 2px 14px rgba(var(--accent-rgb), 0.3);
 }
 
 /* ── Filtros por bloques numerados: el 1 dice qué datos se bajan y va con el botón,
@@ -3537,7 +3538,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   height: 1.35rem;
   border-radius: 50%;
   background: var(--accent-soft);
-  border: 1px solid rgba(109, 93, 252, 0.45);
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
   color: #d4cfff;
   font-size: 0.72rem;
   font-weight: 700;
@@ -3558,7 +3559,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
   transition: background 0.12s;
 }
 .estrategias-page .estr-bloque > .filtro-group:last-child { border-bottom: none; }
-.estrategias-page .estr-bloque > .filtro-group:hover { background: rgba(109, 93, 252, 0.05); }
+.estrategias-page .estr-bloque > .filtro-group:hover { background: rgba(var(--accent-rgb), 0.05); }
 .estrategias-page .estr-bloque > .filtro-group > .filtro-label {
   grid-column: 1;
   grid-row: 1 / span 12;
@@ -3585,7 +3586,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); cur
 .estrategias-page .estr-bloque .btn-filtrar {
   position: static;
   margin-top: 0;
-  box-shadow: 0 2px 14px rgba(109, 93, 252, 0.3);
+  box-shadow: 0 2px 14px rgba(var(--accent-rgb), 0.3);
 }
 /* lo cambiado en el bloque 1 que aún no se ha analizado */
 .estr-pendiente {

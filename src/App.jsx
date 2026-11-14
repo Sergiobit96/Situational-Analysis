@@ -18,6 +18,10 @@ const Estadisticas = lazy(() => import('./Estadisticas.jsx'))
 const Bots = lazy(() => import('./Bots'))
 const ResumenBots = lazy(() => import('./ResumenBots'))
 import './App.css'
+// los estilos de las vistas de los bots van aquí también (y no solo en su trozo, que llega
+// después): así el tema, que va el último, manda sobre todos
+import './Bot.css'
+import './tema.css'
 
 // Trazos de iconos (24×24, estilo lineal) para la barra lateral
 const ICONOS = {
@@ -98,8 +102,15 @@ function tabPedida() {
   return import.meta.env.DEV ? 'gap' : 'bots'
 }
 
+const PLEGADA = 'sa.sidebar.plegada'
+const leerPlegada = () => { try { return localStorage.getItem(PLEGADA) === '1' } catch { return false } }
+const hoyTexto = () => new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+
 export default function App() {
   const [pedida] = useState(tabPedida)
+  // la barra lateral plegada deja solo los iconos (se recuerda en el navegador)
+  const [plegada, setPlegada] = useState(leerPlegada)
+  const plegar = () => setPlegada(v => { try { localStorage.setItem(PLEGADA, v ? '0' : '1') } catch { /* sin almacenamiento */ } return !v })
   const [tab, setTab] = useState(() => (BOTS_ANTES[pedida] ? 'bots' : pedida))
   // Trade que Seguimiento pide abrir en Operaciones (fecha + producto)
   const [irATrade, setIrATrade] = useState(null)
@@ -111,14 +122,19 @@ export default function App() {
   }, [tab])
 
   return (
-    <div className="shell">
+    <div className={`shell ${plegada ? 'compacta' : ''}`}>
       <aside className="sidebar">
         <div className="marca">
-          <span className="marca-logo" aria-hidden="true">SA</span>
-          <div className="marca-texto">
-            <strong>Situational Analysis</strong>
-            <span>Trading desk</span>
+          <div className="marca-izq">
+            <span className="marca-logo" aria-hidden="true">SA</span>
+            <div className="marca-texto">
+              <strong>Situational Analysis</strong>
+              <span>Trading journal</span>
+            </div>
           </div>
+          <button className="sidebar-plegar" onClick={plegar} title={plegada ? 'Desplegar el menú' : 'Plegar el menú'} aria-label={plegada ? 'Desplegar el menú' : 'Plegar el menú'}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+          </button>
         </div>
         <nav className="nav" aria-label="Secciones">
           {GRUPOS.map(g => (
@@ -129,6 +145,7 @@ export default function App() {
                   key={t.id}
                   className={`nav-item ${tab === t.id ? 'activo' : ''}`}
                   aria-current={tab === t.id ? 'page' : undefined}
+                  title={plegada ? t.label : undefined}
                   onClick={() => setTab(t.id)}
                 >
                   <Icono id={t.id} />
@@ -139,8 +156,8 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-pie">
-          <span className={`entorno ${import.meta.env.DEV ? 'dev' : 'prod'}`}>
-            {import.meta.env.DEV ? 'Local' : 'Producción'}
+          <span className={`entorno ${import.meta.env.DEV ? 'dev' : 'prod'}`} title={import.meta.env.DEV ? 'Local' : 'Producción'}>
+            <span className="entorno-texto">{import.meta.env.DEV ? 'Local' : 'Producción'}</span>
           </span>
         </div>
       </aside>
@@ -153,6 +170,7 @@ export default function App() {
             <h1>{actual?.label}</h1>
           </div>
           <QuoteBar />
+          <span className="topbar-fecha">{hoyTexto()}</span>
         </header>
 
         <main className={`contenido ${tab === 'graf' ? 'contenido-ancho' : ''}`}>

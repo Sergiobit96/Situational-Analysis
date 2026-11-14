@@ -38,7 +38,7 @@ function ibFalso() {
     x.estadoIB = 'Filled'
     x.medio = precio
     x.rellena = x.o.totalQuantity
-    ejecuciones.push({ orderRef: x.o.orderRef, precio, cantidad: x.o.totalQuantity, hora: '20261103 15:00:00' })
+    ejecuciones.push({ orderRef: x.o.orderRef, precio, cantidad: x.o.totalQuantity, hora: '20261103 15:00:00', conId: x.c?.conId })
   }
   const f = {
     ordenes, mandadas: [], historicos: [], limites: [],
@@ -309,6 +309,35 @@ test('IB: en los que cotizan en centavos (priceMagnifier 100) la regla de mercad
     const r = await tib.operar.abrir({ ticker: 'COTTON', epic: 'CTZ6', lado: 'corto', tamano: 2, stop: 79.623, referencia: 'TIB1-COTTON-x' })
     assert.equal(r.stop, 79.62)
   } finally { delete DETALLES.CT }
+})
+
+test('IB: en los que cotizan en centavos, un relleno o una ejecución que IB da en dólares se pasa a centavos', async () => {
+  const ib = ibFalso()
+  DETALLES.MZC = [{
+    contract: { conId: 61, symbol: 'MZC', secType: 'FUT', exchange: 'CBOT', currency: 'USD', localSymbol: 'MZCH7', lastTradeDateOrContractMonth: '20270312', multiplier: '500' },
+    contractMonth: '202703', minTick: 0.5, priceMagnifier: 100, marketRuleIds: '', validExchanges: 'CBOT',
+  }]
+  const tib = crearTortugasIB({ ib, ahora: () => ny(11, 6, 10), log: () => {}, mercados: { CORN: MERCADOS_IB.CORN } })
+  try {
+    await tib.arrancar()
+    ib.precio('MZCH7', 450, 450.5)
+    // IB rellena en dólares: el medio de la orden y la ejecución, 100 veces más pequeños
+    const enDolares = async () => { for (const j of await ib.ejecuciones()) if (!j.enDolares) { j.precio /= 100; j.enDolares = true } }
+    const mandar = ib.mandarPatas
+    ib.mandarPatas = async patas => {
+      const ids = await mandar(patas)
+      for (const id of ids) { const o = ib.ordenes.get(id); if (o.estadoIB === 'Filled') o.medio /= 100 }
+      await enDolares()
+      return ids
+    }
+    const r = await tib.operar.abrir({ ticker: 'CORN', epic: 'MZCH7', lado: 'corto', tamano: 46, stop: 465.5, referencia: 'TIB2-CORN-a' })
+    assert.equal(r.nivel, 450)
+    const [p] = await tib.operar.posiciones()
+    assert.ok(Math.abs(p.nivel - 450) < 1e-9)
+    ib.saltar('TIB2-CORN-a')
+    await enDolares()
+    assert.deepEqual(await tib.operar.cierreDe({ dealId: 'TIB2-CORN-a', ref: 465.5 }), { nivel: 465.5 })
+  } finally { delete DETALLES.MZC }
 })
 
 test('IB: una entrada a mercado que no se rellena se cancela; a medias se queda lo rellenado; el stop de una madre sin rellenar no es una posición', async () => {

@@ -149,6 +149,8 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       // lo que vale moverse 1 en el precio, por contrato: el multiplicador entre lo que IB aumenta
       // el precio (los granos y las blandas cotizan en centavos)
       valorPunto: k.secType === 'FUT' ? Number(k.multiplier) / (d.priceMagnifier || 1) : 1,
+      // lo que IB aumenta el precio (100 en granos y blandas, que cotizan en centavos)
+      aumento: d.priceMagnifier > 1 ? d.priceMagnifier : 1,
     }
     c.q = ib.cotizar(epic, contrato, q => alPrecio(c, q))
     // los escalones de precio del contrato en su bolsa (en los ETF de Xetra dependen del precio):
@@ -267,6 +269,20 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     return inverso ? 1 / (inverso * eurusd) : null
   }
 
+  // Un precio de relleno de IB en las unidades en que cotiza el contrato. En los que cotizan en
+  // centavos (granos y blandas, priceMagnifier 100) IB da a veces los rellenos y las ejecuciones en
+  // dólares: el maíz del 6-nov-2026 quedó con una unidad a 4,5 y otra a 480, y su stop parecía estar
+  // a 222 centavos. Se toma el que esté más cerca de `ref` (el stop, o el precio de ahora): entre
+  // uno y otro va un factor 100, y un stop nunca está tan lejos
+  const contratoPorConId = conId => [...contratos.values()].find(k => k.contrato.conId === conId) ?? null
+  function enSusUnidades(c, p, ref = null) {
+    if (!(p > 0) || !(c?.aumento > 1)) return p
+    const r = ref > 0 ? ref : precioDe(c.q ?? {}) ?? velas.get(c.epic)?.at(-1)?.close
+    if (!(r > 0)) return p
+    const aumentado = Math.round(p * c.aumento * 1e6) / 1e6
+    return Math.abs(Math.log(aumentado / r)) < Math.abs(Math.log(p / r)) ? aumentado : p
+  }
+
   // ── Órdenes ──
   // un precio en el escalón del contrato (el de su regla de mercado a ese precio, o su tick)
   const alTick = (precio, c, escalones = null) => {
@@ -356,7 +372,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
         await new Promise(r => setTimeout(r, 100))
         o = ib.orden(id)
       }
-      if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: o.rellena || tamano, stop: nivel }
+      if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: enSusUnidades(c, o.medio, nivel), tamano: o.rellena || tamano, stop: nivel }
       if (['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) return { aceptada: false, motivo: o.motivo ?? 'IB la ha cancelado' }
       // Sin rellenar en ese rato (en la cuenta paper, un ETF de Xetra puede pasarse horas así): se
       // cancela la madre, que se lleva su stop. Una entrada a mercado que se queda colgada puede
@@ -365,7 +381,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
         await ib.cancelar(id).catch(() => {})
         o = await ib.esperarOrden(id, ESPERA_STOP_MS)
       }
-      if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: o.rellena || tamano, stop: nivel }
+      if (o?.estadoIB === 'Filled') return { aceptada: true, dealId: referencia, nivel: enSusUnidades(c, o.medio, nivel), tamano: o.rellena || tamano, stop: nivel }
       const rellena = Number(o?.rellena) || 0
       if (['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) {
         if (!rellena) return { aceptada: false, motivo: `IB no la ha rellenado en ${esperaOrdenMs / 1000} s y se ha cancelado` }
@@ -373,7 +389,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
         const s = ib.orden(idStop)
         if (s?.o && !['Cancelled', 'ApiCancelled', 'Inactive', 'Filled'].includes(s.estadoIB)) {
           await ib.modificar(idStop, c.contrato, { ...s.o, totalQuantity: rellena }).catch(() => {})
-          return { aceptada: true, dealId: referencia, nivel: o.medio, tamano: rellena, stop: nivel }
+          return { aceptada: true, dealId: referencia, nivel: enSusUnidades(c, o.medio, nivel), tamano: rellena, stop: nivel }
         }
       }
       // sin respuesta: el bot mira después en las órdenes abiertas si entró (por su referencia)
@@ -395,11 +411,11 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       const lmt = c ? await limiteDe(c, x.o.action === 'BUY') : null
       const [id] = await ib.mandarPatas([{ contrato, orden: { ...ordenYa(x.o.action, lmt), totalQuantity: total, tif: 'DAY', orderRef: `${dealId}-cierre`, transmit: true } }])
       let o = await ib.esperarOrden(id, ESPERA_ORDEN_MS)
-      if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: o.medio }
+      if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: enSusUnidades(c, o.medio, x.o.auxPrice) }
       // antes de volver a poner el stop, la orden de cierre tiene que estar cancelada de verdad
       await ib.cancelar(id).catch(() => {})
       o = await ib.esperarOrden(id, ESPERA_STOP_MS)
-      if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: o.medio }
+      if (o?.estadoIB === 'Filled') return { aceptada: true, nivel: enSusUnidades(c, o.medio, x.o.auxPrice) }
       const quedan = total - (Number(o?.rellena) || 0)
       const r = await ponerStop(contrato, { ...ordenStop(x.o, x.o.auxPrice, { conPadre: false }), totalQuantity: quedan })
       if (!r.aceptada) throw new Error(`IB no la ha cerrado y no confirma el stop repuesto en ${x.o.auxPrice} (${r.motivo}): puede estar SIN STOP, revísala`)
@@ -461,6 +477,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
         const rellena = madre ? Number(ib.orden(madre.id)?.rellena) || 0 : null
         if (rellena === 0) return []
         const entrada = mediaDe(ejecuciones.filter(j => j.orderRef === referencia))
+        if (entrada) entrada.precio = enSusUnidades(contratoPorConId(x.c.conId), entrada.precio, x.o.auxPrice)
         return {
           dealId: referencia, referencia, ticker: tickerDe(x.c), epic: epicDe(x.c),
           lado: x.o.action === 'SELL' ? 'largo' : 'corto', tamano: rellena ?? Number(x.o.totalQuantity), stop: x.o.auxPrice,
@@ -469,11 +486,12 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
       })
     },
 
-    // El precio al que salió una unidad que ya no está: el de su stop o el de su cierre
-    async cierreDe({ dealId }) {
-      const ejecuciones = await ib.ejecuciones()
-      const salida = mediaDe(ejecuciones.filter(j => j.orderRef === `${dealId}-stop` || j.orderRef === `${dealId}-cierre`))
-      return salida ? { nivel: salida.precio } : null
+    // El precio al que salió una unidad que ya no está: el de su stop o el de su cierre (`ref`, su
+    // stop, para saber si IB lo da en dólares en un contrato que cotiza en centavos)
+    async cierreDe({ dealId, ref = null }) {
+      const ejecuciones = (await ib.ejecuciones()).filter(j => j.orderRef === `${dealId}-stop` || j.orderRef === `${dealId}-cierre`)
+      const salida = mediaDe(ejecuciones)
+      return salida ? { nivel: enSusUnidades(contratoPorConId(ejecuciones[0].conId), salida.precio, ref) } : null
     },
   }
 

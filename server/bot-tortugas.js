@@ -256,6 +256,42 @@ export function nivelesSistema(nv, sistema, filtroS1 = false) {
   }
 }
 
+// Hasta el 14-nov-2026, en los futuros de IB que cotizan en centavos (granos y blandas), algunas
+// entradas y salidas se guardaron en dólares (IB da así algunos rellenos). Un precio 30 veces más
+// pequeño que el stop de su unidad, o que el resto de su operación, es de esos: se pasa a centavos,
+// y las operaciones cerradas que cambian rehacen su resultado
+const aCentavos = (x, ref) => (x > 0 && ref > 0 && ref / x > 30 ? Math.round(x * 100 * 1e6) / 1e6 : x)
+export function corregirCentavos(datos) {
+  let cambios = 0
+  const corregir = (u, campo, ref) => { const v = aCentavos(u[campo], ref); if (v !== u[campo]) { u[campo] = v; cambios++ } }
+  for (const pos of Object.values(datos.posiciones ?? {})) {
+    for (const u of pos.unidades ?? []) {
+      const ref = u.stop ?? pos.stop
+      corregir(u, 'entrada', ref)
+      if (u.salida) corregir(u.salida, 'nivel', ref)
+    }
+  }
+  for (const op of datos.operaciones ?? []) {
+    const us = op.detalle ?? []
+    const ref = Math.max(...us.flatMap(u => [u.entrada, u.salida?.nivel]).filter(x => x > 0), 0)
+    const antes = cambios
+    for (const u of us) {
+      corregir(u, 'entrada', ref)
+      if (u.salida) corregir(u.salida, 'nivel', ref)
+    }
+    if (cambios === antes || !us.length || !us.every(u => u.salida)) continue
+    const d = op.lado === 'corto' ? -1 : 1
+    const volumen = us.reduce((s, u) => s + u.tamano, 0)
+    const base = us[0].tamano
+    op.entradaMedia = us.reduce((s, u) => s + u.tamano * u.entrada, 0) / volumen
+    op.salida = us.reduce((s, u) => s + u.tamano * u.salida.nivel, 0) / volumen
+    op.resultadoPts = us.reduce((s, u) => s + (u.tamano / base) * d * (u.salida.nivel - u.entrada), 0)
+    op.resultadoN = op.n0 > 0 ? op.resultadoPts / op.n0 : null
+    if (op.valorPunto != null && op.cambioAEur != null) op.resultadoEur = us.reduce((s, u) => s + u.tamano * d * (u.salida.nivel - u.entrada), 0) * op.valorPunto * op.cambioAEur
+  }
+  return cambios
+}
+
 // ── La decisión (pura) ──
 // Para un índice y un sistema. `ses` es la sesión de hoy del índice (null en fin de semana) y
 // `proxima`, la siguiente que abre; `velas`, las últimas de 1 min en directo; `cfg.encendido`
@@ -391,6 +427,7 @@ export function crearBotTortugas({
     for (const [t, p] of Object.entries(datos.planes)) {
       if (p?.sistemas && !p.error && !datos.salidas[t]) datos.salidas[t] = { fecha: p.fecha, sistemas: Object.fromEntries(SISTEMAS.map(s => [s, { kSalida: p.sistemas[s].kSalida, salida: p.sistemas[s].salida }])) }
     }
+    corregirCentavos(datos)
   } catch { /* primera vez */ }
 
   let guardado = JSON.stringify(datos, null, 2)
@@ -950,7 +987,7 @@ export function crearBotTortugas({
     // la actividad se busca desde poco antes de la última vez que se vio abierta
     for (const u of idas) {
       const desde = Math.max(u.hora, (pos.vista ?? u.hora) - 600)
-      const c = await operar.cierreDe({ ticker, dealId: u.dealId, lado: pos.lado, desdeMs: desde * 1000 })
+      const c = await operar.cierreDe({ ticker, dealId: u.dealId, lado: pos.lado, desdeMs: desde * 1000, ref: u.stop ?? pos.stop })
       if (c) u.salida = { nivel: c.nivel, hora: ahora() }
     }
     let sinPrecio = idas.filter(u => !u.salida)
@@ -996,7 +1033,7 @@ export function crearBotTortugas({
     const corregidas = new Set()
     for (const [op, u] of pendientes) {
       u.busquedas = (u.busquedas ?? 0) + 1
-      const c = await operar.cierreDe({ ticker: op.ticker, dealId: u.dealId, lado: op.lado, desdeMs: (op.cerradaHora - 3600) * 1000 })
+      const c = await operar.cierreDe({ ticker: op.ticker, dealId: u.dealId, lado: op.lado, desdeMs: (op.cerradaHora - 3600) * 1000, ref: u.salida.nivel })
       if (c) { u.salida = { nivel: c.nivel, hora: u.salida.hora }; corregidas.add(op) }
     }
     for (const op of corregidas) {

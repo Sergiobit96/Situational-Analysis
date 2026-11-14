@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, finDeSemanaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide, nHastaStop as nHastaStopBot } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, finDeSemanaTortugas, corregirCentavos, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide, nHastaStop as nHastaStopBot } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -458,6 +458,25 @@ test('en fin de semana no cierra ni da por cerrada una posición que el bróker 
     assert.equal(posicion(bot, '^GDAXI'), null)
     assert.equal(bot.estado().operaciones[0].salida, 24_550)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('al cargar, las entradas y salidas guardadas en dólares en un contrato en centavos se pasan a centavos', () => {
+  const datos = {
+    posiciones: { 'CORN|2': { ticker: 'CORN', sistema: 2, lado: 'corto', stop: 465.5, unidades: [
+      { dealId: 'a', tamano: 46, entrada: 482.4, stop: 465.5 },
+      { dealId: 'b', tamano: 46, entrada: 4.5025, stop: 465.5 },
+    ] } },
+    operaciones: [{ ticker: 'SOYBEAN', lado: 'largo', n0: 20, valorPunto: 5, cambioAEur: 0.9, entradaMedia: 500, salida: 5.2, resultadoEur: -1,
+      detalle: [{ tamano: 10, entrada: 1000, salida: { nivel: 10.4 } }] }],
+  }
+  assert.equal(corregirCentavos(datos), 2)
+  assert.deepEqual(datos.posiciones['CORN|2'].unidades.map(u => u.entrada), [482.4, 450.25])
+  const op = datos.operaciones[0]
+  assert.equal(op.detalle[0].salida.nivel, 1040)
+  assert.equal(op.salida, 1040)
+  assert.ok(Math.abs(op.resultadoEur - 10 * 40 * 5 * 0.9) < 1e-9)
+  // lo que ya está bien no se toca
+  assert.equal(corregirCentavos(datos), 0)
 })
 
 test('el fin de semana de cada mercado: sábado y domingo en su zona, salvo la sesión que abre el domingo', () => {

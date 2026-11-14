@@ -283,6 +283,8 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
       simbolo: pos.simbolo, sistema: pos.sistema, lado: pos.lado, sector: pos.sector, abierta: pos.abierta, cerrada: hora(),
       unidades: pos.unidades.length, acciones, entrada: entradaMedia(pos), salida: precio, n: pos.n0, motivo,
       resultado, resultadoN: resultado == null ? null : resultado / (pos.n0 * pos.unidad),
+      // cada unidad, con su entrada y su hora (todas salen juntas, al mismo precio)
+      detalle: pos.unidades.map(u => ({ acciones: u.acciones, entrada: u.entrada, hora: u.hora })),
     })
     datos.operaciones.splice(MAX_OPERACIONES)
     delete datos.posiciones[pos.simbolo]

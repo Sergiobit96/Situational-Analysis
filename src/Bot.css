@@ -376,3 +376,7 @@
 .historial-campo select, .historial-campo input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.45rem; min-width: 9rem; }
 .historial-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .historial-limpiar { align-self: flex-end; }
+.historial-vista { margin-bottom: 0.6rem; }
+.historial-fila { cursor: pointer; }
+.historial-fila:hover td { background: rgba(127,127,127,0.08); }
+.historial-unidades > td { padding: 0.4rem 0 0.8rem 1.2rem; background: transparent; }

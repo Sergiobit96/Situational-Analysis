@@ -102,13 +102,22 @@ export function juntarAbiertas(posiciones, saldo) {
   return [...grupos.values()].map(({ resultado, sinPrecio, alStop, sinStop, ...g }) => ({ ...g, pct: sinPrecio ? null : pct(resultado), alStopPct: sinStop ? null : pct(alStop) }))
 }
 
-// Lo cerrado del SRS y de los que usan su motor (Rule of 4, First bar negative): una sesión por fila
+// Lo cerrado del SRS y de los que usan su motor (Rule of 4, First bar negative): una sesión por
+// fila, con cada posición (`unidades`) de todas sus piernas: su entrada y su salida, con hora,
+// su tamaño y lo que dio en € (si la sesión guardó el valor del punto)
+const sentido = lado => (lado === 'corto' ? -1 : 1)
 export function cerradasMotorSrs(estado) {
   const nombres = Object.fromEntries((estado.sesiones ?? []).map(s => [s.ticker, s.nombre]))
   return [...(estado.hoy ?? []), ...(estado.historial ?? [])].filter(d => d.resultadoEur != null && d.salida?.hora != null).map(d => {
     const piernas = [...(d.anteriores ?? []), ...(d.operacion ? [d.operacion] : [])]
     const lados = [...new Set(piernas.map(p => p.lado))]
-    return { hora: d.salida.hora, instrumento: nombres[d.ticker] ?? d.ticker, lado: lados.length === 1 ? lados[0] : null, nota: lados.length > 1 ? 'con flip' : null, resultado: d.resultadoEur }
+    const eurPorPunto = d.plan?.valorPunto && d.plan?.cambioAEur ? d.plan.valorPunto * d.plan.cambioAEur : null
+    const unidades = piernas.flatMap(p => (p.unidades ?? []).filter(u => u.salida).map(u => ({
+      lado: p.lado, tamano: u.tamano, entrada: u.entrada, horaEntrada: u.hora ?? null, salida: u.salida.nivel, horaSalida: u.salida.hora ?? null,
+      resultado: eurPorPunto == null ? null : u.tamano * sentido(p.lado) * (u.salida.nivel - u.entrada) * eurPorPunto,
+      ...(u.salida.aproximado ? { aproximado: true } : {}),
+    })))
+    return { hora: d.salida.hora, instrumento: nombres[d.ticker] ?? d.ticker, lado: lados.length === 1 ? lados[0] : null, nota: lados.length > 1 ? 'con flip' : null, resultado: d.resultadoEur, unidades }
   })
 }
 
@@ -131,11 +140,30 @@ export function infoTortugas(estado) {
 
 export function cerradasTortugas(estado) {
   const nombres = Object.fromEntries((estado.mercados ?? []).map(m => [m.ticker, m.nombre]))
-  return (estado.operaciones ?? []).map(o => ({ hora: o.cerradaHora, instrumento: nombres[o.ticker] ?? o.ticker, lado: o.lado, nota: `S${o.sistema}`, resultado: o.resultadoEur }))
+  return (estado.operaciones ?? []).map(o => ({
+    hora: o.cerradaHora, instrumento: nombres[o.ticker] ?? o.ticker, lado: o.lado, nota: `S${o.sistema}`, resultado: o.resultadoEur,
+    unidades: (o.detalle ?? []).filter(u => u.salida).map(u => ({
+      lado: o.lado, tamano: u.tamano, entrada: u.entrada, horaEntrada: u.hora ?? null, salida: u.salida.nivel, horaSalida: u.salida.hora ?? null,
+      resultado: o.valorPunto != null && o.cambioAEur != null ? u.tamano * sentido(o.lado) * (u.salida.nivel - u.entrada) * o.valorPunto * o.cambioAEur : null,
+      ...(u.salida.aproximado ? { aproximado: true } : {}),
+    })),
+  }))
 }
 
+// Las de Alpaca guardan cada unidad (`detalle`) desde el 14-nov-2026; las de antes, solo la
+// entrada media: van como una sola fila con todas las acciones (`media`)
+const segundos = iso => (iso ? Math.floor(Date.parse(iso) / 1000) || null : null)
 export function cerradasTortugasAcciones(estado) {
-  return (estado.operaciones ?? []).map(o => ({ hora: o.cerrada ? Math.floor(Date.parse(o.cerrada) / 1000) : null, instrumento: o.simbolo, lado: o.lado, nota: `S${o.sistema}`, resultado: o.resultado }))
+  return (estado.operaciones ?? []).map(o => {
+    const deUnidad = (acciones, entrada, horaEntrada) => ({
+      lado: o.lado, tamano: acciones, entrada, horaEntrada: segundos(horaEntrada), salida: o.salida ?? null, horaSalida: segundos(o.cerrada),
+      resultado: o.salida == null || entrada == null || acciones == null ? null : acciones * sentido(o.lado) * (o.salida - entrada),
+    })
+    const unidades = o.detalle
+      ? o.detalle.map(u => deUnidad(u.acciones, u.entrada, u.hora))
+      : o.acciones != null ? [{ ...deUnidad(o.acciones, o.entrada ?? null, o.abierta), media: true }] : []
+    return { hora: segundos(o.cerrada), instrumento: o.simbolo, lado: o.lado, nota: `S${o.sistema}`, resultado: o.resultado, unidades }
+  })
 }
 
 // `bots`: [{ nombre, cuenta: 'ig' | 'alpaca' | 'ib', activo(), cerradas(), info?() }]; `posicionesIg`: las de

@@ -18,7 +18,11 @@ const FILTROS_VACIOS = { broker: '', bot: '', instrumento: '', desde: '', hasta:
 const num = (n, dec = 2) => n.toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 const dinero = (n, moneda) => (n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${num(Math.abs(n))} ${SIMBOLO[moneda] ?? moneda ?? ''}`.trim())
 const tono = n => (n == null ? '' : n > 0 ? 'bot-pos' : n < 0 ? 'bot-neg' : '')
-const fechaHora = t => new Date(t * 1000).toLocaleString('es-ES', { timeZone: ZONA, day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+// los decimales según el tamaño del precio: las divisas, con 5
+const decimales = x => { const a = Math.abs(x ?? 0); return a >= 1000 ? 1 : a >= 100 ? 2 : a >= 10 ? 3 : 5 }
+const precio = n => (n == null ? '—' : num(n, decimales(n)))
+const tamano = n => (n == null ? '—' : n.toLocaleString('es-ES', { maximumFractionDigits: 4 }))
+const fechaHora = t => (t == null ? '—' : new Date(t * 1000).toLocaleString('es-ES', { timeZone: ZONA, day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' }))
 // el día de Madrid en AAAA-MM-DD, el formato de los <input type="date">
 const diaDe = t => new Date(t * 1000).toLocaleDateString('sv-SE', { timeZone: ZONA })
 const haceDias = n => diaDe(Date.now() / 1000 - n * 86400)
@@ -58,6 +62,40 @@ function Desplegable({ nombre, valor, opciones, cambiar }) {
   )
 }
 
+// Las unidades de una o varias operaciones: dónde entró y salió cada una, con hora, su tamaño
+// y lo que dio. `conOperacion`: con las columnas de la operación (bróker, bot, instrumento)
+function TablaUnidades({ filas, conOperacion = false }) {
+  if (!filas.length) return <p className="bot-nota">No hay detalle de unidades guardado para esto.</p>
+  return (
+    <div className="velas-tabla-wrap">
+      <table className="velas-tabla bot-tabla">
+        <thead>
+          <tr>
+            {conOperacion ? <><th>Bróker</th><th>Bot</th><th>Instrumento</th></> : <th>#</th>}
+            <th>Sentido</th><th>Hora entrada</th><th>Precio entrada</th><th>Hora salida</th><th>Precio salida</th><th>Size</th><th>PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map(({ u, o, i }) => (
+            <tr key={`${o.bot}-${o.hora}-${o.instrumento}-${i}`}>
+              {conOperacion
+                ? <><td className="bot-celda-texto">{o.broker}</td><td className="bot-celda-texto">{o.bot}{o.nota ? <span className="bot-nota"> · {o.nota}</span> : null}</td><td className="bot-celda-texto">{o.instrumento}</td></>
+                : <td>{i + 1}</td>}
+              <td className="bot-celda-texto">{LADO[u.lado] ?? '—'}</td>
+              <td>{fechaHora(u.horaEntrada)}</td>
+              <td>{precio(u.entrada)}{u.media ? <span className="bot-nota" title="Operación de antes de guardar cada unidad: es la entrada media de todas"> media</span> : null}</td>
+              <td>{fechaHora(u.horaSalida)}</td>
+              <td>{precio(u.salida)}{u.aproximado ? <span className="bot-nota" title="Precio aproximado: el del stop, sin confirmar con el bróker"> ≈</span> : null}</td>
+              <td>{tamano(u.tamano)}</td>
+              <td className={tono(u.resultado)}>{dinero(u.resultado, o.moneda)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function HistorialBots() {
   const [operaciones, setOperaciones] = useState(null)
   const [error, setError] = useState(null)
@@ -65,6 +103,10 @@ export default function HistorialBots() {
   const [clave, setClave] = useState('')
   const [filtros, setFiltros] = useState(leerFiltros)
   const [mostradas, setMostradas] = useState(POR_PAGINA)
+  // «operaciones» (una fila por operación, que se despliega con sus unidades) o «unidades» (todas)
+  const [vista, setVista] = useState(() => { try { return localStorage.getItem(`${GUARDADO}.vista`) ?? 'operaciones' } catch { return 'operaciones' } })
+  const elegirVista = v => { setVista(v); setMostradas(POR_PAGINA); try { localStorage.setItem(`${GUARDADO}.vista`, v) } catch { /* sin almacenamiento */ } }
+  const [abierta, setAbierta] = useState(null)   // la clave de la operación desplegada
 
   const cargar = useCallback(async () => {
     try {
@@ -106,6 +148,9 @@ export default function HistorialBots() {
     return m.set(o.moneda, g)
   }, new Map()).values()]
   const ganadoras = filtradas.filter(o => o.resultado > 0).length
+  const claveDe = o => `${o.bot}|${o.hora}|${o.instrumento}`
+  const unidades = filtradas.flatMap(o => (o.unidades ?? []).map((u, i) => ({ u, o, i })))
+  const total = vista === 'unidades' ? unidades.length : filtradas.length
   const hayFiltros = Object.values(filtros).some(Boolean)
 
   if (pideClave) {
@@ -171,6 +216,7 @@ export default function HistorialBots() {
         <div className="bot-tarjeta-datos">
           <div className="bot-dato"><span>Operaciones</span><b className="bot-tile-valor">{filtradas.length}</b>
             {filtradas.length > 0 && <small>{Math.round(100 * ganadoras / filtradas.length)} % ganadoras</small>}</div>
+          <div className="bot-dato"><span>Unidades</span><b className="bot-tile-valor">{unidades.length}</b></div>
           {porMoneda.map(g => (
             <div className="bot-dato" key={g.moneda ?? '?'}>
               <span>Resultado{porMoneda.length > 1 ? ` en ${SIMBOLO[g.moneda] ?? g.moneda}` : ''}</span>
@@ -182,33 +228,50 @@ export default function HistorialBots() {
       </section>
 
       <section className="bot-bloque">
+        <div className="historial-chips historial-vista">
+          <button className={`estrategia-chip ${vista === 'operaciones' ? 'activo' : ''}`} onClick={() => elegirVista('operaciones')}>Operaciones</button>
+          <button className={`estrategia-chip ${vista === 'unidades' ? 'activo' : ''}`} onClick={() => elegirVista('unidades')}>Todas las unidades</button>
+        </div>
         {filtradas.length === 0 ? (
           <p className="bot-nota">{lista.length ? 'Ninguna operación con estos filtros.' : 'Los bots aún no han cerrado ninguna operación.'}</p>
+        ) : vista === 'unidades' ? (
+          <TablaUnidades filas={unidades.slice(0, mostradas)} conOperacion />
         ) : (
           <>
+            <p className="bot-nota">Pulsa una operación para ver sus unidades.</p>
             <div className="velas-tabla-wrap">
               <table className="velas-tabla bot-tabla">
-                <thead><tr><th>Cerrada</th><th>Bróker</th><th>Bot</th><th>Instrumento</th><th>Sentido</th><th>Resultado</th></tr></thead>
+                <thead><tr><th>Cerrada</th><th>Bróker</th><th>Bot</th><th>Instrumento</th><th>Sentido</th><th>Unidades</th><th>Resultado</th></tr></thead>
                 <tbody>
-                  {filtradas.slice(0, mostradas).map((o, i) => (
-                    <tr key={`${o.bot}-${o.hora}-${o.instrumento}-${i}`}>
-                      <td>{fechaHora(o.hora)}</td>
-                      <td className="bot-celda-texto">{o.broker}</td>
-                      <td className="bot-celda-texto">{o.bot}{o.nota ? <span className="bot-nota"> · {o.nota}</span> : null}</td>
-                      <td className="bot-celda-texto">{o.instrumento}</td>
-                      <td className="bot-celda-texto">{LADO[o.lado] ?? '—'}</td>
-                      <td className={tono(o.resultado)}>{dinero(o.resultado, o.moneda)}</td>
-                    </tr>
-                  ))}
+                  {filtradas.slice(0, mostradas).map(o => {
+                    const k = claveDe(o)
+                    const desplegada = abierta === k
+                    return [
+                      <tr key={k} className="historial-fila" onClick={() => setAbierta(desplegada ? null : k)} aria-expanded={desplegada}>
+                        <td>{desplegada ? '▾' : '▸'} {fechaHora(o.hora)}</td>
+                        <td className="bot-celda-texto">{o.broker}</td>
+                        <td className="bot-celda-texto">{o.bot}{o.nota ? <span className="bot-nota"> · {o.nota}</span> : null}</td>
+                        <td className="bot-celda-texto">{o.instrumento}</td>
+                        <td className="bot-celda-texto">{LADO[o.lado] ?? '—'}</td>
+                        <td>{o.unidades?.length || '—'}</td>
+                        <td className={tono(o.resultado)}>{dinero(o.resultado, o.moneda)}</td>
+                      </tr>,
+                      desplegada && (
+                        <tr key={`${k}-unidades`} className="historial-unidades">
+                          <td colSpan={7}><TablaUnidades filas={(o.unidades ?? []).map((u, i) => ({ u, o, i }))} /></td>
+                        </tr>
+                      ),
+                    ]
+                  })}
                 </tbody>
               </table>
             </div>
-            {filtradas.length > mostradas && (
-              <button className="diario-boton resumen-mas" onClick={() => setMostradas(n => n + POR_PAGINA)}>
-                Ver {Math.min(POR_PAGINA, filtradas.length - mostradas)} más (quedan {filtradas.length - mostradas})
-              </button>
-            )}
           </>
+        )}
+        {total > mostradas && (
+          <button className="diario-boton resumen-mas" onClick={() => setMostradas(n => n + POR_PAGINA)}>
+            Ver {Math.min(POR_PAGINA, total - mostradas)} más (quedan {total - mostradas})
+          </button>
         )}
       </section>
     </div>

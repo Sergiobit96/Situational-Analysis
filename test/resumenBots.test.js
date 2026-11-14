@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resumirCerradas, juntarAbiertas, resumenPublico, cerradasMotorSrs, crearCacheResumen, infoMotorSrs, historialBots } from '../server/resumen-bots.js'
+import { resumirCerradas, juntarAbiertas, resumenPublico, cerradasMotorSrs, crearCacheResumen, infoMotorSrs, historialBots, cerradasTortugas, cerradasTortugasAcciones } from '../server/resumen-bots.js'
 
 const T = Date.parse('2026-10-31T12:00:00Z') / 1000
 
@@ -39,7 +39,7 @@ test('una sesión con flip sale sin sentido y con la nota', () => {
     hoy: [],
     historial: [{ ticker: '^GDAXI', salida: { hora: T }, resultadoEur: -30, anteriores: [{ lado: 'largo' }], operacion: { lado: 'corto' } }],
   })
-  assert.deepEqual(c, { hora: T, instrumento: 'DAX', lado: null, nota: 'con flip', resultado: -30 })
+  assert.deepEqual(c, { hora: T, instrumento: 'DAX', lado: null, nota: 'con flip', resultado: -30, unidades: [] })
 })
 
 test('el resumen público: estado de cada bot, sin lo que no es de ningún bot', () => {
@@ -109,4 +109,38 @@ test('el historial junta lo cerrado de todos los bots, con su bróker y su moned
     { bot: 'Tortugas IB', broker: 'IB', moneda: 'EUR', hora: T - 10, instrumento: 'Oro', lado: 'corto', nota: 'S1', resultado: -20 },
     { bot: 'SRS', broker: 'IG', moneda: 'EUR', hora: T - 100, instrumento: 'DAX', lado: 'largo', nota: null, resultado: 50 },
   ])
+})
+
+test('las unidades del SRS: las de todas las piernas, con su resultado en € por el valor del punto', () => {
+  const [c] = cerradasMotorSrs({
+    sesiones: [{ ticker: '^GDAXI', nombre: 'DAX' }], hoy: [],
+    historial: [{
+      ticker: '^GDAXI', salida: { hora: T }, resultadoEur: 40, plan: { valorPunto: 1, cambioAEur: 1 },
+      anteriores: [{ lado: 'largo', unidades: [{ tamano: 2, entrada: 100, hora: T - 300, salida: { nivel: 90, hora: T - 200 } }] }],
+      operacion: { lado: 'corto', unidades: [{ tamano: 3, entrada: 90, hora: T - 200, salida: { nivel: 70, hora: T, aproximado: true } }] },
+    }],
+  })
+  assert.deepEqual(c.unidades, [
+    { lado: 'largo', tamano: 2, entrada: 100, horaEntrada: T - 300, salida: 90, horaSalida: T - 200, resultado: -20 },
+    { lado: 'corto', tamano: 3, entrada: 90, horaEntrada: T - 200, salida: 70, horaSalida: T, resultado: 60, aproximado: true },
+  ])
+})
+
+test('las unidades de las tortugas salen del detalle de la operación, en €', () => {
+  const [c] = cerradasTortugas({
+    mercados: [{ ticker: 'XAUUSD', nombre: 'Oro' }],
+    operaciones: [{ ticker: 'XAUUSD', sistema: 1, lado: 'corto', cerradaHora: T, resultadoEur: 18, valorPunto: 10, cambioAEur: 0.9,
+      detalle: [{ tamano: 1, entrada: 2000, hora: T - 86400, salida: { nivel: 1998, hora: T } }] }],
+  })
+  assert.deepEqual(c.unidades, [{ lado: 'corto', tamano: 1, entrada: 2000, horaEntrada: T - 86400, salida: 1998, horaSalida: T, resultado: 18 }])
+})
+
+test('las unidades de Alpaca: cada una si se guardó el detalle; si no, una con la entrada media', () => {
+  const cerrada = new Date(T * 1000).toISOString(), abierta = new Date((T - 86400) * 1000).toISOString()
+  const [nueva, vieja] = cerradasTortugasAcciones({ operaciones: [
+    { simbolo: 'AAPL', sistema: 2, lado: 'largo', cerrada, salida: 110, resultado: 30, detalle: [{ acciones: 1, entrada: 100, hora: abierta }, { acciones: 2, entrada: 105, hora: cerrada }] },
+    { simbolo: 'MSFT', sistema: 1, lado: 'largo', cerrada, abierta, salida: 50, resultado: -10, acciones: 5, entrada: 52 },
+  ] })
+  assert.deepEqual(nueva.unidades.map(u => [u.tamano, u.entrada, u.horaEntrada, u.salida, u.resultado]), [[1, 100, T - 86400, 110, 10], [2, 105, T, 110, 10]])
+  assert.deepEqual(vieja.unidades, [{ lado: 'largo', tamano: 5, entrada: 52, horaEntrada: T - 86400, salida: 50, horaSalida: T, resultado: -10, media: true }])
 })

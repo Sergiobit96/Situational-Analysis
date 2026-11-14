@@ -509,6 +509,47 @@ test('una posición que quedó abierta de una sesión anterior se cierra en cuan
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 
+test('lo que quedó abierto el viernes no se intenta cerrar en fin de semana: se cierra el lunes', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25600, 25601] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    // viernes 30-oct: la sesión cerró con la posición abierta (el bot no pudo cerrarla)
+    ig.ponerPosicion({ dealId: 'F1', ticker: '^GDAXI', epic: 'IX.D.DAX.IFMM.IP', lado: 'largo', tamano: 1, nivel: 25500, stop: 25460, referencia: 'SRS-GDAXI-20261030-ff', abierta: new Date(madrid(30, 9, 40) * 1000).toISOString().slice(0, 19) })
+    enHora(madrid(31, 10)); await bot._recuperar()
+    for (const t of [madrid(31, 10), madrid(31, 10, 0, 5), madridNov(1, 20)]) { enHora(t); await bot._paso() }
+    assert.deepEqual(ig.ordenes.filter(o => o.tipo === 'cerrar'), [], 'ni una orden en sábado ni en domingo')
+    const viejo = bot._datos().dias['2026-10-30 ^GDAXI']
+    assert.equal(viejo.estado, 'en-posicion')
+    assert.equal(viejo.eventos.filter(e => /fin de semana/.test(e.texto)).length, 1, 'lo apunta una vez')
+    // el lunes la cierra
+    enHora(madridNov(2, 8)); await bot._paso()
+    assert.equal(bot._datos().dias['2026-10-30 ^GDAXI'].salida.motivo, 'cierre')
+    assert.deepEqual(ig.ordenes.map(o => [o.tipo, o.dealId]), [['cerrar', 'F1']])
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('si IG dice que el mercado está cerrado, no insiste: avisa una vez y reintenta a la media hora', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25600, 25601] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    ig.ponerPosicion({ dealId: 'M1', ticker: '^GDAXI', epic: 'IX.D.DAX.IFMM.IP', lado: 'largo', tamano: 1, nivel: 25500, stop: 25460, referencia: 'SRS-GDAXI-20261029-mm', abierta: new Date(madrid(29, 9, 40) * 1000).toISOString().slice(0, 19) })
+    const cerrar = ig.operar.cerrar
+    let cerrado = true
+    ig.operar.cerrar = async o => { ig.ordenes.push({ tipo: 'cerrar', ...o }); return cerrado ? { aceptada: false, motivo: 'MARKET_CLOSED_WITH_EDITS' } : cerrar(o) }
+    enHora(madrid(29, 23)); await bot._recuperar()
+    for (const t of [madrid(29, 23), madrid(29, 23, 0, 5), madrid(29, 23, 10)]) { enHora(t); await bot._paso() }
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'cerrar').length, 1, 'un intento, no uno por vuelta')
+    const dia = bot._datos().dias['2026-10-29 ^GDAXI']
+    assert.equal(dia.eventos.filter(e => /mercado cerrado/.test(e.texto)).length, 1)
+    assert.equal(dia.eventos.filter(e => /IG no cierra a mercado/.test(e.texto)).length, 0)
+    // a la media hora, con el mercado ya abierto, cierra
+    cerrado = false
+    ig.operar.cerrar = async o => { ig.ordenes.push({ tipo: 'cerrar', ...o }); return { aceptada: true, motivo: 'SUCCESS', nivel: 25600 } }
+    enHora(madrid(29, 23, 30, 5)); await bot._paso()
+    assert.equal(bot._datos().dias['2026-10-29 ^GDAXI'].salida.motivo, 'cierre')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('un instrumento con un error no tumba a los demás', async () => {
   // 30-oct-2026: Nueva York abre a las 14:30 de Madrid, con el DAX aún abierto
   const ig = igFalso({

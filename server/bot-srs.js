@@ -252,6 +252,11 @@ const nivelAnadidoN = (op, cfg, n) => (n > 0 ? op.unidades.at(-1).entrada + (op.
 // se cierra toda la pierna. null sin objetivo o sin N
 export const nivelObjetivoN = (op, cfg, n) => (cfg.tpN > 0 && n > 0 ? (op.nivelOrden ?? op.entrada) + (op.lado === 'largo' ? 1 : -1) * cfg.tpN * n : null)
 const redondear = x => Math.round(x * 10) / 10
+// Sábado o domingo en la bolsa del instrumento: no hay sesión, y el bot no abre ni cierra nada
+export const finDeSemanaSrs = (ticker, t) => [0, 6].includes(diaSemanaEnZona(t, SESIONES_BOT[ticker]?.zona ?? 'Europe/Madrid'))
+// IG rechaza la orden porque el mercado está cerrado: reintentarlo enseguida no sirve
+const MERCADO_CERRADO = /MARKET_CLOSED/
+const ESPERA_MERCADO_CERRADO_S = 30 * 60
 
 // La N de las tortugas para la sesión de `fecha`: el ATR de Wilder de 20 sesiones en velas
 // diarias ({ date, open, high, low, close }) hasta la anterior, que es lo que se sabe al abrir.
@@ -1002,18 +1007,31 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
         return { aceptada: false, motivo: err.message }
       }
       if (r.aceptada) break
+      // con el mercado cerrado no sirve más margen: se reintenta cuando toque (ver cerrar)
+      if (MERCADO_CERRADO.test(r.motivo ?? '')) break
       apuntar(dia, limite == null ? `IG no cierra a mercado (${r.motivo})` : `IG no cierra con ${margen.toFixed(1)} puntos de margen (${r.motivo})`)
     }
     return r
   }
 
-  // Devuelve las que IG no ha dejado cerrar
+  // Devuelve las que IG no ha dejado cerrar. Si alguna es porque IG tiene el mercado cerrado, no
+  // se vuelve a intentar hasta dentro de ESPERA_MERCADO_CERRADO_S (y se avisa una vez)
   async function cerrarUnidades(dia, unidades) {
     const fallidas = []
     for (const u of unidades) {
       const r = await cerrarUnidad(dia, u)
       if (r.aceptada) u.salida = { nivel: r.nivel, hora: ahora() }
-      else fallidas.push(u)
+      else {
+        fallidas.push(u)
+        if (MERCADO_CERRADO.test(r.motivo ?? '')) {
+          if (!(dia.esperaCierre > ahora())) {
+            const hora = new Date((ahora() + ESPERA_MERCADO_CERRADO_S) * 1000).toLocaleTimeString('es-ES', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit' })
+            apuntar(dia, `IG tiene el mercado cerrado (${r.motivo}): no se puede cerrar; se reintenta a las ${hora}`)
+          }
+          dia.esperaCierre = ahora() + ESPERA_MERCADO_CERRADO_S
+          break
+        }
+      }
     }
     return fallidas
   }
@@ -1022,6 +1040,8 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
   async function cerrar(dia, motivo, ses = null) {
     const op = dia.operacion
     if ((await cerrarUnidades(dia, op.unidades.filter(u => !u.salida))).length) {
+      // con el mercado cerrado no hay nada que revisar: sigue abierta, con su stop
+      if (dia.esperaCierre > ahora()) return
       // puede que ya las hubiera cerrado el stop: la revisión lo aclara
       apuntar(dia, 'Se revisa si ya estaba cerrada', { aviso: false })
       await revisar(dia, ses, { forzar: true })
@@ -1203,6 +1223,20 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
       const velas = ultimasVelas('ig', dia.ticker, 3)
       const activo = cfg.activo && !!cfg.instrumentos[dia.ticker]
       const p = siguientePaso({ dia, cfg: { ...dia.config, activo }, ahora: t, velas, ses })
+      // En fin de semana no se abre ni se cierra nada, ni se da nada por cerrado (con el mercado
+      // cerrado un stop no salta: si IG no da una posición, se mira el lunes). Lo que quedó
+      // abierto del viernes se cierra al abrir el mercado. Y tras un «mercado cerrado» de IG
+      // entre semana, el cierre espera un rato antes de reintentarse
+      const ordenes = ['entrar', 'vuelta', 'anadir', 'breakeven', 'cerrar', 'vigilar', 'revisar-ya']
+      if (finDeSemanaSrs(dia.ticker, t) && ordenes.includes(p.accion)) {
+        if (posicionAbierta(dia) && !dia.esperaFinde) {
+          apuntar(dia, 'Sigue abierta y es fin de semana: no se toca (la protege su stop); se cierra al abrir el mercado')
+          dia.esperaFinde = true
+        }
+        return
+      }
+      delete dia.esperaFinde
+      if (p.accion === 'cerrar' && dia.esperaCierre > t) return
       if (p.accion === 'bracket')     await calcularBracket(dia, ses)
       if (p.accion === 'entrar')      await entrar(dia, p.lado)
       if (p.accion === 'vuelta')      await entrar(dia, p.lado, { vuelta: true })

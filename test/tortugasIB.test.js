@@ -340,6 +340,29 @@ test('IB: en los que cotizan en centavos, un relleno o una ejecución que IB da 
   } finally { delete DETALLES.MZC }
 })
 
+test('IB: la entrada de una unidad sin precio sale del historial guardado, o del precio medio de la cartera si solo falta ella', async () => {
+  const ib = ibFalso()
+  DETALLES.MZC = [{
+    contract: { conId: 61, symbol: 'MZC', secType: 'FUT', exchange: 'CBOT', currency: 'USD', localSymbol: 'MZCH7', lastTradeDateOrContractMonth: '20270312', multiplier: '500' },
+    contractMonth: '202703', minTick: 0.5, priceMagnifier: 100, marketRuleIds: '', validExchanges: 'CBOT',
+  }]
+  const tib = crearTortugasIB({ ib, ahora: () => ny(11, 14, 10), log: () => {}, mercados: { CORN: MERCADOS_IB.CORN } })
+  try {
+    await tib.arrancar()
+    // IB ya no da la ejecución (es de otro día), pero está en el historial del servidor, en dólares
+    ib.historial = () => [{ tipo: 'ejecucion', execId: 'e1', referencia: 'TIB2-CORN-b', precio: 4.475, cantidad: 46, hora: '2026-11-10T15:00:00.000Z', conId: 61 }]
+    assert.deepEqual(await tib.operar.entradaDe({ ticker: 'CORN', epic: 'MZCH7', dealId: 'TIB2-CORN-b', tamano: 46, ref: 465.5 }), { nivel: 447.5 })
+    // ni en el historial: de la cartera (92 contratos a 4,64 $ de media) quitando la otra unidad
+    ib.historial = () => []
+    ib.carteraFalsa = [{ conId: 61, pos: -92, media: 4.64 }]
+    const r = await tib.operar.entradaDe({ ticker: 'CORN', epic: 'MZCH7', dealId: 'TIB2-CORN-b', tamano: 46, ref: 465.5, otras: [{ tamano: 46, entrada: 480.5 }] })
+    assert.equal(r.aproximado, true)
+    assert.ok(Math.abs(r.nivel - 447.5) < 1e-6)
+    // si falta más de una, no se puede deducir
+    assert.equal(await tib.operar.entradaDe({ ticker: 'CORN', epic: 'MZCH7', dealId: 'TIB2-CORN-b', tamano: 46, ref: 465.5 }), null)
+  } finally { delete DETALLES.MZC }
+})
+
 test('IB: una entrada a mercado que no se rellena se cancela; a medias se queda lo rellenado; el stop de una madre sin rellenar no es una posición', async () => {
   const ib = ibFalso()
   DETALLES.XDUK = [{ contract: { conId: 42, symbol: 'XDUK', secType: 'STK', exchange: 'SMART', primaryExch: 'IBIS', currency: 'EUR', localSymbol: 'XDUK' }, minTick: 0.001, marketRuleIds: '9', validExchanges: 'SMART,IBIS' }]

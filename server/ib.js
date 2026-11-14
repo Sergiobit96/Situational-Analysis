@@ -170,7 +170,7 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
       if ([open, high, low, close].every(x => Number.isFinite(x) && x > 0)) p.filas.push({ hora: String(hora), open, high, low, close })
     })
     api.on(EventName.execDetails, (_id, c, x) => {
-      e.ejecuciones.set(x.execId, { permId: x.permId, orderId: x.orderId, orderRef: x.orderRef ?? null, precio: x.price, cantidad: x.shares, lado: x.side, hora: x.time, conId: c.conId, simbolo: c.localSymbol || c.symbol })
+      e.ejecuciones.set(x.execId, { execId: x.execId, permId: x.permId, orderId: x.orderId, orderRef: x.orderRef ?? null, precio: x.price, cantidad: x.shares, lado: x.side, hora: x.time, conId: c.conId, simbolo: c.localSymbol || c.symbol })
       historial?.ejecucion({ execId: x.execId, orderId: x.orderId, referencia: x.orderRef, simbolo: nombreContrato(c), conId: c.conId, lado: x.side, cantidad: x.shares, precio: x.price, hora: x.time })
     })
     api.on(EventName.execDetailsEnd, id => { e.peticiones.get(id)?.ok(null) })
@@ -542,7 +542,8 @@ export function crearIB({ host = '127.0.0.1', port, clientId = 17, real = false,
     // lo que hay en la cartera, por contrato (null mientras IB no la ha mandado entera)
     // sin conexión o conectado sin contestar, desde la primera petición fallida (avisa a los caidaMs)
     sinContestar: () => e.caidoDesde != null || e.mudoDesde != null,
-    cartera: () => (e.listaCuenta ? [...e.cartera.values()].map(x => ({ conId: x.c.conId, pos: Number(x.pos) })) : null),
+    // con el precio medio (en las unidades de la cartera: dólares en los que cotizan en centavos)
+    cartera: () => (e.listaCuenta ? [...e.cartera.values()].map(x => ({ conId: x.c.conId, pos: Number(x.pos), media: x.coste != null ? Number(x.coste) / (Number(x.c.multiplier) || 1) : null })) : null),
     esperarOrden,
     // cambia una orden abierta (con su misma id, que tiene que ser de este cliente)
     async modificar(id, contrato, orden) {

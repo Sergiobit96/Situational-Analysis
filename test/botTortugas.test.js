@@ -479,6 +479,28 @@ test('al cargar, las entradas y salidas guardadas en dólares en un contrato en 
   assert.equal(corregirCentavos(datos), 0)
 })
 
+test('una unidad abierta sin precio de entrada lo busca en el bróker en la siguiente revisión', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-10-23') }, soloS1)
+  try {
+    enHora(fra(10, 26, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_155, 25_156]
+    vela1m('^GDAXI', fra(10, 26, 10), 25_156, 25_140)
+    enHora(fra(10, 26, 10, 0, 20)); await bot._paso()
+    const u = bot._datos().posiciones['^GDAXI|1'].unidades[0]
+    u.entrada = null
+    const pedidas = []
+    ig.operar.entradaDe = async x => { pedidas.push(x); return { nivel: 25_156 } }
+    enHora(fra(10, 26, 11)); await bot._paso()
+    assert.equal(bot._datos().posiciones['^GDAXI|1'].unidades[0].entrada, 25_156)
+    assert.equal(pedidas.length, 1)
+    assert.equal(pedidas[0].dealId, u.dealId)
+    // ya tiene entrada: no se vuelve a pedir
+    enHora(fra(10, 26, 11, 1)); await bot._paso()
+    assert.equal(pedidas.length, 1)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
 test('el fin de semana de cada mercado: sábado y domingo en su zona, salvo la sesión que abre el domingo', () => {
   const utcS = (mes, dia, h, m = 0) => Date.UTC(2026, mes - 1, dia, h, m) / 1000
   assert.equal(finDeSemanaTortugas('^GDAXI', utcS(10, 31, 12)), true)

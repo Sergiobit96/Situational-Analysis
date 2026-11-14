@@ -120,6 +120,7 @@ function mediaDe(ejecuciones) {
 }
 // la hora de una ejecución de IB («AAAAMMDD hh:mm:ss», quizá con la zona detrás) como la de IG
 const horaEjecucion = h => {
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(h ?? '')) return h.slice(0, 19)   // las del historial, en ISO
   const m = /^(\d{4})(\d{2})(\d{2})\s+(\d{2}:\d{2}:\d{2})/.exec(h ?? '')
   return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : null
 }
@@ -276,7 +277,10 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
   // uno y otro va un factor 100, y un stop nunca está tan lejos
   const contratoPorConId = conId => [...contratos.values()].find(k => k.contrato.conId === conId) ?? null
   function enSusUnidades(c, p, ref = null) {
-    if (!(p > 0) || !(c?.aumento > 1)) return p
+    if (!(p > 0)) return p
+    // sin el contrato (IB aún sin contestar al arrancar): solo un precio imposible junto a su stop
+    if (!c) return ref > 0 && ref / p > 30 ? Math.round(p * 100 * 1e6) / 1e6 : p
+    if (!(c.aumento > 1)) return p
     const r = ref > 0 ? ref : precioDe(c.q ?? {}) ?? velas.get(c.epic)?.at(-1)?.close
     if (!(r > 0)) return p
     const aumentado = Math.round(p * c.aumento * 1e6) / 1e6
@@ -317,6 +321,17 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     if (['Submitted', 'PreSubmitted', 'Filled'].includes(o?.estadoIB)) return { aceptada: true, id }
     if (!['Cancelled', 'ApiCancelled', 'Inactive'].includes(o?.estadoIB)) await ib.cancelar(id).catch(() => {})
     return { aceptada: false, motivo: o?.motivo ?? 'IB no confirma el stop' }
+  }
+
+  // Las ejecuciones del día que da IB y las guardadas en el historial del servidor (IB solo da las
+  // del día: una unidad recuperada tras un reinicio se quedaba sin precio de entrada)
+  async function todasLasEjecuciones() {
+    // con IB sin contestar, las del historial (están en disco)
+    const hoy = await ib.ejecuciones().catch(() => [])
+    const vistas = new Set(hoy.map(j => j.execId).filter(Boolean))
+    const guardadas = (ib.historial?.(5000) ?? []).filter(x => x.tipo === 'ejecucion' && !vistas.has(x.execId))
+      .map(x => ({ execId: x.execId, orderRef: x.referencia, precio: x.precio, cantidad: x.cantidad, hora: x.hora, conId: x.conId }))
+    return [...hoy, ...guardadas]
   }
 
   const delBot = x => x.o.orderType === 'STP' && x.o.orderRef?.startsWith(prefijo) && x.o.orderRef.endsWith('-stop')
@@ -468,7 +483,7 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
 
     // Las unidades abiertas de este bot: los stops abiertos con su prefijo
     async posiciones() {
-      const [abiertas, ejecuciones] = await Promise.all([ib.abiertas(), ib.ejecuciones().catch(() => [])])
+      const [abiertas, ejecuciones] = await Promise.all([ib.abiertas(), todasLasEjecuciones().catch(() => [])])
       const abiertasPorId = new Map(abiertas.map(x => [x.id, x]))
       return abiertas.filter(delBot).flatMap(x => {
         const referencia = x.o.orderRef.slice(0, -'-stop'.length)
@@ -489,9 +504,27 @@ export function crearTortugasIB({ ib, mercados = MERCADOS_IB, ahora = () => Math
     // El precio al que salió una unidad que ya no está: el de su stop o el de su cierre (`ref`, su
     // stop, para saber si IB lo da en dólares en un contrato que cotiza en centavos)
     async cierreDe({ dealId, ref = null }) {
-      const ejecuciones = (await ib.ejecuciones()).filter(j => j.orderRef === `${dealId}-stop` || j.orderRef === `${dealId}-cierre`)
+      const ejecuciones = (await todasLasEjecuciones()).filter(j => j.orderRef === `${dealId}-stop` || j.orderRef === `${dealId}-cierre`)
       const salida = mediaDe(ejecuciones)
       return salida ? { nivel: enSusUnidades(contratoPorConId(ejecuciones[0].conId), salida.precio, ref) } : null
+    },
+
+    // El precio de entrada de una unidad que el bot tiene sin él: el de sus ejecuciones (las del
+    // día o las del historial) o, si no están, lo que queda del precio medio de la cartera de IB en
+    // ese contrato quitando las otras unidades (`otras`, [{ tamano, entrada }]), si solo falta ella
+    async entradaDe({ ticker, epic, dealId, tamano, ref = null, otras = [] }) {
+      const suyas = (await todasLasEjecuciones()).filter(j => j.orderRef === dealId)
+      const media = mediaDe(suyas)
+      const c = await contratoDe(ticker, epic).catch(() => null) ?? (suyas[0] ? contratoPorConId(suyas[0].conId) : null)
+      if (media) return { nivel: enSusUnidades(c, media.precio, ref) }
+      const enCartera = c ? ib.cartera?.()?.find(p => p.conId === c.contrato.conId) : null
+      if (!(enCartera?.media > 0) || !(tamano > 0)) return null
+      const total = Math.abs(enCartera.pos)
+      const conocido = otras.reduce((s, u) => s + u.tamano, 0)
+      if (Math.abs(conocido + tamano - total) > 1e-9) return null
+      const mediaCartera = enSusUnidades(c, enCartera.media, ref)
+      const nivel = (mediaCartera * total - otras.reduce((s, u) => s + u.tamano * u.entrada, 0)) / tamano
+      return nivel > 0 ? { nivel: Number(nivel.toFixed(6)), aproximado: true } : null
     },
   }
 

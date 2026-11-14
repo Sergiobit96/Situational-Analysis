@@ -952,9 +952,32 @@ export function crearBotTortugas({
     const cada = cruces.size ? Math.min(revisarCadaMs, REVISAR_YA_MS) : revisarCadaMs
     if (!forzar && Date.now() - ultimaRevision < cada) return
     ultimaRevision = Date.now()
+    // antes que las posiciones: con el bróker sin contestar, las entradas salen del historial
+    await completarEntradas(abiertas)
     const ids = new Set((await operar.posiciones()).map(p => p.dealId))
     for (const pos of abiertas) {
       try { await revisarPosicion(pos, ids, cruces.has(claveDe(pos.ticker, pos.sistema))) } catch (err) { apuntar(pos.ticker, `Error: ${err.message}`, { sistema: pos.sistema }) }
+    }
+  }
+
+  // Unidades abiertas sin precio de entrada (recuperadas o reconciliadas cuando el bróker ya no
+  // daba sus ejecuciones): se buscan en el bróker. Sin él, su resultado y lo que arriesgan salían
+  // como si hubieran entrado a 0 (el maíz del 6-nov-2026: entrada media 243 en vez de ~480)
+  async function completarEntradas(abiertas) {
+    if (!operar.entradaDe) return
+    for (const pos of abiertas) {
+      for (const u of pos.unidades.filter(x => !x.salida && !(x.entrada > 0))) {
+        const epic = u.epic ?? pos.epic
+        const otras = Object.values(datos.posiciones).filter(p => p.ticker === pos.ticker)
+          .flatMap(p => p.unidades.filter(x => x !== u && !x.salida && x.entrada > 0 && (x.epic ?? p.epic) === epic))
+        try {
+          const r = await operar.entradaDe({ ticker: pos.ticker, epic, dealId: u.dealId, lado: pos.lado, tamano: u.tamano, ref: u.stop ?? pos.stop, otras })
+          if (!(r?.nivel > 0)) continue
+          u.entrada = r.nivel
+          if (r.aproximado) u.entradaAproximada = true
+          apuntar(pos.ticker, `La unidad ${u.dealId} no tenía precio de entrada: ${px(r.nivel)}${r.aproximado ? ' (deducido del precio medio de la cartera)' : ''}, de ${broker}`, { aviso: false, sistema: pos.sistema })
+        } catch { /* se reintenta en la siguiente revisión */ }
+      }
     }
   }
 

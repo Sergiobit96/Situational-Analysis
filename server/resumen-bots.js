@@ -195,6 +195,20 @@ export function resumenPublico({ bots, saldoIg, posicionesIg = [], saldoAlpaca =
   }
 }
 
+// El historial de todos los bots juntos, para la vista Historial de la pestaña Bots (con la
+// clave, así que va con su dinero): una fila por operación cerrada, con su bot, su bróker y el
+// resultado en la moneda de su cuenta (€ en IG y en IB, $ en Alpaca), de la más nueva a la más vieja
+const BROKER = { ig: 'IG', ib: 'IB', alpaca: 'Alpaca' }
+const MONEDA = { ig: 'EUR', ib: 'EUR', alpaca: 'USD' }
+export function historialBots(bots) {
+  return bots.flatMap(b => {
+    let cerradas = []
+    try { cerradas = b.cerradas() } catch { /* un bot roto no tumba el historial */ }
+    return cerradas.filter(c => c.hora != null && c.resultado != null)
+      .map(c => ({ bot: b.nombre, broker: BROKER[b.cuenta] ?? b.cuenta, moneda: MONEDA[b.cuenta] ?? null, ...c }))
+  }).sort((a, b) => b.hora - a.hora)
+}
+
 // Guarda el último resumen CACHE_MS; mientras se calcula uno, los que piden esperan a ese mismo
 export function crearCacheResumen(calcular, { ahora = Date.now } = {}) {
   let ultimo = null, cuando = 0, enCurso = null

@@ -369,3 +369,10 @@
 .resumen-curva svg { max-height: 220px; }
 .resumen-curva-tip { position: absolute; top: 0; transform: translateX(-50%); pointer-events: none; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0.35rem 0.55rem; font-size: 0.75rem; white-space: nowrap; box-shadow: var(--shadow); }
 .resumen-mas { align-self: flex-start; }
+
+/* Historial de todos los bots (src/HistorialBots.jsx): los filtros en una fila que se parte */
+.historial-filtros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem 1.2rem; margin: 0.8rem 0; }
+.historial-campo { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--muted); }
+.historial-campo select, .historial-campo input { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem 0.45rem; min-width: 9rem; }
+.historial-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.historial-limpiar { align-self: flex-end; }

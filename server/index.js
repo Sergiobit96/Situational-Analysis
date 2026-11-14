@@ -37,7 +37,7 @@ import { fileURLToPath } from 'url'
 import { avisosDeSalud } from './salud.js'
 import { crearAlpaca } from './alpaca.js'
 import { crearBotTortugasAcciones } from './bot-tortugas-acciones.js'
-import { resumenPublico, crearCacheResumen, cerradasMotorSrs, cerradasTortugas, cerradasTortugasAcciones, infoMotorSrs, infoTortugas } from './resumen-bots.js'
+import { resumenPublico, crearCacheResumen, historialBots, cerradasMotorSrs, cerradasTortugas, cerradasTortugasAcciones, infoMotorSrs, infoTortugas } from './resumen-bots.js'
 import { registrarGapFilter } from './rutas-gap-filter.js'
 import { registrarDiarioLocal } from './rutas-diario-local.js'
 import { registrarExcursiones } from './rutas-excursiones.js'
@@ -2162,15 +2162,21 @@ app.get('/api/bot/salud', (_req, res) => {
 // Resumen de los bots para quien no tiene la clave (server/resumen-bots.js): fuera de /api/bot a
 // propósito. Solo lee, sin euros ni saldo, y guardado 30 s para no gastar peticiones de IG.
 const ultimoResumen = { posIg: [], cuentaIg: null, posAlpaca: [], cuentaAlpaca: null }
-const resumenBots = crearCacheResumen(async () => {
-  const t = Math.floor(Date.now() / 1000)
-  const motorSrs = [['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn]].filter(([, b]) => b)
-  const bots = [
+// Los bots que hay en este servidor, con lo que el resumen y el historial necesitan de cada uno
+const MOTOR_SRS = () => [['SRS', bot], ['Rule of 4', botRule4], ['First bar negative', botFbn]].filter(([, b]) => b)
+function botsDelServidor(t) {
+  const motorSrs = MOTOR_SRS()
+  return [
     ...motorSrs.map(([nombre, b]) => ({ nombre, cuenta: 'ig', activo: () => b.estado().config.activo, cerradas: () => cerradasMotorSrs(b.estado()), info: () => infoMotorSrs(b.estado(), t) })),
     ...(botTortugas ? [{ nombre: 'Tortugas', cuenta: 'ig', activo: () => botTortugas.estado().config.activo, cerradas: () => cerradasTortugas(botTortugas.estado()), info: () => infoTortugas(botTortugas.estado()) }] : []),
     ...(botTortugasIB ? [{ nombre: 'Tortugas IB', cuenta: 'ib', activo: () => botTortugasIB.estado().config.activo, cerradas: () => cerradasTortugas(botTortugasIB.estado()), info: () => infoTortugas(botTortugasIB.estado()) }] : []),
     ...(botTortugasAcciones ? [{ nombre: 'Tortugas acciones', cuenta: 'alpaca', activo: () => botTortugasAcciones.estado().config.activo, cerradas: () => cerradasTortugasAcciones(botTortugasAcciones.estado()), info: () => ({ instrumentos: SP500.acciones.length }) }] : []),
   ]
+}
+const resumenBots = crearCacheResumen(async () => {
+  const t = Math.floor(Date.now() / 1000)
+  const motorSrs = MOTOR_SRS()
+  const bots = botsDelServidor(t)
   const nombres = new Map()
   for (const [, b] of motorSrs) for (const s of b.estado().sesiones) nombres.set(s.ticker, s.nombre)
   for (const m of botTortugas?.estado().mercados ?? []) nombres.set(m.ticker, m.nombre)
@@ -2222,6 +2228,11 @@ function posicionesTortugasIB() {
     }))
   }))
 }
+// Lo cerrado de todos los bots juntos (src/HistorialBots.jsx): bajo /api/bot, con la clave
+app.get('/api/bot/historial', (_req, res) => {
+  try { res.json({ operaciones: historialBots(botsDelServidor(Math.floor(Date.now() / 1000))) }) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
 app.get('/api/resumen-bots', async (_req, res) => {
   try { res.json(await resumenBots()) }
   catch (err) { res.status(500).json({ error: err.message }) }

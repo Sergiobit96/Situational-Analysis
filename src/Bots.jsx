@@ -7,6 +7,7 @@ const Salud = lazy(() => import('./Salud'))
 const Alpaca = lazy(() => import('./Alpaca'))
 const IB = lazy(() => import('./IB'))
 const BotTortugasAcciones = lazy(() => import('./BotTortugasAcciones'))
+const HistorialBots = lazy(() => import('./HistorialBots'))
 
 // Los bots de la demo de IG bajo una sola pestaña, cada uno en su vista, como el Diario. Todos
 // operan desde el servidor que tenga BOT_OPERA=1 (en la nube) y comparten la cuenta, el
@@ -17,6 +18,7 @@ const NOTA_FBN = 'Horas de Madrid; la raya vertical es ahora. Cada sesión abre 
 
 const VISTAS_BOTS = [
   { id: 'posiciones', nombre: 'Posiciones activas', render: () => <Posiciones /> },
+  { id: 'historial', nombre: 'Historial',       render: () => <HistorialBots /> },
   { id: 'srs',       nombre: 'SRS',             render: () => <Bot /> },
   { id: 'rule-of-4', nombre: 'Rule of 4 (FOMC)', render: () => <Bot api="/api/bot/rule-of-4" nombre="Rule of 4" notaDia={NOTA_RULE4} extras={false} /> },
   { id: 'first-bar-negative', nombre: 'First bar negative', render: () => <Bot api="/api/bot/first-bar-negative" nombre="First bar negative" notaDia={NOTA_FBN} extras={false} /> },

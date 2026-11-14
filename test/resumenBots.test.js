@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resumirCerradas, juntarAbiertas, resumenPublico, cerradasMotorSrs, crearCacheResumen, infoMotorSrs } from '../server/resumen-bots.js'
+import { resumirCerradas, juntarAbiertas, resumenPublico, cerradasMotorSrs, crearCacheResumen, infoMotorSrs, historialBots } from '../server/resumen-bots.js'
 
 const T = Date.parse('2026-10-31T12:00:00Z') / 1000
 
@@ -96,4 +96,17 @@ test('qué hace ahora un bot del motor del SRS', () => {
     { nombre: 'Nikkei', encendido: false, hoy: { abre: T - 60, cierra: T + 60 }, proxima: T + 10 },
   ] }, T)
   assert.deepEqual(i, { instrumentos: 2, enSesion: ['DAX'], proxima: T + 600 })
+})
+
+test('el historial junta lo cerrado de todos los bots, con su bróker y su moneda, de la más nueva a la más vieja', () => {
+  const h = historialBots([
+    { nombre: 'SRS', cuenta: 'ig', cerradas: () => [{ hora: T - 100, instrumento: 'DAX', lado: 'largo', nota: null, resultado: 50 }] },
+    { nombre: 'Tortugas IB', cuenta: 'ib', cerradas: () => [{ hora: T - 10, instrumento: 'Oro', lado: 'corto', nota: 'S1', resultado: -20 }, { hora: null, instrumento: 'Plata', resultado: 5 }] },
+    { nombre: 'Tortugas acciones', cuenta: 'alpaca', cerradas: () => [{ hora: T - 50, instrumento: 'AAPL', lado: 'largo', nota: 'S2', resultado: null }] },
+    { nombre: 'Roto', cuenta: 'ig', cerradas: () => { throw new Error('mal') } },
+  ])
+  assert.deepEqual(h, [
+    { bot: 'Tortugas IB', broker: 'IB', moneda: 'EUR', hora: T - 10, instrumento: 'Oro', lado: 'corto', nota: 'S1', resultado: -20 },
+    { bot: 'SRS', broker: 'IG', moneda: 'EUR', hora: T - 100, instrumento: 'DAX', lado: 'largo', nota: null, resultado: 50 },
+  ])
 })

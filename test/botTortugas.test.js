@@ -7,7 +7,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 import { nivelesTortugas } from '../server/tortugas-niveles.js'
-import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide, nHastaStop as nHastaStopBot } from '../server/bot-tortugas.js'
+import { siguientePasoTortugas, siguienteAnadido, crearBotTortugas, capitalNominal, nivelesSistema, sesionTortugas, proximaAperturaTortugas, finDeSemanaTortugas, CONFIG_TORTUGAS_BOT, GRUPOS_TORTUGAS, diariasDeSesiones, sesionesQueFaltan, picoPiramide, nHastaStop as nHastaStopBot } from '../server/bot-tortugas.js'
 import { sesionDe } from '../server/bot-srs.js'
 import { registrarVela } from '../server/tiempo-real.js'
 import { offsetZona } from '../server/zonas.js'
@@ -429,6 +429,47 @@ test('el stop que salta de noche en IG se apunta con el precio de la actividad',
     assert.equal(op.salida, 24_550)
     assert.ok(Math.abs(op.resultadoEur - (24_550 - 25_156) * 0.6) < 1e-6)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('en fin de semana no cierra ni da por cerrada una posición que el bróker no da: espera al lunes', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25_000, 25_001] } })
+  const { bot, dir, enHora } = botDePrueba(ig, { '^GDAXI': diarioPlano(25_000, 150, '2026-10-23') }, soloS1)
+  try {
+    enHora(fra(10, 26, 9, 0, 5)); await bot._paso()
+    ig.precios['^GDAXI'] = [25_155, 25_156]
+    vela1m('^GDAXI', fra(10, 26, 10), 25_156, 25_140)
+    enHora(fra(10, 26, 10, 0, 20)); await bot._paso()
+    assert.ok(posicion(bot, '^GDAXI'))
+
+    // el sábado el bróker no la da (reiniciando, o la cartera a medias): no se toca nada
+    ig.quitarPosiciones()
+    ig.nivelCierre = 24_550
+    const cerrar = ig.operar.cerrar
+    let cierres = 0
+    ig.operar.cerrar = async (...a) => { cierres++; return cerrar(...a) }
+    for (const x of [fra(10, 31, 12), fra(10, 31, 18), fra(11, 1, 10)]) { enHora(x); await bot._paso() }
+    assert.ok(posicion(bot, '^GDAXI'), 'sigue abierta en el registro todo el fin de semana')
+    assert.equal(cierres, 0)
+    assert.equal(bot.estado().eventos.filter(e => /es fin de semana/.test(e.texto)).length, 1, 'lo apunta una vez')
+
+    // el lunes, con el mercado abierto, se busca el cierre como siempre
+    enHora(fra(11, 2, 9, 0, 5)); await bot._paso()
+    enHora(fra(11, 2, 9, 0, 35)); await bot._paso()
+    assert.equal(posicion(bot, '^GDAXI'), null)
+    assert.equal(bot.estado().operaciones[0].salida, 24_550)
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('el fin de semana de cada mercado: sábado y domingo en su zona, salvo la sesión que abre el domingo', () => {
+  const utcS = (mes, dia, h, m = 0) => Date.UTC(2026, mes - 1, dia, h, m) / 1000
+  assert.equal(finDeSemanaTortugas('^GDAXI', utcS(10, 31, 12)), true)
+  assert.equal(finDeSemanaTortugas('^GDAXI', utcS(11, 1, 20)), true)
+  assert.equal(finDeSemanaTortugas('^GDAXI', utcS(11, 2, 9)), false)
+  // el viernes por la noche, con la bolsa cerrada, aún no es fin de semana
+  assert.equal(finDeSemanaTortugas('^GDAXI', utcS(10, 30, 21)), false)
+  // el crudo abre el domingo a las 18:00 de Nueva York (23:00 UTC en noviembre): desde ahí, no
+  assert.equal(finDeSemanaTortugas('USOIL', utcS(11, 1, 20)), true)
+  assert.equal(finDeSemanaTortugas('USOIL', utcS(11, 1, 23, 30)), false)
 })
 
 test('los límites de cartera: con el grupo lleno no entra otro índice del mismo grupo', async () => {

@@ -35,7 +35,7 @@
 
 import { readFileSync, writeFileSync, renameSync } from 'fs'
 import { SESIONES_BOT, tamanoPorRiesgo } from './bot-srs.js'
-import { fechaEnZona, instanteEnZona } from './zonas.js'
+import { fechaEnZona, instanteEnZona, diaSemanaEnZona } from './zonas.js'
 import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
 import { nivelesTortugas } from './tortugas-niveles.js'
@@ -100,6 +100,18 @@ export function proximaAperturaTortugas(ticker, t, mercados = MERCADOS_TORTUGAS)
     if (s && s.abre > t) return s.abre
   }
   return null
+}
+// Fin de semana en un mercado: sábado o domingo en su zona, sin una sesión en curso (la de los de
+// 24 horas que abre el domingo por la tarde en Nueva York sí cuenta como abierta). Entonces el bot
+// no abre ni cierra nada: si a una posición le falta una unidad o el precio pasa su stop, se
+// espera a que abra el mercado (con el mercado cerrado, un stop no salta: lo más probable es que
+// el bróker esté reiniciando o dé la cartera a medias)
+export function finDeSemanaTortugas(ticker, t, mercados = MERCADOS_TORTUGAS) {
+  const m = mercados[ticker]
+  if (!m) return false
+  const ses = sesionTortugas(ticker, t, mercados)
+  if (ses && t >= ses.abre && t < ses.cierra) return false
+  return [0, 6].includes(diaSemanaEnZona(t, m.zona))
 }
 export const SISTEMAS = [1, 2]
 
@@ -914,6 +926,14 @@ export function crearBotTortugas({
     const pendientes = pos.unidades.filter(u => !u.salida)
     const vivas = pendientes.filter(u => ids.has(u.dealId))
     const idas = pendientes.filter(u => !ids.has(u.dealId))
+    if (finDeSemanaTortugas(ticker, ahora(), mercados) && (idas.length || cruce)) {
+      if (!pos.esperaFinde) apuntar(ticker, idas.length
+        ? `${broker} no da ${idas.length === 1 ? 'una unidad' : `${idas.length} unidades`} de la posición, pero es fin de semana: no se cierra ni se da nada por cerrado hasta que abra el mercado`
+        : 'El precio pasó el stop, pero es fin de semana: no se cierra nada hasta que abra el mercado', { sistema })
+      pos.esperaFinde = true
+      return
+    }
+    delete pos.esperaFinde
     if (!idas.length) {
       pos.vista = ahora()
       // si estaba buscando su cierre, era un fallo del broker: las búsquedas vuelven a empezar
@@ -1067,6 +1087,7 @@ export function crearBotTortugas({
         const ses = sesionTortugas(ticker, t, mercados)
         const abre = proximaAperturaTortugas(ticker, t, mercados)
         const proxima = abre ? sesionTortugas(ticker, abre, mercados) : null
+        const finde = finDeSemanaTortugas(ticker, t, mercados)
         for (const sistema of sistemas) {
           const clave = claveDe(ticker, sistema)
           const juega = encendido && cfg.sistemas.includes(sistema)
@@ -1075,7 +1096,7 @@ export function crearBotTortugas({
           // no pase, no se decide nada con ella (los niveles de hoy son del contrato nuevo): la
           // protege su stop
           const planHoy = datos.planes[ticker]
-          if (pos && ses && t >= ses.abre && t < ses.cierra && planHoy?.fecha === ses.fecha && planHoy.unidad?.futuro
+          if (!finde && pos && ses && t >= ses.abre && t < ses.cierra && planHoy?.fecha === ses.fecha && planHoy.unidad?.futuro
             && planHoy.unidad.epic !== pos.epic && !datos.intentos[clave]) {
             if (!(pos.esperaRolar > t)) await rolar(pos, planHoy)
             continue
@@ -1090,6 +1111,8 @@ export function crearBotTortugas({
           })
           // el plan es del índice: hecho, este paso ya no sigue con él
           if (p.accion === 'plan')        { await calcularPlan(ticker, p.ses); break }
+          // en fin de semana, nada que abra o cierre (el plan y las revisiones, sí)
+          if (finde && ['entrar', 'anadir', 'salir', 'revisar-ya'].includes(p.accion)) continue
           if (p.accion === 'entrar')      await entrar(ticker, sistema, p.lado, ses).catch(err => { datos.planes[ticker].sistemas[sistema].esperaEntrar = ahora() + ESPERA_ERROR_S; throw err })
           if (p.accion === 'anadir')      await anadir(ticker, sistema, ses).catch(err => { pos.esperaAnadir = ahora() + ESPERA_ERROR_S; throw err })
           if (p.accion === 'salir')       await salir(pos, p.motivo)

@@ -56,6 +56,10 @@ const PLAN_TRAS_CIERRE_MIN = 90   // el plan de mañana, a las 17:30 de Nueva Yo
 const APERTURA_MIN = 3            // en los primeros minutos tras la apertura entra aunque el precio haya saltado lejos del nivel (un hueco)
 const ESPERA_ERROR_S = 600        // un error al entrar en una acción no se repite hasta pasado este rato
 const ESPERA_RELLENO_S = 30
+// en la apertura, Alpaca paper tarda en llenar las órdenes a mercado (la subasta): el 16-nov, a
+// las 9:30, cinco entradas seguían sin llenarse a los 30 s, el bot las canceló y se quedaron fuera
+const ESPERA_RELLENO_APERTURA_S = 150
+const APERTURA_LENTA_MIN = 10
 const REINTENTO_SALIDA_S = 60    // una salida que Alpaca no ha llenado se vuelve a intentar pasado este rato
 const REINTENTO_ANADIDO_S = 120  // y un añadido que no ha podido hacerse
 const ESPERA_CANCELAR_S = 30     // lo que se espera a que Alpaca confirme la cancelación del stop (en la apertura tarda)
@@ -174,14 +178,16 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
   // ── Órdenes ──
   const referencia = (sistema, simbolo) => `${PREFIJO}${sistema}-${simbolo}-`
   const ACABADA = ['filled', 'canceled', 'expired', 'rejected']
-  async function esperarRelleno(id) {
+  const enAperturaLenta = t => t < instanteEnZona(fechaEnZona(t, ZONA), 9 * 60 + 30 + APERTURA_LENTA_MIN, ZONA)
+  async function esperarRelleno(id, segundos = ESPERA_RELLENO_S) {
     let o
-    for (let i = 0; i < ESPERA_RELLENO_S; i++) {
+    for (let i = 0; i < segundos; i++) {
       o = await alpaca.orden(id)
       if (ACABADA.includes(o.estado)) break
       await esperarMs(1000)
     }
     if (!ACABADA.includes(o.estado)) {
+      const antes = o.estado
       // lo que no se ha llenado en medio minuto se cancela; vale lo que haya entrado, pero
       // cuando la cancelación acaba: en pending_cancel aún puede llenarse (el 4-nov, una entrada
       // de DELL leída así con 0 acciones acabó con 5, que se quedaron sin stop ni bot)
@@ -191,13 +197,19 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
         if (ACABADA.includes(o.estado)) break
         await esperarMs(500)
       }
+      o = { ...o, canceladaPorMi: { segundos, antes } }
     }
     return o
   }
   async function aMercado(pos, lado, cantidad) {
     const o = await alpaca.enviarOrden({ simbolo: pos.simbolo, lado: lado === 'largo' ? 'compra' : 'venta', cantidad }, { prefijo: referencia(pos.sistema, pos.simbolo), ahora: () => Date.now() })
-    const hecho = await esperarRelleno(o.id)
-    if (!(hecho.rellena > 0)) throw new Error(`la orden a mercado ha quedado ${hecho.estado}`)
+    const hecho = await esperarRelleno(o.id, enAperturaLenta(ahora()) ? ESPERA_RELLENO_APERTURA_S : ESPERA_RELLENO_S)
+    if (!(hecho.rellena > 0)) {
+      const c = hecho.canceladaPorMi
+      throw new Error(c
+        ? `la orden a mercado no se ha llenado en ${c.segundos} s (Alpaca la tenía ${c.antes}) y la he cancelado`
+        : `Alpaca ha dejado la orden a mercado ${hecho.estado}`)
+    }
     return hecho
   }
   // Cancela el stop y espera a que Alpaca lo dé por cancelado: hasta entonces, una orden del
@@ -272,13 +284,13 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     pos.unidades.push({ acciones: o.rellena, entrada: o.precioMedio, hora: o.rellenaEn ?? hora() })
     pos.stop = centimos(o.precioMedio - dir(pos.lado) * STOP_N * pos.n0)
     try { await conReintentos(() => ponerStop(pos, totalDe(pos))) } catch (err) { apuntar(pos.simbolo, `Ojo: no he podido mover el stop a ${num(pos.stop)} (${err.message}); lo reintento en la siguiente vuelta`, { sistema: pos.sistema }) }
-    apuntar(pos.simbolo, `Añado ${o.rellena} acciones a ${num(o.precioMedio)} (unidad ${pos.unidades.length}). Stop de todas en ${num(pos.stop)}`, { sistema: pos.sistema })
+    apuntar(pos.simbolo, `Añado ${o.rellena} acciones a ${num(o.precioMedio)} (unidad ${pos.unidades.length}). Ya son ${totalDe(pos)} acciones a ${num(entradaMedia(pos))} de precio medio. Stop de todas en ${num(pos.stop)}`, { sistema: pos.sistema })
   }
   const totalDe = pos => pos.unidades.reduce((s, u) => s + u.acciones, 0)
   const entradaMedia = pos => pos.unidades.reduce((s, u) => s + u.acciones * u.entrada, 0) / totalDe(pos)
 
   function cerrarEnRegistro(pos, precio, motivo) {
-    const acciones = totalDe(pos)
+    const acciones = totalDe(pos), media = entradaMedia(pos)
     const resultado = precio == null ? null : (precio - entradaMedia(pos)) * dir(pos.lado) * acciones
     datos.operaciones.unshift({
       simbolo: pos.simbolo, sistema: pos.sistema, lado: pos.lado, sector: pos.sector, abierta: pos.abierta, cerrada: hora(),
@@ -290,7 +302,7 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     datos.operaciones.splice(MAX_OPERACIONES)
     delete datos.posiciones[pos.simbolo]
     const texto = { stop: 'Salta el stop', canal: `Sale por el canal de ${pos.sistema === 1 ? 10 : 20}`, manual: 'Cierro a mano', fuera: 'La posición ya no está en Alpaca (cerrada fuera del bot)' }[motivo] ?? motivo
-    apuntar(pos.simbolo, `${texto}: ${acciones} acciones${precio != null ? ` a ${num(precio)}` : ''}${resultado != null ? `, ${resultado >= 0 ? '+' : ''}${num(resultado)} $` : ''}`, { sistema: pos.sistema })
+    apuntar(pos.simbolo, `${texto}: ${acciones} acciones${precio != null ? ` a ${num(precio)}` : ''} (precio medio de entrada ${num(media)})${resultado != null ? `, ${resultado >= 0 ? '+' : ''}${num(resultado)} $` : ''}`, { sistema: pos.sistema })
   }
   // Sin llenarse del todo, la posición sigue (cerrarPosicion ya le ha quitado el stop): queda en
   // el registro, la conciliación le pone el stop por lo que quede y la salida se reintenta. Antes

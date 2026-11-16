@@ -141,6 +141,27 @@ test('entra en la ruptura con su stop, añade cada ½ N y sale por el canal', as
   assert.ok(op.resultado < 0)
 })
 
+test('los avisos de añadir y de salir llevan el precio medio de entrada', async () => {
+  const a = alpacaDeMentira()
+  a.px = { AAA: 105.1 }
+  const { bot, niv } = await botCon(a, { sistemas: [1] })
+  const { n } = niv('AAA')
+  await bot._paso()
+  const pos = bot._datos().posiciones.AAA
+  const primera = pos.unidades[0]
+  a.px.AAA = 105.1 + n / 2 + 0.01
+  await bot._paso()
+  const segunda = pos.unidades[1]
+  assert.ok(segunda, 'ha añadido')
+  const media = (primera.acciones * primera.entrada + segunda.acciones * segunda.entrada) / (primera.acciones + segunda.acciones)
+  const num = x => x.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const textos = () => bot._datos().eventos.map(e => e.texto).join(' | ')
+  assert.ok(textos().includes(`Ya son ${primera.acciones + segunda.acciones} acciones a ${num(media)} de precio medio`), textos())
+  a.saltarStop('AAA')
+  await bot._paso()
+  assert.ok(textos().includes(`(precio medio de entrada ${num(media)})`), textos())
+})
+
 test('si salta el stop en Alpaca, la operación se cierra al precio del stop', async () => {
   const a = alpacaDeMentira()
   a.px = { AAA: 105.2 }
@@ -290,6 +311,28 @@ test('una entrada que Alpaca llena mientras se cancela cuenta con lo que entró,
   assert.ok(pos, 'la posición está en el registro')
   assert.equal(pos.unidades[0].acciones, 5)
   assert.equal(a.ordenes.get(pos.stopId)?.cantidad, 5)
+})
+
+test('una entrada a mercado que Alpaca no llena: en la apertura espera más antes de cancelarla, y el aviso dice que la ha cancelado el bot', async () => {
+  const a = alpacaDeMentira()
+  const { bot } = await botCon(a, { sistemas: [1] })
+  const enviar = a.enviarOrden
+  let lecturas = 0
+  a.enviarOrden = async (o, op) => {
+    if ((o.tipo ?? 'market') !== 'market') return enviar(o, op)
+    const id = `o${++a.n}`
+    a.ordenes.set(id, { id, simbolo: o.simbolo, lado: o.lado, estado: 'accepted', rellena: 0 })
+    return { id }
+  }
+  a.cancelarOrden = async id => { const o = a.ordenes.get(id); if (o.estado === 'accepted') o.estado = 'canceled' }
+  const orden = a.orden
+  a.orden = async id => { lecturas++; return orden(id) }
+  a.px.AAA = 105.1
+  await bot._paso()
+  // a las 9:31: espera los 150 s de la apertura, no 30
+  assert.ok(lecturas >= 150, `ha leído la orden ${lecturas} veces`)
+  assert.equal(bot._datos().posiciones.AAA, undefined)
+  assert.match(bot._datos().eventos.map(e => e.texto).join(' | '), /no se ha llenado en 150 s \(Alpaca la tenía accepted\) y la he cancelado/)
 })
 
 test('añadido con Alpaca lenta (la apertura del 5-nov): espera a que se cancele el stop, y si no lo confirma no compra ni deja la posición sin stop', async () => {

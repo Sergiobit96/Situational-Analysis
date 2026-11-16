@@ -340,3 +340,24 @@ test('añadido con Alpaca lenta (la apertura del 5-nov): espera a que se cancele
   await bot._paso()
   assert.equal(a.enviadas.length, enviadas)
 })
+
+test('un corte puntual de Alpaca se apunta sin avisar; si sigue 3 vueltas, avisa; otro error avisa a la primera', async () => {
+  const a = alpacaDeMentira()
+  const { bot, avisos } = await botCon(a)
+  const reloj = a.reloj
+  const corte = () => { const err = new Error('Alpaca 502: ha contestado con una página de error en vez de datos (502 Bad Gateway)'); err.transitorio = true; throw err }
+  a.reloj = async () => corte()
+  const antes = avisos.length
+  await bot._vuelta(); await bot._vuelta()
+  assert.equal(avisos.length, antes, 'dos vueltas con el corte: sin avisos')
+  await bot._vuelta()
+  assert.equal(avisos.length, antes + 1)
+  assert.match(avisos.at(-1), /3 vueltas seguidas/)
+  // se recupera y vuelve a contar desde cero; un error que no es de un corte avisa enseguida
+  a.reloj = reloj
+  await bot._vuelta()
+  a.reloj = async () => { throw new Error('algo raro') }
+  await bot._vuelta()
+  assert.match(avisos.at(-1), /Error en la vuelta: algo raro$/)
+  bot.parar?.()
+})

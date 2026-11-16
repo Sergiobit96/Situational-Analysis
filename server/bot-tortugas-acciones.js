@@ -60,6 +60,7 @@ const REINTENTO_SALIDA_S = 60    // una salida que Alpaca no ha llenado se vuelv
 const REINTENTO_ANADIDO_S = 120  // y un añadido que no ha podido hacerse
 const ESPERA_CANCELAR_S = 30     // lo que se espera a que Alpaca confirme la cancelación del stop (en la apertura tarda)
 const AÑOS_DIARIO = 2             // velas de Yahoo para los niveles (con el filtro del S1, más no cambia nada)
+const FALLOS_PARA_AVISAR = 3
 const MAX_EVENTOS = 1000, MAX_OPERACIONES = 1000, MAX_SIN_ENTRAR = 2000
 const PREFIJO = 'TA'
 
@@ -446,13 +447,19 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
   // ── Arranque y parada ──
   let reloj = null, arrancadoEn = null, ultimaVuelta = null, cola = Promise.resolve()
   const encolar = f => (cola = cola.then(f, f))
-  function despertar() {
-    encolar(async () => {
-      try { await paso(); ultimaVuelta = Date.now() }
-      catch (err) { apuntar(null, `Error en la vuelta: ${err.message}`) }
-      finally { guardar() }
-    })
+  // Un corte puntual de Alpaca (una página de error, un 5xx) se apunta sin avisar: solo avisa si
+  // sigue FALLOS_PARA_AVISAR vueltas seguidas. Cualquier otro error avisa a la primera
+  let fallosSeguidos = 0
+  async function vuelta() {
+    try { await paso(); ultimaVuelta = Date.now(); fallosSeguidos = 0 }
+    catch (err) {
+      fallosSeguidos++
+      const aviso = !err.transitorio || fallosSeguidos >= FALLOS_PARA_AVISAR
+      apuntar(null, `Error en la vuelta: ${err.message}${err.transitorio && aviso ? ` (${fallosSeguidos} vueltas seguidas)` : ''}`, { aviso })
+    }
+    finally { guardar() }
   }
+  const despertar = () => encolar(vuelta)
   function arrancar() {
     arrancadoEn = Date.now()
     reloj = setInterval(despertar, revisarCadaMs)
@@ -567,6 +574,8 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     simbolosVistos: () => [...new Set([...Object.keys(datos.posiciones), ...estado().cerca.map(c => c.simbolo)])],
     latido: () => ({ enMarcha: reloj !== null, desde: arrancadoEn, ultimaVuelta }),
     _paso: () => encolar(async () => { try { await paso() } finally { guardar() } }),
+    // una vuelta como las del reloj, con su manejo de errores (para las pruebas)
+    _vuelta: () => encolar(vuelta),
     _datos: () => datos,
   }
 }

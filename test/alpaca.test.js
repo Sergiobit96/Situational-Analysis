@@ -88,3 +88,16 @@ test('cerrar una posición cancela antes sus órdenes pendientes', async () => {
   assert.deepEqual(pasos, ['GET /v2/orders?status=open&symbols=SPY', 'DELETE /v2/orders/o1', 'DELETE /v2/positions/SPY'])
   assert.equal(o.lado, 'venta')
 })
+
+test('una página HTML de error de Alpaca da un error legible y marcado como pasajero', async () => {
+  const fetch = async () => ({ ok: false, status: 502, text: async () => '<html><head><title>502 Bad Gateway</title></head><body>…</body></html>' })
+  const a = crearAlpaca({ clave: 'k', secreto: 's', fetch })
+  await assert.rejects(a.reloj(), err => {
+    assert.match(err.message, /^Alpaca 502: ha contestado con una página de error en vez de datos \(502 Bad Gateway\)$/)
+    assert.equal(err.transitorio, true)
+    return true
+  })
+  // un 4xx con su JSON no es pasajero
+  const mal = crearAlpaca({ clave: 'k', secreto: 's', fetch: async () => ({ ok: false, status: 403, text: async () => '{"message":"forbidden"}' }) })
+  await assert.rejects(mal.reloj(), err => err.message === 'Alpaca 403: forbidden' && err.transitorio === false)
+})

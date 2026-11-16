@@ -92,6 +92,13 @@ export const ordenDeAlpaca = o => ({
 const URL_DATOS = 'https://data.alpaca.markets'
 const POR_TANDA = 100
 
+// Lo legible de una página HTML de error (su título, o el principio del texto)
+function resumenHtml(texto) {
+  const titulo = /<title[^>]*>([^<]*)<\/title>/i.exec(texto)?.[1]
+  const plano = (titulo ?? texto.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
+  return plano.length > 80 ? `${plano.slice(0, 80)}…` : plano || 'vacía'
+}
+
 export function crearAlpaca({ clave, secreto, paper = true, fetch: pedirHttp = fetch } = {}) {
   if (!clave || !secreto) return null
   const base = paper ? URL_PAPER : URL_REAL
@@ -104,8 +111,19 @@ export function crearAlpaca({ clave, secreto, paper = true, fetch: pedirHttp = f
       signal: AbortSignal.timeout(15_000),
     })
     const texto = await r.text()
-    const datos = texto ? JSON.parse(texto) : null
-    if (!r.ok) throw new Error(`Alpaca ${r.status}: ${datos?.message ?? texto}`)
+    let datos
+    try { datos = texto ? JSON.parse(texto) : null } catch {
+      // en sus cortes, Alpaca (o el proxy de delante) contesta con una página HTML de error
+      const err = new Error(`Alpaca ${r.status}: ha contestado con una página de error en vez de datos (${resumenHtml(texto)})`)
+      err.transitorio = true
+      throw err
+    }
+    if (!r.ok) {
+      const err = new Error(`Alpaca ${r.status}: ${datos?.message ?? texto}`)
+      // un fallo suyo o un exceso de peticiones: pasa solo
+      err.transitorio = r.status >= 500 || r.status === 429
+      throw err
+    }
     return datos
   }
 

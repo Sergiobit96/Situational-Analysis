@@ -56,6 +56,7 @@ import { ultimasVelas, escuchar } from './tiempo-real.js'
 import { EPICS_OPERAR } from './ig.js'
 import { HORA_FOMC_NY, diasFomc, esDiaFomc } from './fomc.js'
 import { riesgoHastaStop } from './cartera.js'
+import { cierraAntesNY, CIERRE_ANTICIPADO_NY } from './festivos-eeuu.js'
 
 // Apertura y cierre de cada sesión en la hora de su bolsa (minutos desde medianoche)
 export const SESIONES_BOT = {
@@ -135,14 +136,18 @@ const conBracket = (ticker, fecha, abre, cierra, minutosVela, nBracket) => ({
 })
 
 // La sesión de un instrumento en curso en `t` (o la de ese día, si ya cerró), en su bolsa,
-// con la vela del bracket que diga la estrategia. null en fin de semana.
+// con la vela del bracket que diga la estrategia. null en fin de semana. Los festivos y vísperas
+// en que IG cierra antes los índices de EE. UU. (server/festivos-eeuu.js), la sesión acaba
+// antes: si no, el bot intenta salir con IG ya parado y la posición se queda abierta
 function sesionEnBolsa(ticker, t, minutosVela, nBracket) {
   const s = SESIONES_BOT[ticker]
   if (!s) return null
   const dow = diaSemanaEnZona(t, s.zona)
   if (dow === 0 || dow === 6) return null
   const fecha = fechaEnZona(t, s.zona)
-  return conBracket(ticker, fecha, instanteEnZona(fecha, s.apertura, s.zona), instanteEnZona(fecha, s.cierre, s.zona), minutosVela, nBracket)
+  const antes = s.zona === 'America/New_York' && cierraAntesNY(fecha) && CIERRE_ANTICIPADO_NY < s.cierre
+  const ses = conBracket(ticker, fecha, instanteEnZona(fecha, s.apertura, s.zona), instanteEnZona(fecha, antes ? CIERRE_ANTICIPADO_NY : s.cierre, s.zona), minutosVela, nBracket)
+  return antes ? { ...ses, cierreAnticipado: true } : ses
 }
 // El SRS: la segunda vela de 15 min
 export const sesionDe = (ticker, t) => sesionEnBolsa(ticker, t, MINUTOS_VELA, 2)
@@ -254,8 +259,9 @@ export const nivelObjetivoN = (op, cfg, n) => (cfg.tpN > 0 && n > 0 ? (op.nivelO
 const redondear = x => Math.round(x * 10) / 10
 // Sábado o domingo en la bolsa del instrumento: no hay sesión, y el bot no abre ni cierra nada
 export const finDeSemanaSrs = (ticker, t) => [0, 6].includes(diaSemanaEnZona(t, SESIONES_BOT[ticker]?.zona ?? 'Europe/Madrid'))
-// IG rechaza la orden porque el mercado está cerrado: reintentarlo enseguida no sirve
-const MERCADO_CERRADO = /MARKET_CLOSED/
+// IG rechaza la orden porque el mercado está cerrado (MARKET_CLOSED*) o fuera de horario, como
+// en un festivo que cierra antes (MARKET_OFFLINE): reintentarlo enseguida no sirve
+const MERCADO_CERRADO = /MARKET_CLOSED|MARKET_OFFLINE/
 const ESPERA_MERCADO_CERRADO_S = 30 * 60
 
 // La N de las tortugas para la sesión de `fecha`: el ATR de Wilder de 20 sesiones en velas
@@ -455,6 +461,7 @@ export function crearBot({ ig, archivo, ahora = () => Math.floor(Date.now() / 10
         config: { ...datos.config }, estado: 'esperando-bracket', bracket: null, plan: null,
         operacion: null, salida: null, eventos: [],
       }
+      if (ses.cierreAnticipado) apuntar(datos.dias[k], `Hoy IG cierra antes por un festivo de EE. UU.: la sesión acaba a las ${horaMadrid(ses.cierra)}`)
     }
     return datos.dias[k] ?? null
   }

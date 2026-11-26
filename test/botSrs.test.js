@@ -40,6 +40,18 @@ test('cada sesión abre a la hora de su bolsa', () => {
   assert.equal(dax.cierra, utc(19, 15, 30))                                // 17:30 en Fráncfort
 })
 
+test('los festivos de EE. UU. en que IG cierra antes, la sesión de Nueva York acaba a las 12:50 de allí; las de Europa, no', () => {
+  // jueves 26-nov-2026, Acción de Gracias: IG para a las 13:00 de Nueva York (19:00 en Madrid)
+  const ndx = sesionDe('^NDX', nuevaYorkNov(26, 10))
+  assert.equal(ndx.abre, nuevaYorkNov(26, 9, 30))
+  assert.equal(ndx.cierra, nuevaYorkNov(26, 12, 50))
+  assert.equal(ndx.cierreAnticipado, true)
+  assert.equal(sesionDe('^DJI', nuevaYorkNov(27, 10)).cierra, nuevaYorkNov(27, 12, 50))
+  assert.equal(sesionDe('^NDX', nuevaYorkNov(25, 10)).cierra, nuevaYorkNov(25, 16))
+  assert.equal(sesionDe('^NDX', nuevaYorkNov(25, 10)).cierreAnticipado, undefined)
+  assert.equal(sesionDe('^GDAXI', nuevaYorkNov(26, 10)).cierra, madridNov(26, 17, 30))
+})
+
 test('la semana en que Europa ya ha cambiado de hora y Nueva York no, Nueva York abre a las 14:30 de Madrid', () => {
   // lunes 26-oct-2026: Europa en invierno (UTC+1) y Nueva York aún en verano (UTC-4)
   assert.equal(sesionDe('^GDAXI', utc(26, 12)).abre, utc(26, 8))          // 09:00 en Fráncfort = 08:00 UTC
@@ -547,6 +559,21 @@ test('si IG dice que el mercado está cerrado, no insiste: avisa una vez y reint
     ig.operar.cerrar = async o => { ig.ordenes.push({ tipo: 'cerrar', ...o }); return { aceptada: true, motivo: 'SUCCESS', nivel: 25600 } }
     enHora(madrid(29, 23, 30, 5)); await bot._paso()
     assert.equal(bot._datos().dias['2026-10-29 ^GDAXI'].salida.motivo, 'cierre')
+  } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('MARKET_OFFLINE (un festivo que IG cierra antes) cuenta como mercado cerrado: no gasta peticiones reintentando', async () => {
+  const ig = igFalso({ precios: { '^GDAXI': [25600, 25601] } })
+  const { bot, dir, enHora } = botDePrueba(ig, soloDax)
+  try {
+    ig.ponerPosicion({ dealId: 'M1', ticker: '^GDAXI', epic: 'IX.D.DAX.IFMM.IP', lado: 'largo', tamano: 1, nivel: 25500, stop: 25460, referencia: 'SRS-GDAXI-20261029-mo', abierta: new Date(madrid(29, 9, 40) * 1000).toISOString().slice(0, 19) })
+    ig.operar.cerrar = async o => { ig.ordenes.push({ tipo: 'cerrar', ...o }); return { aceptada: false, motivo: 'MARKET_OFFLINE' } }
+    enHora(madrid(29, 23)); await bot._recuperar()
+    for (const t of [madrid(29, 23), madrid(29, 23, 0, 5), madrid(29, 23, 10)]) { enHora(t); await bot._paso() }
+    assert.equal(ig.ordenes.filter(o => o.tipo === 'cerrar').length, 1, 'un intento, no tres por vuelta')
+    const dia = bot._datos().dias['2026-10-29 ^GDAXI']
+    assert.equal(dia.eventos.filter(e => /mercado cerrado/.test(e.texto)).length, 1)
+    assert.equal(dia.eventos.filter(e => /IG no cierra a mercado/.test(e.texto)).length, 0)
   } finally { bot.parar(); rmSync(dir, { recursive: true, force: true }) }
 })
 

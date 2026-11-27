@@ -60,6 +60,9 @@ const ESPERA_RELLENO_S = 30
 // las 9:30, cinco entradas seguían sin llenarse a los 30 s, el bot las canceló y se quedaron fuera
 const ESPERA_RELLENO_APERTURA_S = 150
 const APERTURA_LENTA_MIN = 10
+// Alpaca rechaza un stop que ya está al otro lado del precio (422: «stop price must be greater
+// than current price» en una compra, «less than» en una venta)
+const STOP_PASADO = /stop price must be (greater|less) than/i
 const REINTENTO_SALIDA_S = 60    // una salida que Alpaca no ha llenado se vuelve a intentar pasado este rato
 const REINTENTO_ANADIDO_S = 120  // y un añadido que no ha podido hacerse
 const ESPERA_CANCELAR_S = 30     // lo que se espera a que Alpaca confirme la cancelación del stop (en la apertura tarda)
@@ -321,8 +324,10 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
 
   // ── Cada vuelta ──
   // Lo que Alpaca dice que hay frente a lo que cree el bot: las cerradas por su stop (o a mano)
-  // salen del registro, y cada posición que sigue tiene su stop por todas las acciones
-  async function conciliar(posiciones, abiertas) {
+  // salen del registro, y cada posición que sigue tiene su stop por todas las acciones. Si
+  // Alpaca no deja poner el stop porque el precio ya lo ha pasado, el stop habría saltado: con
+  // la bolsa abierta se sale a mercado (el 27-nov, PNC se quedó sin stop, rechazado en cada vuelta)
+  async function conciliar(posiciones, abiertas, abierto) {
     const enAlpaca = Object.fromEntries(posiciones.map(p => [p.simbolo, p]))
     for (const pos of Object.values(datos.posiciones)) {
       const p = enAlpaca[pos.simbolo]
@@ -346,7 +351,13 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
           pos.stopId = null
           await ponerStop(pos, p.cantidad)
           if (stop) apuntar(pos.simbolo, `Stop puesto de nuevo en ${num(pos.stop)} por ${p.cantidad} acciones`, { aviso: false, sistema: pos.sistema })
-        } catch (err) { apuntar(pos.simbolo, `No he podido poner el stop en ${num(pos.stop)}: ${err.message}`, { sistema: pos.sistema }) }
+        } catch (err) {
+          if (!STOP_PASADO.test(err.message)) { apuntar(pos.simbolo, `No he podido poner el stop en ${num(pos.stop)}: ${err.message}`, { sistema: pos.sistema }); continue }
+          if (!abierto) { apuntar(pos.simbolo, `El precio ya ha pasado el stop de ${num(pos.stop)} y Alpaca no deja ponerlo: con la bolsa cerrada, salgo a mercado en cuanto abra`, { sistema: pos.sistema }); continue }
+          if (pos.reintentoSalida > ahora()) continue
+          apuntar(pos.simbolo, `El precio ya ha pasado el stop de ${num(pos.stop)} y Alpaca no deja ponerlo: salgo a mercado`, { sistema: pos.sistema })
+          try { await salir(pos, 'stop') } catch (e) { apuntar(pos.simbolo, `Ojo: SIN STOP. ${e.message}`, { sistema: pos.sistema }) }
+        }
       }
     }
   }
@@ -358,7 +369,7 @@ export function crearBotTortugasAcciones({ alpaca, velasDiarias, universo, archi
     const [cuenta, posiciones, abiertas] = await Promise.all([alpaca.cuenta(), alpaca.posiciones(), alpaca.ordenesAbiertas()])
     if (!cuenta.paper) throw new Error('El bot de las tortugas en acciones solo opera en la cuenta paper')
     datos.picoEquity = Math.max(datos.picoEquity ?? cuenta.equity, cuenta.equity)
-    await conciliar(posiciones, abiertas)
+    await conciliar(posiciones, abiertas, reloj.abierto)
 
     // el plan: el de la sesión que toca, hecho después del cierre anterior + hora y media
     const ses = await sesionQueToca(reloj)

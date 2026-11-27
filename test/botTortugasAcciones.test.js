@@ -185,6 +185,33 @@ test('si el stop desaparece, lo vuelve a poner', async () => {
   assert.equal(a.ordenes.get(pos.stopId).estado, 'new')
 })
 
+test('si el stop desaparece y el precio ya lo ha pasado, sale a mercado (con la bolsa cerrada, al abrir)', async () => {
+  const a = alpacaDeMentira()
+  a.px = { AAA: 105.2 }
+  const { bot } = await botCon(a, { sistemas: [1] })
+  await bot._paso()
+  const pos = bot._datos().posiciones.AAA
+  // como Alpaca: un stop de venta tiene que quedar por debajo del precio
+  const enviar = a.enviarOrden
+  a.enviarOrden = async (o, opc) => {
+    if (o.tipo === 'stop' && o.lado === 'venta' && o.stop >= a.px[o.simbolo]) throw new Error('Alpaca 422: stop price must be less than current price')
+    return enviar(o, opc)
+  }
+  a.ordenes.get(pos.stopId).estado = 'canceled'
+  a.px.AAA = pos.stop - 0.5
+  a.abierto = false
+  await bot._paso()
+  assert.ok(bot._datos().posiciones.AAA, 'con la bolsa cerrada no sale')
+  assert.match(bot._datos().eventos.at(-1).texto, /ya ha pasado el stop.*en cuanto abra/)
+  a.abierto = true
+  a.ahora += 60
+  await bot._paso()
+  assert.equal(bot._datos().posiciones.AAA, undefined)
+  assert.equal(a.qty.AAA, 0)
+  const op = bot._datos().operaciones[0]
+  assert.deepEqual([op.motivo, op.salida], ['stop', pos.stop - 0.5])
+})
+
 test('una acción la lleva un solo sistema', async () => {
   const a = alpacaDeMentira()
   a.px = { AAA: 105.2 }
